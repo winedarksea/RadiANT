@@ -87,10 +87,10 @@ static void load_next_page(void);
  * node tick rather than the connect callback, since that runs in
  * controller context - the wrong place to be closing a radio channel.
  *
- * Defaults on because a connected phone already gets HR over BLE, so the
- * ANT+ broadcast is a duplicate - suppressing it means the contention this
- * project exists to arbitrate never arises on a strap. Turn it off to
- * stress the arbiter; that's the config the coexistence gate should run.
+ * Off by default (Kconfig): the strap keeps ANT+ on air while a phone is
+ * connected, so a watch and a phone are served at once. Turned on
+ * (ble_suppress.conf), the ANT+ broadcast stops because a connected phone
+ * already gets HR over BLE, which saves air but drops any ANT+ listener.
  */
 static bool ant_open = true;
 

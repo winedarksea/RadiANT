@@ -248,8 +248,8 @@ $nodeTargets = @(
     # this application; on-air behaviour is predicted from nRF54L15 measurements.
     @{ dir='node_52840dk';    board='nrf52840dk/nrf52840';           sensor='SIMULATED'; conf=$null }
     @{ dir='node_lm20';       board='nrf54lm20dk/nrf54lm20a/cpuapp'; sensor='SIMULATED'; conf=$null }
-    @{ dir='node_ble';        board='nrf54l15dk/nrf54l15/cpuapp';    sensor='SIMULATED'; conf='ble.conf';                     ble=$true }
-    @{ dir='node_ble_nosup';  board='nrf54l15dk/nrf54l15/cpuapp';    sensor='SIMULATED'; conf='ble.conf;ble_nosuppress.conf'; ble=$true }
+    @{ dir='node_ble';        board='nrf54l15dk/nrf54l15/cpuapp';    sensor='SIMULATED'; conf='ble.conf';                     ble=$true; assert_config=@('# CONFIG_HRM_SUPPRESS_ANT_WHEN_CONNECTED is not set') }
+    @{ dir='node_ble_sup';    board='nrf54l15dk/nrf54l15/cpuapp';    sensor='SIMULATED'; conf='ble.conf;ble_suppress.conf';   ble=$true; assert_config=@('CONFIG_HRM_SUPPRESS_ANT_WHEN_CONNECTED=y') }
     # The seam's second implementation, and the arm with no implementation:
     # a seam with only one implementation is indistinguishable from a direct
     # call, and if the empty case doesn't link, an integrator's first build

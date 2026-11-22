@@ -302,8 +302,10 @@ enabled = true
 # acting as one, which not every sitting has. Absent reads as SKIP.
 required = false
 
-# >= 99 % AND >= sdk-ant - 1 pp. Acknowledged data is ERG mode - how Zwift
-# sets trainer resistance - so this is the gate closest to the Tier 3 ride.
+# >= 99 % AND >= sdk-ant - 1 pp. Acknowledged data is how a host sends FE-C
+# resistance commands, so this is the gate closest to the Tier 3 ride. The
+# run sends page 0x30 (basic resistance); Zwift's rides send 0x33 (track
+# resistance); 0x31 (ERG target power) has never run on air.
 min_success_pct = 99.0
 max_delta_pp = 1.0
 

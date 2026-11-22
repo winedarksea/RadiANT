@@ -27,6 +27,16 @@ verbatim below. Further bench testing is planned and this section will be
 extended rather than rewritten; the acceptance is not being treated as the end
 of measurement, only as the end of *this* clause.
 
+**Evidence note (added 2026-11-21).** The repo has no trace of the FE-C side of
+that ride. The only capture from that day,
+`captures/zwift-20260820-230353.pcap`, is about five minutes long. It holds HR
+and power channels only: no FE-C channel and no acknowledged data. So the pass
+above is the owner's account of the ride, not a recorded measurement. The first
+Zwift acceptance with a capture is `captures/zwift-20261117-192749.pcap`
+(2026-11-17, PASS: no resistance command lost to a reacquire; see
+[zwift-fec-validation.md](../zwift-fec-validation.md)). The switchover decision
+stands either way.
+
 What changed in the tree, all of it consequences of that one decision:
 
 - `build-core` in `.github/workflows/release.yml` packages, sums and attaches

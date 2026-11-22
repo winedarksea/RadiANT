@@ -1422,17 +1422,21 @@ jobs:
               CONFIG_BT_PERIPHERAL_PREF_TIMEOUT=400
               CONFIG_BT_GAP_AUTO_UPDATE_CONN_PARAMS=y
               CONFIG_BT_LL_SOFTDEVICE=y
-          - name: "hrm_ble: BLE HRS, no ANT suppression"
-            # The row that actually stresses the arbiter: with suppression on
-            # (the default) the two stacks never genuinely contend. A layered
-            # conf fragment, not a -DCONFIG_ on the command line - see
-            # ble_nosuppress.conf for why that would be one more silent no-op.
+              # Dual transmission is the default: ANT+ stays on air through a
+              # BLE connection, so this row is also the one that stresses the
+              # arbiter.
+              # CONFIG_HRM_SUPPRESS_ANT_WHEN_CONNECTED is not set
+          - name: "hrm_ble: BLE HRS, ANT suppressed while connected"
+            # The opt-in policy, and the only build of the suppression code in
+            # main.c. A layered conf fragment, not a -DCONFIG_ on the command
+            # line - see ble_suppress.conf for why that would be one more
+            # silent no-op.
             board: nrf54l15dk/nrf54l15/cpuapp
-            image_conf: "ble.conf;ble_nosuppress.conf"
+            image_conf: "ble.conf;ble_suppress.conf"
             assert_symbols: |
               CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL=y
               CONFIG_HRM_BLE_HRS=y
-              # CONFIG_HRM_SUPPRESS_ANT_WHEN_CONNECTED is not set
+              CONFIG_HRM_SUPPRESS_ANT_WHEN_CONNECTED=y
           # THE SENSOR SEAM'S SECOND IMPLEMENTATION. A seam with one
           # implementation is indistinguishable from a direct call with extra
           # prototypes - the same argument this file already makes about

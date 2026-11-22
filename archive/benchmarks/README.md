@@ -190,7 +190,7 @@ it with zeroes. An absent measurement is honest; a zero is a claim.
 | Time to first packet / re-acquisition | `radio_runs[].derived.time_to_first_packet_s` / `reacquire_s` |
 | Sensitivity | `sensitivity.loss5pct_attenuation_db` |
 | 32-channel per-channel loss | `scale.per_channel_loss_pct` |
-| Ack-data success (ERG) | `ack_data.success_pct` |
+| Ack-data success (FE-C) | `ack_data.success_pct` |
 | USB round-trip latency | `usb_runs[].derived.latency_p50_ms` |
 
 Thresholds live in `tools/ab_gates.toml`, deliberately not here. A baseline

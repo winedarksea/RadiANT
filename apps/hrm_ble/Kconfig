@@ -321,17 +321,19 @@ config HRM_BLE_MIN_CONN_INTERVAL_UNITS
 config HRM_SUPPRESS_ANT_WHEN_CONNECTED
 	bool "stop ANT+ while a BLE connection is live"
 	depends on HRM_BLE_HRS
-	default y
+	default n
 	help
-	  P9's suppression rule, as policy above the link layer: a phone that
-	  has connected is receiving the same heart rate over the SIG service,
-	  so continuing to broadcast ANT+ spends air on a duplicate - and it
-	  means the hard contention case never normally arises at all.
+	  P9's suppression rule, as policy above the link layer. Off by
+	  default: the strap keeps transmitting ANT+ while a phone is connected
+	  over BLE, so a watch and a phone are served at once. With it off,
+	  ANT+ and a live BLE connection share the radio for as long as the
+	  phone stays connected, and the MPSL gate arbitrates between them.
 
-	  Turn it off for the minority-manufacturer behaviour, where straps
-	  keep transmitting ANT+ while connected so a watch and a phone can be
-	  served at once. That configuration is the one the coexistence gate
-	  actually stresses.
+	  Turn it on (ble_suppress.conf) to stop ANT+ for the duration of a
+	  BLE connection: the phone already gets the same heart rate over the
+	  SIG service, so the broadcast is a duplicate. That saves air and
+	  power, but a watch listening on ANT+ loses the strap while the phone
+	  is connected.
 
 module = HRM
 module-str = hrm

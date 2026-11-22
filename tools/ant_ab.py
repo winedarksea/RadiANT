@@ -684,7 +684,7 @@ def gate_ack(cfg: dict, a: Baseline, b: Baseline) -> GateResult:
     try:
         block_a, block_b = a.block("ack_data"), b.block("ack_data")
     except MissingField as exc:
-        return GateResult("ack-data success (ERG)", "-", "-", threshold,
+        return GateResult("ack-data success (FE-C)", "-", "-", threshold,
                           FAIL if cfg.get("required", False) else SKIP,
                           str(exc))
 
@@ -701,12 +701,12 @@ def gate_ack(cfg: dict, a: Baseline, b: Baseline) -> GateResult:
     try:
         value_a, value_b = percent(block_a, a), percent(block_b, b)
     except MissingField as exc:
-        return GateResult("ack-data success (ERG)", "-", "-", threshold, FAIL,
+        return GateResult("ack-data success (FE-C)", "-", "-", threshold, FAIL,
                           str(exc))
 
     ok = (value_b >= cfg["min_success_pct"]
           and value_b >= value_a - cfg["max_delta_pp"])
-    return GateResult("ack-data success (ERG)", f"{value_a:.2f} %",
+    return GateResult("ack-data success (FE-C)", f"{value_a:.2f} %",
                       f"{value_b:.2f} %", threshold, PASS if ok else FAIL, "",
                       _cmp_better(value_a, value_b, lower_is_better=False))
 

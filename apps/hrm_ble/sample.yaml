@@ -78,6 +78,11 @@ tests:
   # The BLE half, image-scoped through the CORRECT image name. `hrm_ble_` here
   # is the fix for 3.0: the basename of this directory is what sysbuild uses,
   # so `strap_` silently addressed nothing.
+  #
+  # Also the configuration that stresses the arbiter: with
+  # HRM_SUPPRESS_ANT_WHEN_CONNECTED=n - the default - ANT+ keeps its 4.06 Hz
+  # transmit obligation through a live BLE connection, and MPSL has to
+  # arbitrate the two, which is the case the timeslot code exists for.
   hrm_ble.ble:
     platform_allow:
       - nrf54l15dk/nrf54l15/cpuapp
@@ -85,20 +90,14 @@ tests:
       - RADIANT_BACKEND=nrf
       - hrm_ble_EXTRA_CONF_FILE=ble.conf
 
-  # The configuration that actually stresses the arbiter.
-  #
-  # With HRM_SUPPRESS_ANT_WHEN_CONNECTED=y - the default - the node stops
-  # transmitting ANT+ for the duration of a BLE connection, so the two stacks
-  # never genuinely contend and the gate is never asked to do its job. This
-  # entry is the one where MPSL has to arbitrate a 4.06 Hz ANT+ obligation
-  # against a live BLE connection, which is the case the timeslot code exists
-  # for. Kconfig's own help text for that symbol says as much.
-  hrm_ble.ble_nosuppress:
+  # The opt-in suppression policy: ANT+ stops while a phone is connected.
+  # The only build of the suppression code in main.c, so keep this entry.
+  hrm_ble.ble_suppress:
     platform_allow:
       - nrf54l15dk/nrf54l15/cpuapp
     extra_args:
       - RADIANT_BACKEND=nrf
-      - hrm_ble_EXTRA_CONF_FILE="ble.conf;ble_nosuppress.conf"
+      - hrm_ble_EXTRA_CONF_FILE="ble.conf;ble_suppress.conf"
 
   # THE SEAM'S SECOND IMPLEMENTATION.
   #

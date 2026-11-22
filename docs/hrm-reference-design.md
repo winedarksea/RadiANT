@@ -61,8 +61,8 @@ through the manifest.
 | Fragment | What it adds |
 |---|---|
 | *(none)* | ANT+ only. The baseline, and where a port starts |
-| `ble.conf` | SIG HRS over BLE, plus the MPSL gate |
-| `ble.conf;ble_nosuppress.conf` | …and ANT+ keeps transmitting while connected — the arm that actually stresses the arbiter |
+| `ble.conf` | SIG HRS over BLE, plus the MPSL gate. ANT+ keeps transmitting while a phone is connected, which is also the arm that actually stresses the arbiter |
+| `ble.conf;ble_suppress.conf` | …but ANT+ stops for the duration of a BLE connection |
 | `sensor_example.conf` | the seam's second implementation instead of the simulator |
 | `sensor_custom.conf` | no implementation of the seam at all — the integrator's starting point |
 
@@ -309,11 +309,13 @@ what you still check.
    `BUILD_ASSERT`.
 6. **Beat-schedule drift.** See §6 — this is the item with the history.
 7. **The suppression policy.** `CONFIG_HRM_SUPPRESS_ANT_WHEN_CONNECTED` defaults
-   on: a connected phone is already getting the rate over the SIG service, so the
-   ANT+ broadcast is a duplicate. Turning it off is the minority-manufacturer
-   behaviour (a watch and a phone served at once) and is also the only
-   configuration in which the arbiter is genuinely exercised. Decide it
-   deliberately; it changes what your device costs in air.
+   off: the strap keeps transmitting ANT+ while a phone is connected, so a watch
+   and a phone are served at once, and the MPSL gate arbitrates the two stacks
+   for the whole connection. Turning it on (`ble_suppress.conf`) stops ANT+
+   while connected, because the phone already gets the rate over the SIG
+   service; that saves air and power, but a watch on ANT+ loses the strap until
+   the phone disconnects. Decide it deliberately; it changes what your device
+   costs in air.
 8. **Never ship `-DRADIANT_BACKEND=null`.** A null-radio node boots, logs
    `transmitting`, and puts nothing on the air — indistinguishable from a dead
    antenna. `radiant_assert_backend()` in the application's `CMakeLists.txt` and
@@ -460,6 +462,6 @@ floor above. It is a real trade, made deliberately, in one direction.
 - **The MPSL gate's BLE arm is the less-measured one.** `radiant-bridge.md`
   records that bug 22's `elastic_skew_us` removal "has only been measured against
   OpenThread. Re-measure the BLE arm before treating the advertiser case as
-  settled." `ble_nosuppress.conf` is that arm.
+  settled." The default `ble.conf` build is that arm.
 - **Wider RadiANT limits** — discovery, loss floor, the sweep gap — are the
   dongle's, and live with it rather than here.

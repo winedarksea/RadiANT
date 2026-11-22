@@ -296,7 +296,7 @@ comparison in [`backends.md`](backends.md). Baselines commit to
 | Time to first packet / re-acquisition | ≤ sdk-ant × 1.5, and ≤ 5 s absolute |
 | **Sensitivity** (inline attenuator, else a fixed open-air path, else the transmit-power ladder below) | attenuation/distance/transmit power at 5 % loss within 1 dB-equivalent of sdk-ant on the same rig; baseline recorded in Phase 4, **alongside die temperature** (see below) |
 | 32-channel per-channel loss | ≤ single-channel + 0.5 pp — **absolute, not relative**: `libant.a` cannot reach 32 |
-| **Ack-data success** (ERG mode) | ≥ 99 %, and ≥ sdk-ant − 1 pp |
+| **Ack-data success** (acknowledged FE-C commands; `ant_session.py --attempts` sends page 0x30 basic resistance. Zwift's rides send 0x33 track resistance; 0x31 ERG has never run on air) | ≥ 99 %, and ≥ sdk-ant − 1 pp |
 | USB round-trip latency | ≤ sdk-ant × 1.1 (expect equality — the radio is not on that path) |
 
 Per-phase functional gates use the tools above, in this order:

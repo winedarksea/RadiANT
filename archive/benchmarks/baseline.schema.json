@@ -465,7 +465,7 @@
       }
     },
     "ack_data": {
-      "description": "Acknowledged-data success, which is ERG mode: Zwift setting trainer resistance. Gate is >= 99% and >= sdk-ant - 1 pp.",
+      "description": "Acknowledged-data success: acknowledged FE-C resistance commands (ant_session.py sends page 0x30; Zwift sends 0x33). Gate is >= 99% and >= sdk-ant - 1 pp.",
       "type": "object",
       "additionalProperties": false,
       "required": ["attempts", "successes"],

@@ -1,11 +1,21 @@
 # FE-C implementation and bench validation - 2026-10-19
 
-**Hardware acceptance: FAIL.** Both final 200 us USB runs failed the 99%
-acknowledged-transfer completion gate. Solo reception and loaded power
-reception also failed the 1.5% loss ceiling. The firmware repairs substantially
-improved control exchanges, but the original quantitative acceptance criteria
-remain unmet. The user's tolerance of RF variance permits a practical handoff;
-it does not turn failed gates into passes or establish RF as their cause.
+**Status (2026-11-21): Zwift acceptance PASSED on 2026-11-17; the 2026-10-19
+bench gates below still FAILED.** The two results test different things and
+neither overrides the other.
+
+- **Zwift acceptance, 2026-11-17: PASS.** Capture
+  `captures/zwift-20261117-192749.pcap` (Pro Micro, ship image `acdd9d2`, three
+  power/FE-C slot crossings). No resistance command was lost to the reacquire.
+  There was one GO_TO_SEARCH at 138.066 s, the pending 0x33 failed there, and
+  FE-C was back one period later. The band loss came from the trainer itself,
+  not the dongle; see TODO.md (FE-C crossing entry) and
+  `archive/benchmarks/2026-11-17-fec-crossing/`.
+- **2026-10-19 bench gates (the rest of this report): FAIL.** Both final 200 us
+  USB runs reached 98.33% against the 99% acknowledged-transfer completion
+  gate. Solo reception and loaded power reception also failed the 1.5% loss
+  ceiling. These numbers have not been re-measured. The Zwift pass does not
+  turn them into passes, and it does not show that RF caused them.
 
 ## Final image and results
 

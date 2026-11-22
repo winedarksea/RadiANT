@@ -1456,8 +1456,10 @@ is implemented here.
 Decoded **and** encoded since `apps/treadmill`; the two halves are separate
 translation units and the sub-section below covers the transmit one. The
 receive half is `src/profiles/profile_fec.c`, surfaced by
-`radiant/src/bridge/radiant_power_adapter.c`. `tools/ant_pages.py` has no FE-C pages, so this is currently the only
-copy and the three-copy vocabulary rule does not yet apply to it.
+`radiant/src/bridge/radiant_power_adapter.c`. `tools/ant_pages.py` mirrors
+both halves (its FE-C section, `FEC_DEVICE_TYPE` and the `PAGE_FEC_*` pages),
+so the three-copy vocabulary rule applies to `0x11`. `tools/test_compat_capture.py`
+checks that the copies are byte-identical.
 
 **Channel.** Device type `0x11` (17 decimal), RF 57, period **8192** counts —
 exactly 4 Hz, the one rate the profile defines. Note §3's warning about `0x11`
