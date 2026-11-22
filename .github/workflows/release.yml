@@ -2630,6 +2630,10 @@ jobs:
   # shipping row cannot be added and silently left out, and an image under
   # another name cannot stand in for a board's (security review 2026-11-21:
   # the old check merged every artifact into one directory and counted sums).
+  # Not covered, by construction: a row whose `release: true` is removed in
+  # the tagged commit itself just shrinks the expected set (any commit that
+  # can do that can also edit the checker). Read the "release rows:" line the
+  # checker prints before announcing a release.
   # The tag is re-checked against VERSION as well.
   publish:
     name: publish release

@@ -42,6 +42,10 @@ which is an owner call.**
   is connected, and G4 needs BLE connected *and* ANT. The `.config` was checked:
   - `RADIANT_NRF_LOW_POWER=y`, `RADIANT_NRF_LP_STATS=y`, `RADIANT_POWER_DIAG=y`;
   - `BACKEND_NRF_GATE_MPSL=y` (not NULL), `HRM_BLE_HRS=y`, suppression not set.
+- Note added 2026-11-22: d530eac made dual transmission the default and
+  deleted `ble_nosuppress.conf`, which `scripts/g4_build.ps1` still names.
+  To rebuild this configuration there, drop `ble_nosuppress.conf`
+  from the list; build_all row `node_ble_lp_pd` is now the same image.
 
 ## Rig
 

@@ -261,9 +261,15 @@ $nodeTargets = @(
     # boot HFXO request dropped. The option must survive Kconfig (it depends
     # on the GRTC and the gate) and leave the tuning knobs of the direct
     # build's two-edge wake hidden.
-    @{ dir='node_ble_lp';     board='nrf54l15dk/nrf54l15/cpuapp';    sensor='SIMULATED'; conf='ble.conf;lowpower.conf';       ble=$true; assert_config=@('CONFIG_RADIANT_NRF_LOW_POWER=y', 'CONFIG_NRF_GRTC_TIMER=y', '# CONFIG_RADIANT_NRF_LP_STATS is not set'); assert_absent=@('CONFIG_RADIANT_NRF_LP_HFXO_STARTUP_US', 'CONFIG_RADIANT_NRF_LP_KEEP_ON_US', 'CONFIG_RADIANT_NRF_LP_LINGER_MS') }
+    # Both LP rows are dual transmission (ANT+ stays up while a central is
+    # connected) since d530eac flipped HRM_SUPPRESS_ANT_WHEN_CONNECTED's
+    # default; before it they were suppressed. Power numbers from either row
+    # before and after that commit are different configurations.
+    @{ dir='node_ble_lp';    board='nrf54l15dk/nrf54l15/cpuapp';    sensor='SIMULATED'; conf='ble.conf;lowpower.conf';       ble=$true; assert_config=@('CONFIG_RADIANT_NRF_LOW_POWER=y', 'CONFIG_NRF_GRTC_TIMER=y', '# CONFIG_RADIANT_NRF_LP_STATS is not set'); assert_absent=@('CONFIG_RADIANT_NRF_LP_HFXO_STARTUP_US', 'CONFIG_RADIANT_NRF_LP_KEEP_ON_US', 'CONFIG_RADIANT_NRF_LP_LINGER_MS') }
     # Its Gate G4 bench image: plus the power-diag line and
-    # radiant_nrf_lp_stats (SWD, by symbol).
+    # radiant_nrf_lp_stats (SWD, by symbol). Since d530eac this row is exactly
+    # the configuration G4 measured (G4 added the now-deleted
+    # ble_nosuppress.conf to get dual transmission).
     @{ dir='node_ble_lp_pd';  board='nrf54l15dk/nrf54l15/cpuapp';    sensor='SIMULATED'; conf='ble.conf;lowpower.conf;power_diag.conf'; ble=$true; assert_config=@('CONFIG_RADIANT_NRF_LOW_POWER=y', 'CONFIG_RADIANT_POWER_DIAG=y', 'CONFIG_RADIANT_NRF_LP_STATS=y', 'CONFIG_LOG=y') }
 )
 

@@ -381,7 +381,9 @@ MPSL (needs a soak beside BLE or Thread, which that clearance excluded):
     lines of the run; (d) no GO_TO_SEARCH from denials. **The 4:** take
     delta(denied) from the same two `rxpath` lines and compare it with the
     gate's tracked acquired - granted delta from the 5 s gate counters over
-    the same span. Equal -> every refusal (late ones included) ends DENIED and
+    the same span (valid only with no master channel on the DUT, as in this
+    leg: `slots_denied` also counts denied master transmits, and so does (b)'s
+    sum). Equal -> every refusal (late ones included) ends DENIED and
     is now reported. Short by the late-refusal count -> those windows end by a
     path that posts nothing: a separate bug, trace from the gate's pending ->
     not-granted path (`radiant_radio_nrf_gate_mpsl.c`, the `stats.granted++`

@@ -3282,7 +3282,10 @@ static void api_housekeep(void)
 			 * frame: the air (missed), the arbiter refusing the radio (denied,
 			 * master transmits included) and our own scheduler's drop
 			 * (collided). Compare a denied delta with the gate's tracked
-			 * acquired - granted over the same window. */
+			 * acquired - granted over the same window only when the DUT
+			 * runs no master channel: denied counts master TX refusals
+			 * too (the diag page fixes its meaning), and the gate's
+			 * tracked figure does not. Search chunks are in neither. */
 			uint32_t dt_ms = (uint32_t)((now - rxpath_last) / 1000u);
 
 			LOG_INF("rxpath/%ums sched=%u tracked=%u on_data=%u "
