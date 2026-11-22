@@ -212,5 +212,73 @@ uint16_t Advance(uint16_t current, uint16_t first);
  * its top value, and ids after the wrap are upstream's reuse, as before. */
 bool NeedsMark(uint16_t id, uint16_t next, uint16_t persistedNext);
 
+/*
+ * Missing versus unreadable (security review 2026-11-21). Only a key that is
+ * confirmed ABSENT may fall back to max(restored) + 1: that is a store from
+ * before the key (or an empty bridge). A key that is present but does not
+ * load, or loads a malformed value, says nothing about which ids were handed
+ * out, and falling back there hands the id of a device unbound before the
+ * reboot to a different device. So an unreadable mark restores the stored
+ * devices (their ids are their own) and refuses NEW allocations until a later
+ * read establishes the mark; the bridge's bind retry asks again every second.
+ */
+enum class MarkLoad : uint8_t {
+	Absent,     /* no key */
+	Valid,      /* the key holds a valid next id */
+	Unreadable, /* the key exists but did not load, or holds a malformed value */
+};
+
+/* What a load found. `loaded` is the storage load's result and buf/size what
+ * it read; `present` whether the key exists at all (checked when the load
+ * failed). next is written only for Valid. */
+MarkLoad Classify(bool loaded, const uint8_t *buf, size_t size, bool present, uint16_t &next);
+
+/* BridgeManager's view of the stored mark. */
+struct Mark {
+	uint16_t persisted = 0; /* the next id last known stored; 0: none */
+	bool known = true;      /* false while the stored mark is unreadable */
+};
+
+/* Folds a load into the mark and returns the counter: raised to the stored
+ * mark if Valid, unchanged if Absent or Unreadable. At boot `current` is the
+ * first dynamic id (this is then Seed()); on a retry it is the counter the
+ * restore raised. */
+uint16_t Adopt(Mark &mark, uint16_t first, MarkLoad load, uint16_t storedNext, uint16_t current);
+
+/* True if the counter after the restore must be written back (a restored id
+ * at or above the stored mark raised it). Never while the mark is unknown:
+ * that write would replace the unreadable mark with max(restored) + 1. */
+bool NeedsWriteBack(const Mark &mark, uint16_t first, uint16_t current);
+
+/* False while the mark is unknown: no new endpoint id may be handed out. */
+bool MayAllocate(const Mark &mark);
+
 } /* namespace EndpointHighWater */
+
+/*
+ * The data-provider quota (security review 2026-11-21). BridgeManager counts
+ * distinct providers in mNumberOfProviders against kMaxDataProviders. The
+ * count follows the map: it rises when a new provider's pair is INSERTED, and
+ * falls when that entry is erased - by SafelyRemoveDevice() (unbind, or
+ * CreateEndpoint()'s internal-error path; upstream's own decrement) or by
+ * AddSingleDevice() unwinding a pair it inserted but could not register.
+ * FiniteMap::Erase() succeeds once per entry, so passing its result makes the
+ * decrement happen exactly once, whichever path erased first. Upstream
+ * counted at admission and never gave the slot back on a failed add, so each
+ * failed endpoint reservation (the bind retries every second) leaked one.
+ */
+namespace ProviderSlots
+{
+
+/* Room for one more provider? A provider already in the map always fits. */
+bool Admit(uint16_t &count, uint16_t max, bool isNewProvider);
+
+/* The pair is in the map. */
+void Inserted(uint16_t &count, bool isNewProvider);
+
+/* AddSingleDevice() erased a pair it had inserted; `erased` is
+ * FiniteMap::Erase()'s result. */
+void Erased(uint16_t &count, bool isNewProvider, bool erased);
+
+} /* namespace ProviderSlots */
 } /* namespace RadiantMatter */

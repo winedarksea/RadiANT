@@ -248,7 +248,10 @@ min_scenarios: 29
 # radiant.backend_cc26xx and .coex (test_tx_power_rounds_to_nearest_entry).
 # 2026-11-21: +70 (fix/parity, Bluefin twister): the new radiant.backend.short_match
 # scenario, the whole radiant.backend suite with CONFIG_RADIANT_SEARCH_SHORT_MATCH.
-min_testcases: 8178
+# 2026-11-22: +7 (security review 2026-11-21, wip/matter-provider-hw): dongle_thread.matter_storage
+# - missing vs unreadable endpoint mark (classify, unknown-mark rules, read fault, malformed
+# value) and the provider quota (slots follow the map, failed reservations, no double give-back).
+min_testcases: 8185
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -411,6 +414,7 @@ min_cases.radiant.backend_cc26xx.coex: 67
 # length-prefixed string, the SIZE_MAX wrap, upstream's user-data bounds.
 # 37 (+11, item B): the endpoint high-water mark - codec round trip and
 # refusals, seed, wrap guard, and bind/unbind/reboot sequences.
-min_cases.dongle_thread.matter_storage: 37
+# 44 (+7, security review 2026-11-21): missing vs unreadable endpoint mark, provider quota.
+min_cases.dongle_thread.matter_storage: 44
 # radiant.backend_cc26xx.short_match (item 7): caps parity, short-match row only.
 min_cases.radiant.backend_cc26xx.short_match: 1
