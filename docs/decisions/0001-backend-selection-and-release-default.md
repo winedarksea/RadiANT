@@ -105,15 +105,19 @@ Three things constrain the answer:
 
 ### One seam, three backends
 
-A single contract, `<radiant/radiant_ant.h>` (`radiant_ant_*`, about 50 functions) plus
-`radiant/include/radiant/radiant_wire.h` (`RADIANT_WIRE_*` protocol constants), with three implementations
-behind it:
+A single contract, `<radiant/radiant_ant.h>` (`radiant_ant_*`, about 50
+functions) plus `<radiant/radiant_wire.h>` (`RADIANT_WIRE_*` protocol
+constants), with three implementations behind it:
+
+**Changed 2026-11-22:** these were `src/ant_radio.h` (`antr_*`) and
+`src/ant_wire.h` (`ANTW_*`) when this was decided. Both moved into the module
+and took its prefix; see ADR 0003's amendment of the same date.
 
 ```
-apps/common/ant_serial_bridge.c        unchanged logic; speaks only RADIANT_WIRE_*/radiant_ant_*
+apps/common/ant_serial_bridge.c   speaks only RADIANT_WIRE_* / radiant_ant_*
         |
-   <radiant/radiant_ant.h>             our ~50-function contract  (radiant_ant_*)
-   radiant/include/radiant/radiant_wire.h              our protocol constants     (RADIANT_WIRE_*)
+   <radiant/radiant_ant.h>        our ~50-function contract  (radiant_ant_*)
+   <radiant/radiant_wire.h>       our protocol constants     (RADIANT_WIRE_*)
         |
    +----+-----------------+----------------------+
    |                      |                      |

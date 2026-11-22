@@ -75,21 +75,45 @@ read as a claim to be ANT; `radiant` reads as what it is.
 
 **The naming rule: the prefix names the author, the suffix may name the
 target.** So `ANT_NET_ADDR_ANT_PLUS_0` became `RADIANT_NET_ADDR_ANT_PLUS_0` —
-the prefix is ours, and `ANT_PLUS` still names the network, accurately. Three
+the prefix is ours, and `ANT_PLUS` still names the network, accurately. Some
 things keep their names outright:
 
-- `antr_*` and `src/ant_radio.h` — the *application's* contract to a radio
-  backend, which sdk-ant's shim implements too. Renaming it would rename
-  Nordic's seam, not ours.
-- `ANTW_*`, `src/ant_wire.h` and `protocol/ant_wire.yaml` — these name Garmin's
-  serial protocol, and that is the accurate word for it.
+- `protocol/ant_wire.yaml` and `tools/ant_wire.py` — these name Garmin's serial
+  protocol, and that is the accurate word for it.
 - `tools/ant_*.py`, `docs/ant-*.md`, and prose "ANT"/"ANT+" everywhere. Scrubbing
   the protocol's own name out of prose that describes the protocol would make
   the documentation less accurate, not more careful.
 
+**Changed 2026-11-22: the `antr_*` and `ANTW_*` exceptions are withdrawn.** This
+ADR first kept two more families as they were: `antr_*` with `src/ant_radio.h`,
+as the application's contract to a radio backend that sdk-ant's shim also
+implements ("renaming it would rename Nordic's seam, not ours"), and `ANTW_*`
+with `src/ant_wire.h`, as the names of Garmin's serial protocol. Both reasons
+ended when the API moved into the module on 2026-11-09. `antr_*` became the
+module's main user API, beside `radiant_channel_*` for overlapping jobs, so it
+was RadiANT's API, not a seam between the app and someone else's code. The
+`ANTW_*` names had been aliases of the module's own `RADIANT_WIRE_*` since
+the module stopped reaching outside itself for wire constants. A user adding
+the module saw three prefixes for one library. Before the first release that
+ships the API (v1.2.0 does not), they were renamed to follow the rule above:
+
+| Was | Now |
+|---|---|
+| `antr_*` / `ANTR_*`, `<radiant/ant_radio.h>` | `radiant_ant_*` / `RADIANT_ANT_*`, `<radiant/radiant_ant.h>` |
+| `CONFIG_RADIANT_ANTR_API` | `CONFIG_RADIANT_ANT_API` |
+| `ANTW_*`, `<radiant/ant_wire.h>` | `RADIANT_WIRE_*`, `<radiant/radiant_wire.h>` (`ant_wire.h` deleted) |
+| exported `profile_*` / `node_*` in `radiant/src/profiles`, `radiant/src/node` | `radiant_profile_*` / `radiant_node_*`, files likewise |
+
+The prefix is `radiant_ant_`, not `radiant_`, because `radiant_channel_*`
+already uses the bare prefix for the lower-level API. The sdk-ant shim still
+implements the same contract under the new names, and nothing in sdk-ant uses
+a `radiant_` or `RADIANT_` name. `scripts/migrate_radiant_names.py` does the
+rename for code that tracked master in between.
+
 **One collision removed as a side effect.** `apps/common/ant_radio_sdk_ant.c` is a
-translation unit holding all four sdk-ant headers at once, and `ANTW_*` exists
-because sdk-ant's error macros are computed expressions — identical macro *names*
+translation unit holding all four sdk-ant headers at once, and the wire constants
+carry a prefix (`ANTW_*` then, `RADIANT_WIRE_*` now) because sdk-ant's error
+macros are computed expressions — identical macro *names*
 with different token sequences are a hard redefinition error, not a warning. A
 module sitting in the `ANT_*` C and Kconfig namespace carried the same trap,
 waiting for the first translation unit needing both trees (Phase 6's

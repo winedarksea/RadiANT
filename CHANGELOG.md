@@ -28,9 +28,15 @@ reads.
 - **Pro Micro images reboot into their UF2 bootloader over USB**
   (`tools/ant_probe.py --reboot-to-bootloader`). Any host software that can
   open the device can now put these boards into a writable bootloader.
-- **RadiANT is usable from other firmware:** the `radiant_ant_*` API lives in the
-  `radiant` module with heart-rate samples, and builds on stock Zephyr
-  ([radiant/README.md](radiant/README.md)).
+- **RadiANT is usable from other firmware:** the `radiant_ant_*` API
+  (`<radiant/radiant_ant.h>`, `CONFIG_RADIANT_ANT_API`) lives in the `radiant`
+  module with heart-rate samples, and builds on stock Zephyr. Every public name
+  is `radiant_*`/`RADIANT_*`, and a west project entry is all a project needs:
+  the repository root is a Zephyr module ([radiant/README.md](radiant/README.md)).
+  If you tracked master before 2026-11-22: `antr_` became `radiant_ant_`,
+  `ANTW_` became `RADIANT_WIRE_`, and exported `profile_`/`node_` names became
+  `radiant_profile_`/`radiant_node_`. Run `scripts/migrate_radiant_names.py
+  <your dirs>` to rename your code.
 - **Low-power options for battery nodes, default n**
   ([ADR 0025](docs/decisions/0025-power-diag-struct-and-lp-timebase.md)):
   `CONFIG_RADIANT_NRF_LOW_POWER` releases the HFXO and radio timer between
