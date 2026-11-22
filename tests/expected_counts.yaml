@@ -248,7 +248,11 @@ min_scenarios: 29
 # radiant.backend_cc26xx and .coex (test_tx_power_rounds_to_nearest_entry).
 # 2026-11-21: +70 (fix/parity, Bluefin twister): the new radiant.backend.short_match
 # scenario, the whole radiant.backend suite with CONFIG_RADIANT_SEARCH_SHORT_MATCH.
-min_testcases: 8178
+# 2026-11-22: +19 (security review 2026-11-21, wip/sec-queue-pair; Bluefin 9007):
+# +3 per unit scenario (radiant_sec: queue dropped on 0xF3 and changed 0xF1, kept
+# on a refused 0xF3 / identical 0xF1), +1 in radiant.api.sec_host (unassign ends
+# the pairing exchange).
+min_testcases: 8197
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -280,18 +284,20 @@ min_testcases: 8178
 # RNG scalar, counter before the draw, failed and all-zero draws; item 8).
 # no_pairing compiles them out.
 # 2026-11-20: +4 per unit scenario (HAL drift item 5 settled: fake_radio x3, ED chunk cap).
-min_cases.radiant.unit: 1130
-min_cases.radiant.unit.sec_modes: 1130
-min_cases.radiant.unit.no_pairing: 1066
+# 2026-11-22: +3 per unit scenario (radiant_sec: queued ciphertext across 0xF3/0xF1).
+min_cases.radiant.unit: 1133
+min_cases.radiant.unit.sec_modes: 1133
+min_cases.radiant.unit.no_pairing: 1069
 # radiant.unit.pairing_no_rng: 1218, the observed count on sec/item8-pair-rng
 # (2026-11-20), including test_pair_begin_without_an_rng_uses_the_kdf_scalar.
 # +4 (HAL drift item 5 settled, as radiant.unit).
-min_cases.radiant.unit.pairing_no_rng: 1233
+min_cases.radiant.unit.pairing_no_rng: 1236
 min_cases.radiant.api: 91
 min_cases.radiant.api.sec: 95
 # +1 with the identical-0xF1 retry case (review 2026-11-17 item 4).
 # +4 with the 0xF2 rekey take-back and its three guards (review 2026-11-20 item C).
-min_cases.radiant.api.sec_host: 114
+# +1 with the unassign-ends-the-pairing-exchange case (review 2026-11-21).
+min_cases.radiant.api.sec_host: 115
 # radiant.api.crc_repair: 112, the observed count on fix/crc-repair-deliver
 # (2026-11-18), including the two delivery cases.
 min_cases.radiant.api.crc_repair: 118
@@ -347,7 +353,7 @@ min_cases.treadmill.hr_rx: 3
 # 2026-11-20: +6 (bridge_trace review follow-ups, as radiant.unit).
 # 2026-11-20: +4 (node_ident pair_begin RNG cases, as radiant.unit).
 # 2026-11-20: +4 (HAL drift item 5 settled, as radiant.unit).
-min_cases.radiant.unit.ack_faults: 1137
+min_cases.radiant.unit.ack_faults: 1140
 # radiant.unit.diag: the unit suites with CONFIG_RADIANT_DIAG_COUNTERS.
 # 1127 (2026-11-16, Bluefin twister on fix/diag-page9-done-cb): the observed
 # count, including the four page-9/page-12 scheduler cases.
@@ -362,7 +368,7 @@ min_cases.radiant.unit.ack_faults: 1137
 # 2026-11-20: +6 (bridge_trace review follow-ups, as radiant.unit).
 # 2026-11-20: +4 (node_ident pair_begin RNG cases, as radiant.unit).
 # 2026-11-20: +4 (HAL drift item 5 settled, as radiant.unit).
-min_cases.radiant.unit.diag: 1208
+min_cases.radiant.unit.diag: 1211
 min_cases.trainer.model: 14
 # radiant.lp_clock (power plan pass B2): the low-power timebase arithmetic,
 # 31 unit cases and seven 100 000-cycle drift simulations (three of them
