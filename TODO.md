@@ -369,6 +369,23 @@ MPSL (needs a soak beside BLE or Thread, which that clearance excluded):
     Garmin's 39. OWNER: surface a denied tracking slot as an event, or have
     ant_verify credit gate denials. Cheapest diag for the 4: put
     `slots_denied`/`slots_collided` on the `rxpath` log line (:3279).
+    FIRMWARE DONE 2026-11-21 (branch wip/denied-collision, owner decision: a
+    denied tracked slot raises EVENT_CHANNEL_COLLISION 0x09, ADR 0024
+    amendment; master TX denials stay silent). The `rxpath` line now ends
+    `| missed=%u denied=%u collided=%u` (cumulative, like `tot`). BENCH STILL
+    OPEN, leave this unchecked until it runs: rebuild `acc_coex_ble` (gate +
+    `ble_load.conf`) from the branch, 600 s ant_verify against the
+    2026-11-20 master with the Garmin as same-window control. Pass: (a)
+    `unaccounted` <= `allowed` and the verdict lists collisions; (b) host 0x09
+    count ~= delta(denied) + delta(collided) from the first and last `rxpath`
+    lines of the run; (d) no GO_TO_SEARCH from denials. **The 4:** take
+    delta(denied) from the same two `rxpath` lines and compare it with the
+    gate's tracked acquired - granted delta from the 5 s gate counters over
+    the same span. Equal -> every refusal (late ones included) ends DENIED and
+    is now reported. Short by the late-refusal count -> those windows end by a
+    path that posts nothing: a separate bug, trace from the gate's pending ->
+    not-granted path (`radiant_radio_nrf_gate_mpsl.c`, the `stats.granted++`
+    site).
   - [ ] Master-originated acked data on the gate image: 58/60 twice, against
     60/60 on 2026-11-14 (two missed acks per run). No same-sitting run of the
     image before the fix, so not attributed.
@@ -682,7 +699,7 @@ Leave apart: TI arb vs MPSL gate, `radiant_rx_torn` (nRF single-buffer only), po
 - [ ] Keep 0xF3 and make it explicitly write-only. Hosts use it to set the epoch and its phase so a keyed channel can start encrypting or authenticating. Removing the command would break that workflow. Hosts can already read the current epoch, expected slot index, and armed state through 0xF4. [Epoch setter and status reply (line 175)](C:/Users/Colin/ant_dongle/radiant/src/antr/ant_sec_host.c:175) I found no in-tree caller requesting an 0xF3 read. The extra information a read could provide is the exact microsecond phase and the original real-time flag. The firmware validates that flag but does not retain it, so a faithful readback would require a state change as well as handler code. With 52 bytes of code budget left and no identified consumer, I’d keep that headroom. The change I recommend is to mark 0xF3 as h2d in the YAML, regenerate the wire references, and correct the two readback claims in the security doc. Keep decode_epoch() for decoding captured host writes. The existing firmware already returns ANTW_INVALID_MESSAGE for MESG_REQUEST(0xF3), so this aligns the contract with deployed behavior at zero firmware cost. [Wire definition (line 2026)](C:/Users/Colin/ant_dongle/protocol/ant_wire.yaml:2026) · [Security message table (line 1841)](C:/Users/Colin/ant_dongle/docs/radiant-security.md:1841) · [Readback claim (line 1968)](C:/Users/Colin/ant_dongle/docs/radiant-security.md:1968)
 
 ## Follow ups:
-Refused tracking slots: either send an event to the host for each one, or have ant_verify.py count them as gate refusals instead of unexplained loss.
+Refused tracking slots: either send an event to the host for each one, or have ant_verify.py count them as gate refusals instead of unexplained loss. (Decided 2026-11-21: event, 0x09; firmware on wip/denied-collision, bench check open under the `acc_coex_ble` item.)
 
 Review for firmware code being made smaller without loss of functionality
 Review for performance (minimal packet lost, lowest latency)

@@ -128,7 +128,9 @@ struct radiant_api_stats {
 	uint32_t sched_denied;
 	uint32_t slots_missed;    /* windows that ran and heard nothing */
 	/* Tracked or master slots lost to the arbiter. Against slots_missed:
-	 * loss that is ours versus loss that is the air's. */
+	 * loss that is ours versus loss that is the air's. A tracked denial is
+	 * reported to the host as EVENT_CHANNEL_COLLISION (ADR 0024 amendment);
+	 * a master's denied transmit is not receive loss and is not reported. */
 	uint32_t slots_denied;
 	/* Tracked slots the scheduler itself dropped (never armed, expired behind
 	 * another window, or cut short): reported as EVENT_CHANNEL_COLLISION and

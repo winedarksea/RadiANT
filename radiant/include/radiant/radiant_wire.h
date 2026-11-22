@@ -1053,7 +1053,12 @@
  */
 #define RADIANT_WIRE_EVENT_RX_FAIL_GO_TO_SEARCH              0x08
 
-/* Two channels wanted the radio at the same instant. [tools (ant_session)] */
+/*
+ * Two channels wanted the radio at the same instant, or another radio stack
+ * took the slot (a tracked window the arbiter refused). The loss is the
+ * receiver's own, not the sensor's, so it is never also reported as RX_FAIL.
+ * [tools (ant_session)]
+ */
 #define RADIANT_WIRE_EVENT_CHANNEL_COLLISION                 0x09
 
 /*
@@ -1734,8 +1739,14 @@
  * for 0xF2 answers ANTW_INVALID_MESSAGE rather than a key. NOT checked
  * against other channels: the host gives each live channel a distinct root or
  * base device number, or two channels given one epoch by 0xF3 share a
- * keystream (docs/radiant-security.md sec 3.5). [K4 (docs/radiant-security.md
- * sec 3.4 and 9)]
+ * keystream (docs/radiant-security.md sec 3.5). On a MASTER, REFUSED with
+ * ANTW_CHANNEL_IN_WRONG_STATE while host acknowledged data or a burst is in
+ * flight. A different root (a real rekey) on a keyed, secured master takes
+ * back the slot and acknowledgement payload built under the old key before
+ * this answers, as a changed 0xF1 does; the channel is then pending until
+ * 0xF3. The root already installed (a retry) changes nothing. On TI the take-
+ * back's RF_flushCmd is asynchronous, so a frame already on the air may
+ * complete. [K4 (docs/radiant-security.md sec 3.4 and 9)]
  */
 #define RADIANT_WIRE_MESG_RADIANT_SET_KEY_ID                 0xF2
 

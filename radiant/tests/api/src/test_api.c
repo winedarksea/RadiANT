@@ -5030,6 +5030,13 @@ ZTEST(api, test_a_denied_master_transmit_does_not_wedge)
 		     "the denied transmits were not counted as denials");
 	zassert_equal(missed0, radiant_api_stats_get()->slots_missed,
 		     "a denied master transmit was charged to the miss counter");
+	/* A tracked denial is reported as EVENT_CHANNEL_COLLISION; a master's
+	 * refused transmit is not receive loss and stays silent. */
+	zassert_true(n_msg < MSGLOG_MAX, "the message log filled; counts unsafe");
+	zassert_equal(0u,
+		      count_channel_events(CH,
+					   (uint8_t)ANTW_EVENT_CHANNEL_COLLISION),
+		      "a denied master transmit raised EVENT_CHANNEL_COLLISION");
 
 	/* The channel is still due to transmit in the future, not pinned to a
 	 * past instant. */
@@ -5048,12 +5055,13 @@ ZTEST(api, test_a_denied_master_transmit_does_not_wedge)
 }
 
 /*
- * A denied tracked window is invisible to the host. EVENT_RX_FAIL says "the
+ * A denied tracked window is never an RX_FAIL. EVENT_RX_FAIL says "the
  * window ran and nothing was there"; a denial says "us", and a host acting
  * on it acts wrongly (Zwift tears down a channel that was never in
  * trouble). Twelve denials in a row is 1.5x what RX_FAIL_TO_SEARCH allows in
  * misses, so folding the two together would visibly drop the channel to
- * SEARCHING.
+ * SEARCHING. The host is told EVENT_CHANNEL_COLLISION instead, as for the
+ * scheduler's own drops (ADR 0024 amendment, 2026-11-21).
  */
 /*
  * The control, and not optional: "denials add no missed slot" is only
@@ -5128,6 +5136,9 @@ ZTEST(api, test_a_denied_tracked_window_is_not_reported_as_an_rx_failure)
 {
 	const struct fake_radio_arm *w;
 	uint16_t                     dev_a;
+	uint32_t                     denied0;
+	uint32_t                     collided0;
+	uint32_t                     denied;
 
 	api_long_match();
 
@@ -5152,10 +5163,35 @@ ZTEST(api, test_a_denied_tracked_window_is_not_reported_as_an_rx_failure)
 	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH),
 		      "setup: the channel did not acquire");
 
+	/* Cumulative across the suite, so taken as deltas. */
+	denied0   = radiant_api_stats_get()->slots_denied;
+	collided0 = radiant_api_stats_get()->slots_collided;
+
 	/* Every operation from here on is accepted and then never granted. */
 	fake_radio_force_terminal_repeat(RADIANT_RADIO_STATUS_DENIED, 64u);
 	run_virtual_us(12u * (uint64_t)PERIOD_US);
 	drain();
+
+	/*
+	 * Not RX_FAIL, but not silence either: a refused slot is reported as
+	 * EVENT_CHANNEL_COLLISION, the event ADR 0024 gives the scheduler's own
+	 * drops (owner decision 2026-11-21). Exactly one per refused or dropped
+	 * slot, so a host's loss accounting closes: in acc_coex_ble, 88 refused
+	 * slots reached the host as nothing and read as unaccounted loss.
+	 */
+	denied = radiant_api_stats_get()->slots_denied - denied0;
+	zassert_true(denied > 0u,
+		     "no tracked slot was counted as denied, so this test proved "
+		     "nothing");
+	zassert_true(n_msg < MSGLOG_MAX, "the message log filled; counts unsafe");
+	zassert_equal(denied + (radiant_api_stats_get()->slots_collided - collided0),
+		      count_channel_events(CH,
+					   (uint8_t)ANTW_EVENT_CHANNEL_COLLISION),
+		      "%u denied slots, %u collision events: a refused tracked "
+		      "slot must reach the host as EVENT_CHANNEL_COLLISION",
+		      denied,
+		      count_channel_events(CH,
+					   (uint8_t)ANTW_EVENT_CHANNEL_COLLISION));
 
 	/* Miss/RX_FAIL counts are asserted by the control test above, not
 	 * here, as a delta (a quiet channel legitimately misses one slot

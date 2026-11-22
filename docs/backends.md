@@ -494,7 +494,10 @@ operation, or was cut short by one) is served ahead of an earlier window that
 would leave it unhearable, so neither channel loses two contended slots in a
 row. The scheduler's own drops (`DONE_MISSED`, `DONE_ABORTED`) reach the host as
 `EVENT_CHANNEL_COLLISION`, are charged like a denial and never count toward
-`RX_FAIL_GO_TO_SEARCH`. Rule 4 caps the union only past the leader's open, so
+`RX_FAIL_GO_TO_SEARCH`. A tracked window the arbiter refused (`DONE_DENIED`,
+another radio stack took the slot) is reported the same way since 2026-11-21
+(ADR 0024 amendment), still never as `RX_FAIL`; a denied master transmit stays
+silent. Rule 4 caps the union only past the leader's open, so
 when alternation makes the later channel the leader, the earlier one still
 merges in behind it and both are heard. 0xF7 page 11 counts `slots_collided` and
 `turn_yields`.

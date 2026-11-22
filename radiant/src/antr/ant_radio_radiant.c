@@ -2996,21 +2996,26 @@ static void api_sched_done(uint8_t ch, enum radiant_sched_done why, void *user)
 		 * A predicted window ran and heard nothing. The clock advances from the missed
 		 * slot, and after eight misses the channel returns to search
 		 * (RX_FAIL_GO_TO_SEARCH).
-		 * A DENIED window did not run: it charges the guard, not the miss counter, and
-		 * raises no RX_FAIL, since a denial says nothing about the sensor.
-		 * A MISSED or ABORTED window is the scheduler's own drop: it never armed, it
-		 * expired behind another channel's window, or another operation cut it short.
-		 * That says nothing about the sensor either, so it is a collision (owner
-		 * decision 2026-11-15, TODO.md section 8): the denial's accounting, plus
-		 * EVENT_CHANNEL_COLLISION in place of RX_FAIL, as Garmin reports it. Only a
-		 * window that ran to its close empty (DONE_OK) counts toward search.
+		 * A window that did not run, or did not run to its close, says nothing about
+		 * the sensor: the loss is ours. That covers a DENIED window (the arbiter
+		 * lent the radio to another protocol stack) and a MISSED or ABORTED one (the
+		 * scheduler's own drop: it never armed, it expired behind another channel's
+		 * window, or another operation cut it short). All three are collisions
+		 * (owner decisions 2026-11-15, TODO.md section 8, and 2026-11-21 for DENIED,
+		 * ADR 0024): they charge the guard, not the miss counter, and raise
+		 * EVENT_CHANNEL_COLLISION in place of RX_FAIL, as Garmin reports it, so a
+		 * host's loss accounting closes. Only the counter tells them apart:
+		 * slots_denied (another stack) versus slots_collided (our scheduling). Only
+		 * a window that ran to its close empty (DONE_OK) counts toward search.
 		 */
-		if (why == RADIANT_SCHED_DONE_DENIED) {
-			api_stats.slots_denied++;
-			(void)radiant_channel_on_slot_denied(ch, now);
-		} else if (why == RADIANT_SCHED_DONE_MISSED ||
-			   why == RADIANT_SCHED_DONE_ABORTED) {
-			api_stats.slots_collided++;
+		if (why == RADIANT_SCHED_DONE_DENIED ||
+		    why == RADIANT_SCHED_DONE_MISSED ||
+		    why == RADIANT_SCHED_DONE_ABORTED) {
+			if (why == RADIANT_SCHED_DONE_DENIED) {
+				api_stats.slots_denied++;
+			} else {
+				api_stats.slots_collided++;
+			}
 			(void)radiant_channel_on_slot_denied(ch, now);
 			(void)radiant_event_post_channel_event(
 				ch, (uint8_t)ANTW_EVENT_CHANNEL_COLLISION);
@@ -3272,12 +3277,17 @@ static void api_housekeep(void)
 
 		if (now - rxpath_last >= API_RXPATH_REPORT_US &&
 		    api_stats.rx_sched_events != rxpath_seen) {
-			/* Reported as a delta over the interval, since the counters are
-			 * cumulative since boot. */
+			/* sched is a delta over the interval; the rest are cumulative
+			 * since boot. missed/denied/collided split the slots that got no
+			 * frame: the air (missed), the arbiter refusing the radio (denied,
+			 * master transmits included) and our own scheduler's drop
+			 * (collided). Compare a denied delta with the gate's tracked
+			 * acquired - granted over the same window. */
 			uint32_t dt_ms = (uint32_t)((now - rxpath_last) / 1000u);
 
 			LOG_INF("rxpath/%ums sched=%u tracked=%u on_data=%u "
-				"up=%u posted=%u | xfer=%u dropped=%u tot=%u",
+				"up=%u posted=%u | xfer=%u dropped=%u tot=%u "
+				"| missed=%u denied=%u collided=%u",
 				(unsigned int)dt_ms,
 				(unsigned int)(api_stats.rx_sched_events - rxpath_seen),
 				(unsigned int)api_stats.rx_tracked_frames,
@@ -3286,7 +3296,10 @@ static void api_housekeep(void)
 				(unsigned int)api_stats.rx_posted,
 				(unsigned int)api_stats.rx_to_xfer,
 				(unsigned int)api_stats.rx_dropped,
-				(unsigned int)api_stats.rx_sched_events);
+				(unsigned int)api_stats.rx_sched_events,
+				(unsigned int)api_stats.slots_missed,
+				(unsigned int)api_stats.slots_denied,
+				(unsigned int)api_stats.slots_collided);
 			LOG_INF("xfer failures: no_opener=%u lost_track=%u no_ack=%u "
 				"bad_ack=%u radio=%u",
 				(unsigned int)api_stats.xfer_no_opener,
