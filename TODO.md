@@ -177,8 +177,8 @@ noticeably degrade primary functionality, such as receiving a heart rate strap.
 
 # FE-C coverage
 
-- [ ] **Simulator gaps** (`profile_fec_tx.c`, `apps/trainer`). Page 55 is refused
-  on request (`profile_fec_tx_request()` has no USER_CONFIG case). The page-70
+- [ ] **Simulator gaps** (`radiant_profile_fec_tx.c`, `apps/trainer`). Page 55 is refused
+  on request (`radiant_profile_fec_tx_request()` has no USER_CONFIG case). The page-70
   "reply acknowledged" bit is decoded but never acted on. A page 71 is sent in
   reply to a page 70; check that against the spec.
 - [ ] **Never run on air:** 0x31 ERG, 0x30 and 0x32; page 70 -> 54/55/71 round
@@ -196,11 +196,11 @@ noticeably degrade primary functionality, such as receiving a heart rate strap.
 - [ ] **Align clear runs to MAC windows** (design, deferred 2026-11-07). Every
   window that holds a clear slot (descriptor, page 80/81) is unverified, and so
   is the window before it (cost: `docs/radiant-security.md` 3.2). The fix would
-  have profile_sched place each cycle's clear run on whole windows. Costs:
+  have radiant_profile_sched place each cycle's clear run on whole windows. Costs:
   - it breaks the certified 121-message cadence (it would need a multiple of W,
     such as 120);
   - it spends up to W-1 padding slots per cycle (~6 % at W=8);
-  - it couples profile_sched to radiant_sec;
+  - it couples radiant_profile_sched to radiant_sec;
   - MPSL-denied slots break the alignment;
   - it cannot be enforced on host-driven masters.
 
@@ -315,7 +315,7 @@ the HR sample). Every current so far is an estimate from the power-diag proxy
   document it alongside bounded search, with the acquisition-latency tradeoff,
   which `radiant/samples/hr_transmitter/README.md` gives one sentence today.
 - [ ] **Wake the API thread for work or a deadline.**
-  `ant_radio_radiant.c` wakes every `RADIANT_API_HOUSEKEEP_MS` (50 ms) even when
+  `radiant_ant.c` wakes every `RADIANT_API_HOUSEKEEP_MS` (50 ms) even when
   idle. Block on events when there is no timed work, and arm a wakeup for the
   next retry, search timeout or transfer watchdog. The tick does more than
   housekeeping:
@@ -356,26 +356,28 @@ the HR sample). Every current so far is an estimate from the power-diag proxy
     procedures and equipment needs;
   - `docs/radiant-telemetry.md`: state the current format, without references
     to earlier drafts or fixed TODO items.
-- [ ] **Root-level `zephyr/module.yml`, so a west project entry just works.**
-  Today a consumer also appends `radiant/` to `ZEPHYR_EXTRA_MODULES`. Add a root
-  file with `build: cmake: radiant`, `kconfig: radiant/Kconfig`, and
-  `samples`/`tests` under `radiant/`. First check what `zephyr_module.py` does
-  when this repo's own apps also append the module by path under the same name
-  (the Windows `C:\ncs` flow is not a west workspace for this repo, so it still
-  needs the appends). Clone size is not a blocker (history packs to 6.7 MiB;
-  consumers can use `clone-depth: 1`).
-- [ ] **Rename `antr_*`, `ANTW_*` and `ant_radio.h` to RadiANT-specific names**
-  before the Zephyr listing, while few people depend on them. Compatibility
-  aliases are probably not needed. `ant_wire.h` is generated: change the prefix
-  in `scripts/gen_ant_wire.py`. The sdk-ant comparison backend relies on the
-  prefix not colliding with sdk-ant's names. (The 2026-11-08 beta cleanup
-  deferred this, at about 1,300 changed lines; it was not ruled out.)
-- [ ] **List RadiANT in Zephyr's External Modules docs.** Blocked on the root
-  `module.yml`. Open a "New External Source Code" issue for TSC approval, then
-  a PR adding `doc/develop/manifest/external/radiant.rst` from
-  `external.rst.tmpl`. Apache-2.0 skips the licence review. Use the
-  "compatible, not certified" wording from ADR 0003. The default manifest is
-  not the target.
+- [ ] **List RadiANT in Zephyr's External Modules docs. Deferred until the
+  project matures** (owner 2026-11-22); still the eventual aim, and nothing
+  blocks it now that the root `zephyr/module.yml` exists. Open a "New External
+  Source Code" issue for TSC approval, then a PR adding
+  `doc/develop/manifest/external/radiant.rst` from `external.rst.tmpl`.
+  Apache-2.0 skips the licence review. Use the "compatible, not certified"
+  wording from ADR 0003. The default manifest is not the target.
+- [ ] **Public headers for profiles and the bridge under `include/radiant/`.**
+  Since 2026-11-22 every exported name is `radiant_*` and the files are
+  `radiant_profile_*.h`, `radiant_node_*.h` and `radiant_bridge*.h`, but they
+  are still reached through `src/profiles`, `src/node` and `src/bridge` on the
+  include path (`#include "radiant_profile_hr.h"`), not as
+  `<radiant/...>`. Decide whether they become `<radiant/...>` headers.
+- [ ] **`radiant/src/radiant_ti_rf_hwattrs.c:231` reads the app's
+  `CONFIG_ANT_DONGLE_TRANSPORT_*`** to refuse
+  `CONFIG_RADIANT_CC26XX_XOSC_HF_RELEASE` in a dongle image. That is module
+  code testing application Kconfig, the same seam problem the health counters
+  had until 2026-11-22. Replace it with a module symbol the dongle selects.
+- [ ] **Delete `scripts/migrate_radiant_names.py` after the first release that
+  ships `radiant_ant_*`** (the one after v1.2.0). It exists for code that
+  tracked master before the 2026-11-22 rename. Also remove its CHANGELOG
+  pointer from the next release's notes.
 
 # Reviews to run
 
