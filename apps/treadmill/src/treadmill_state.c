@@ -10,6 +10,7 @@
  * beat scheduler.
  */
 
+#include <errno.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -46,6 +47,26 @@ static uint32_t clamp_speed(uint32_t mm_s)
 	return (mm_s > SPEED_MAX_MM_S) ? SPEED_MAX_MM_S : mm_s;
 }
 
+/* The MACHINE's range, for requests. clamp_incline()/clamp_speed() above are
+ * the WIRE's, for what the deck reports it is actually doing. */
+static int32_t clamp_target_incline(const struct treadmill_state *s,
+				    int32_t centi_pct)
+{
+	if (centi_pct < s->min_incline_centi_pct) {
+		return s->min_incline_centi_pct;
+	}
+	if (centi_pct > s->max_incline_centi_pct) {
+		return s->max_incline_centi_pct;
+	}
+	return centi_pct;
+}
+
+static uint32_t clamp_target_speed(const struct treadmill_state *s,
+				   uint32_t mm_s)
+{
+	return (mm_s > s->max_speed_mm_s) ? s->max_speed_mm_s : mm_s;
+}
+
 void treadmill_state_init(struct treadmill_state *s)
 {
 	if (s == NULL) {
@@ -58,6 +79,28 @@ void treadmill_state_init(struct treadmill_state *s)
 	 * use at power-up. */
 	s->state = TREADMILL_STATE_READY;
 	s->user_mass_10g = 0u; /* not supplied; see TREADMILL_DEFAULT_MASS_10G */
+	/* The wire's range until the app says what the machine can do. */
+	s->min_incline_centi_pct = INCLINE_MIN_CENTI_PCT;
+	s->max_incline_centi_pct = INCLINE_MAX_CENTI_PCT;
+	s->max_speed_mm_s = SPEED_MAX_MM_S;
+}
+
+int treadmill_state_set_limits(struct treadmill_state *s,
+			       int32_t min_incline_centi_pct,
+			       int32_t max_incline_centi_pct,
+			       uint32_t max_speed_mm_s)
+{
+	if (s == NULL || min_incline_centi_pct > 0 ||
+	    max_incline_centi_pct < 0 || max_speed_mm_s == 0u) {
+		return -EINVAL;
+	}
+	s->min_incline_centi_pct = clamp_incline(min_incline_centi_pct);
+	s->max_incline_centi_pct = clamp_incline(max_incline_centi_pct);
+	s->max_speed_mm_s = clamp_speed(max_speed_mm_s);
+	s->target_incline_centi_pct =
+		clamp_target_incline(s, s->target_incline_centi_pct);
+	s->target_speed_mm_s = clamp_target_speed(s, s->target_speed_mm_s);
+	return 0;
 }
 
 void treadmill_state_set_speed(struct treadmill_state *s, uint32_t mm_s)
@@ -80,7 +123,7 @@ int32_t treadmill_state_request_incline(struct treadmill_state *s,
 	if (s == NULL) {
 		return 0;
 	}
-	s->target_incline_centi_pct = clamp_incline(centi_pct);
+	s->target_incline_centi_pct = clamp_target_incline(s, centi_pct);
 	return s->target_incline_centi_pct;
 }
 
@@ -89,8 +132,41 @@ uint32_t treadmill_state_request_speed(struct treadmill_state *s, uint32_t mm_s)
 	if (s == NULL) {
 		return 0u;
 	}
-	s->target_speed_mm_s = clamp_speed(mm_s);
+	s->target_speed_mm_s = clamp_target_speed(s, mm_s);
 	return s->target_speed_mm_s;
+}
+
+int treadmill_state_command_incline(struct treadmill_state *s,
+				    int32_t centi_pct, int32_t *adopted)
+{
+	if (s == NULL) {
+		return -EINVAL;
+	}
+	if (centi_pct < s->min_incline_centi_pct ||
+	    centi_pct > s->max_incline_centi_pct) {
+		return -ERANGE;
+	}
+	s->target_incline_centi_pct = centi_pct;
+	if (adopted != NULL) {
+		*adopted = centi_pct;
+	}
+	return 0;
+}
+
+int treadmill_state_command_speed(struct treadmill_state *s, uint32_t mm_s,
+				  uint32_t *adopted)
+{
+	if (s == NULL) {
+		return -EINVAL;
+	}
+	if (mm_s > s->max_speed_mm_s) {
+		return -ERANGE;
+	}
+	s->target_speed_mm_s = mm_s;
+	if (adopted != NULL) {
+		*adopted = mm_s;
+	}
+	return 0;
 }
 
 void treadmill_state_add_strides(struct treadmill_state *s, uint32_t n)
@@ -308,6 +384,14 @@ uint8_t treadmill_rsc_cadence_from_strides(uint32_t strides_min_16)
 
 int16_t treadmill_ftms_incline_from_fec(int32_t centi_pct)
 {
+	/* Saturate first, which also keeps INT32_MIN away from the negation
+	 * below. -327680 and +327670 are the inputs that land exactly on the
+	 * int16 ends after rounding. */
+	if (centi_pct < -327680) {
+		centi_pct = -327680;
+	} else if (centi_pct > 327670) {
+		centi_pct = 327670;
+	}
 	/* Round to nearest, away from zero, so a small negative grade keeps
 	 * its sign instead of becoming a positive zero. */
 	if (centi_pct >= 0) {

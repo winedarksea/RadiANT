@@ -258,7 +258,12 @@ min_scenarios: 29
 # 2026-11-23: +18 (security review 2026-11-22 item 1, wip/s22-desc-plain):
 # +3 per unit scenario (profiles: a keyed receiver refuses a plain set, a
 # plain swap after a sealed one, and a reserved-bit-only set).
-min_testcases: 8222
+# 2026-11-23: +16 (security review 2026-11-22 item 2, wip/s22-incline-range):
+# +2 per unit scenario (fec_tx: raw 40001 and 0xFFFE clamp to +200.00 %), +4 in
+# treadmill.pages (machine range: sim clamp, explicit incline and speed refused,
+# 0 always in range); review nits +2 there (incline conversion saturates, an
+# over-wide range narrows to the wire).
+min_testcases: 8240
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -293,14 +298,16 @@ min_testcases: 8222
 # 2026-11-22: +3 per unit scenario (radiant_sec: queued ciphertext across 0xF3/0xF1).
 # 2026-11-23: +3 per unit scenario (profiles: a keyed receiver refuses plain and
 # reserved-bit-only sets).
-min_cases.radiant.unit: 1136
-min_cases.radiant.unit.sec_modes: 1136
-min_cases.radiant.unit.no_pairing: 1072
+# 2026-11-23: +2 per unit scenario (fec_tx: page 51 raw grade above 40000 clamps).
+min_cases.radiant.unit: 1138
+min_cases.radiant.unit.sec_modes: 1138
+min_cases.radiant.unit.no_pairing: 1074
 # radiant.unit.pairing_no_rng: 1218, the observed count on sec/item8-pair-rng
 # (2026-11-20), including test_pair_begin_without_an_rng_uses_the_kdf_scalar.
 # +4 (HAL drift item 5 settled, as radiant.unit).
 # 2026-11-23: +3 (profiles: a keyed receiver refuses plain and reserved-bit-only sets).
-min_cases.radiant.unit.pairing_no_rng: 1239
+# 2026-11-23: +2 (fec_tx grade clamp, as radiant.unit).
+min_cases.radiant.unit.pairing_no_rng: 1241
 min_cases.radiant.api: 91
 min_cases.radiant.api.sec: 95
 # +1 with the identical-0xF1 retry case (review 2026-11-17 item 4).
@@ -349,7 +356,9 @@ min_cases.radiant.backend.d2: 70
 # nRF rows (filter_wildcard_dev true). 70, the observed count (2026-11-21).
 min_cases.radiant.backend.short_match: 70
 min_cases.hrm_ble.sim_sched: 4
-min_cases.treadmill.pages: 20
+# 2026-11-23: +4 (security review 2026-11-22 item 2: the machine range), +2
+# (review nits: conversion saturation, over-wide range narrowing).
+min_cases.treadmill.pages: 26
 min_cases.treadmill.hr_rx: 3
 # 2026-11-20: +3 (HAL drift item 5, as radiant.unit).
 # 2026-11-20: +1 (the ETIME retry re-read, as radiant.unit).
@@ -363,7 +372,8 @@ min_cases.treadmill.hr_rx: 3
 # 2026-11-20: +4 (node_ident pair_begin RNG cases, as radiant.unit).
 # 2026-11-20: +4 (HAL drift item 5 settled, as radiant.unit).
 # 2026-11-23: +3 (profiles: a keyed receiver refuses plain and reserved-bit-only sets).
-min_cases.radiant.unit.ack_faults: 1143
+# 2026-11-23: +2 (fec_tx grade clamp, as radiant.unit).
+min_cases.radiant.unit.ack_faults: 1145
 # radiant.unit.diag: the unit suites with CONFIG_RADIANT_DIAG_COUNTERS.
 # 1127 (2026-11-16, Bluefin twister on fix/diag-page9-done-cb): the observed
 # count, including the four page-9/page-12 scheduler cases.
@@ -379,7 +389,8 @@ min_cases.radiant.unit.ack_faults: 1143
 # 2026-11-20: +4 (node_ident pair_begin RNG cases, as radiant.unit).
 # 2026-11-20: +4 (HAL drift item 5 settled, as radiant.unit).
 # 2026-11-23: +3 (profiles: a keyed receiver refuses plain and reserved-bit-only sets).
-min_cases.radiant.unit.diag: 1214
+# 2026-11-23: +2 (fec_tx grade clamp, as radiant.unit).
+min_cases.radiant.unit.diag: 1216
 min_cases.trainer.model: 14
 # radiant.lp_clock (power plan pass B2): the low-power timebase arithmetic,
 # 31 unit cases and seven 100 000-cycle drift simulations (three of them

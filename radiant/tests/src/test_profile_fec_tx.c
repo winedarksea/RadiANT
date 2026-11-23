@@ -55,6 +55,28 @@ ZTEST(radiant_profile_fec_tx, test_grade_sentinel_is_flat_not_an_error)
 	zassert_false(valid, NULL);
 }
 
+ZTEST(radiant_profile_fec_tx, test_grade_just_above_span_clamps_to_top)
+{
+	bool valid = false;
+
+	/* 40001 is one past SS8.8.4.1's +200.00 %. It is not the sentinel,
+	 * so it stays valid, and it lands on the edge rather than +200.01 %. */
+	zassert_equal(radiant_profile_fec_grade_to_centi_pct(40001u, &valid), 20000,
+		      NULL);
+	zassert_true(valid, NULL);
+}
+
+ZTEST(radiant_profile_fec_tx, test_grade_largest_non_sentinel_clamps_to_top)
+{
+	bool valid = false;
+
+	/* 0xFFFE is the last value before the sentinel. Unbounded it read as
+	 * +455.34 %, which any ANT+ transmitter could send a treadmill. */
+	zassert_equal(radiant_profile_fec_grade_to_centi_pct(0xFFFEu, &valid), 20000,
+		      NULL);
+	zassert_true(valid, NULL);
+}
+
 ZTEST(radiant_profile_fec_tx, test_grade_round_trips_and_clamps)
 {
 	bool valid;

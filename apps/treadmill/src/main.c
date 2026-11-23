@@ -99,6 +99,13 @@ static const uint8_t ant_plus_key[8] = {
  * message may be. It is the node tick, converted once. */
 #define SDM_LATENCY_32 ((NODE_TICK_MS * 32u) / 1000u)
 
+/* FTMS Reset and FE-C's "assume flat" sentinel both command 0; a machine range
+ * that excluded it would refuse Reset and clamp "flat" onto a slope. Kconfig's
+ * own ranges already guarantee it - this is so nobody widens them unseen. */
+BUILD_ASSERT(CONFIG_TREADMILL_MIN_INCLINE_DECI <= 0 &&
+	     CONFIG_TREADMILL_MAX_INCLINE_DECI >= 0,
+	     "the machine incline range must include 0 %");
+
 static struct treadmill_state  state;
 static struct radiant_profile_fec_tx   fec;
 #if defined(CONFIG_TREADMILL_ANT_SDM)
@@ -351,7 +358,14 @@ static void apply_control_page(const uint8_t *body)
 		/* cmd.grade_centi_pct is already 0 when the controller sent the
 		 * 0xFFFF sentinel, which §8.8.4.1 defines as "assume flat" -
 		 * not as "no command". Byte 7's rolling resistance is decoded
-		 * and deliberately not acted on (§8.8.4.2). */
+		 * and deliberately not acted on (§8.8.4.2).
+		 *
+		 * A simulation grade, so it CLAMPS to the machine range
+		 * (CONFIG_TREADMILL_MIN/MAX_INCLINE_DECI) and answers PASS: the
+		 * road may be steeper than the deck, and refusing would make a
+		 * controller drop simulation mode mid-ride. Any ANT+
+		 * transmitter can send this page; the clamp is what keeps it
+		 * inside what the machine can physically do. */
 		adopted = treadmill_state_request_incline(&state,
 							  cmd.grade_centi_pct);
 		rc = treadmill_source_set_incline(adopted);
@@ -551,13 +565,34 @@ static void queue_control_page(const uint8_t *body)
 /*
  * The FTMS control point's incline command, called from treadmill_ble.c.
  *
- * The SAME two lines as the FE-C branch above - request, then command the
+ * The SAME two steps as the FE-C branch above - state, then command the
  * source - which is exactly the point: one state, one actuator call, so the
- * two radios cannot disagree about the grade. The only difference is the unit,
- * and the conversion lives in treadmill_state.h with its own unit test rather
- * than being spelled out at either call site.
+ * two radios cannot disagree about the grade. The unit conversion lives in
+ * treadmill_state.h with its own unit test rather than being spelled out at
+ * either call site.
+ *
+ * EXPLICIT, so out of the machine range it is refused with -ERANGE and the
+ * target is left alone. treadmill_ble.c already answers Invalid Parameter
+ * before calling; this is the backstop that does not depend on that check.
  */
 int treadmill_node_set_incline_deci(int16_t deci_pct, int32_t *adopted_centi)
+{
+	int32_t centi = treadmill_fec_incline_from_ftms(deci_pct);
+	int32_t adopted = 0;
+	int     rc = treadmill_state_command_incline(&state, centi, &adopted);
+
+	if (rc != 0) {
+		return rc;
+	}
+	rc = treadmill_source_set_incline(adopted);
+	if (adopted_centi != NULL) {
+		*adopted_centi = adopted;
+	}
+	return rc;
+}
+
+/* The grade seam's (simulation) path: clamps, like FE-C page 51. */
+int treadmill_node_sim_incline_deci(int16_t deci_pct, int32_t *adopted_centi)
 {
 	int32_t centi = treadmill_fec_incline_from_ftms(deci_pct);
 	int32_t adopted = treadmill_state_request_incline(&state, centi);
@@ -569,11 +604,16 @@ int treadmill_node_set_incline_deci(int16_t deci_pct, int32_t *adopted_centi)
 	return rc;
 }
 
+/* Explicit, like the incline command: refused out of range. */
 int treadmill_node_set_speed_mm_s(uint32_t mm_s, uint32_t *adopted_mm_s)
 {
-	uint32_t adopted = treadmill_state_request_speed(&state, mm_s);
-	int      rc = treadmill_source_set_speed(adopted);
+	uint32_t adopted = 0u;
+	int      rc = treadmill_state_command_speed(&state, mm_s, &adopted);
 
+	if (rc != 0) {
+		return rc;
+	}
+	rc = treadmill_source_set_speed(adopted);
 	if (adopted_mm_s != NULL) {
 		*adopted_mm_s = adopted;
 	}
@@ -848,6 +888,12 @@ int main(void)
 	}
 
 	treadmill_state_init(&state);
+	/* The machine range bounds every command path, FE-C page 51 included.
+	 * Kconfig's ranges already keep 0 inside it; asserted at file scope. */
+	(void)treadmill_state_set_limits(
+		&state, treadmill_fec_incline_from_ftms(CONFIG_TREADMILL_MIN_INCLINE_DECI),
+		treadmill_fec_incline_from_ftms(CONFIG_TREADMILL_MAX_INCLINE_DECI),
+		treadmill_mm_s_from_ftms_speed(CONFIG_TREADMILL_MAX_SPEED_CENTI_KPH));
 
 #if defined(CONFIG_TREADMILL_CTRL_POLICY_EXCLUSIVE)
 	treadmill_control_init(CONFIG_TREADMILL_CTRL_ANT_TIMEOUT_MS);

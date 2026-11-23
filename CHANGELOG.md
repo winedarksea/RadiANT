@@ -51,6 +51,13 @@ reads.
 
 ### Changed
 
+- **Treadmill machine range is transport-neutral.** Removed
+  `CONFIG_TREADMILL_BLE_MAX_SPEED_CENTI_KPH`,
+  `CONFIG_TREADMILL_BLE_MIN_INCLINE_DECI` and
+  `CONFIG_TREADMILL_BLE_MAX_INCLINE_DECI`; set
+  `CONFIG_TREADMILL_MAX_SPEED_CENTI_KPH`, `CONFIG_TREADMILL_MIN_INCLINE_DECI`
+  and `CONFIG_TREADMILL_MAX_INCLINE_DECI` instead (same defaults, no BLE
+  dependency). With BLE on they still feed FTMS's Supported Range values.
 - **The nRF backend no longer needs a board overlay.** Without a
   `radiant,radio-timer` chosen node it uses TIMER4 (nRF52), TIMER20 (nRF54L)
   or TIMER2 (nRF5340 network core), and stops the build if the board already
@@ -100,6 +107,14 @@ reads.
   The sweep follows the ANT+ key's network and keyed searchers' RF.
 
 ### Fixed
+
+- **Treadmill: any ANT+ transmitter could command the deck past the
+  machine's range.** FE-C page 51 was bounded only by the wire (±100 %) on
+  every build, and FE-C-only builds had no range at all. Every command path
+  is now held to the machine range: a simulation grade (page 51, the BLE grade
+  seam) clamps and answers PASS, and an explicit FTMS incline or speed outside
+  the range is refused. The FE-C grade decoder also stops at +200.00 %
+  instead of reading out-of-spec raw values as up to +455 %.
 
 - **A Matter sensor is no longer dropped when its endpoint id is taken.**
   The bridge retried with the next id but had already discarded the device,

@@ -73,6 +73,14 @@ int32_t radiant_profile_fec_grade_to_centi_pct(uint16_t raw, bool *valid)
 	if (valid != NULL) {
 		*valid = true;
 	}
+	/* SS8.8.4.1 tops the field at 40000 (+200.00 %). Raw 40001..65534 is
+	 * out of spec but not the sentinel, so it stays valid and lands on
+	 * the edge - the same clamp the inverse applies below. Unbounded,
+	 * 0xFFFE read as +455.34 %. */
+	if ((int32_t)raw - (int32_t)RADIANT_PROFILE_FEC_GRADE_ZERO_RAW >
+	    RADIANT_PROFILE_FEC_GRADE_MAX_CENTI_PCT) {
+		return RADIANT_PROFILE_FEC_GRADE_MAX_CENTI_PCT;
+	}
 	/* The bias, and the one line in this file where a missing cast would
 	 * matter: raw is unsigned and the result is routinely negative. */
 	return (int32_t)raw - (int32_t)RADIANT_PROFILE_FEC_GRADE_ZERO_RAW;

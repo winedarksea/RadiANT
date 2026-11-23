@@ -132,6 +132,17 @@ struct treadmill_state {
 	 * 0.01 kg, and 0 means "not supplied" - the calorie estimate then uses
 	 * TREADMILL_DEFAULT_MASS_10G and says so. */
 	uint16_t user_mass_10g;
+
+	/* ── The machine's commandable range ─────────────────────────────── */
+
+	/* What the deck and belt can physically do, set once at boot by
+	 * treadmill_state_set_limits() from CONFIG_TREADMILL_MIN/MAX_*. Every
+	 * request path is bounded by these - FE-C page 51 included, which has
+	 * no range characteristic of its own and will happily carry +200 %.
+	 * Not part of the reported state. */
+	int32_t  min_incline_centi_pct;
+	int32_t  max_incline_centi_pct;
+	uint32_t max_speed_mm_s;
 };
 
 /* 75.00 kg. A number has to be picked for the calorie estimate and an
@@ -162,16 +173,52 @@ void treadmill_state_set_speed(struct treadmill_state *s, uint32_t mm_s);
 void treadmill_state_set_incline(struct treadmill_state *s, int32_t centi_pct);
 
 /*
+ * The machine's range. Until this is called the limits are the wire's own
+ * (incline +-100.00 %, the span page 17 can report; speed 15996 mm/s, the
+ * most SDM can express), so a caller that never sets them behaves as before.
+ *
+ * The range must contain 0 - Reset and the FE-C "assume flat" sentinel both
+ * command it - and is narrowed into the wire span if wider. Returns -EINVAL
+ * and changes nothing when min > 0, max < 0 or max_speed_mm_s is 0. The
+ * current targets are pulled into the new range.
+ */
+int treadmill_state_set_limits(struct treadmill_state *s,
+			       int32_t min_incline_centi_pct,
+			       int32_t max_incline_centi_pct,
+			       uint32_t max_speed_mm_s);
+
+/*
  * A controller asked for this. BOTH control paths land here - FE-C page 51 and
  * the FTMS control point - so a grade set over ANT+ is immediately visible over
- * BLE and the other way round. Returns the value actually adopted after
- * clamping, which is what the command-status echo and the FTMS response code
- * should report.
+ * BLE and the other way round.
+ *
+ * TWO FLAVOURS, because the two kinds of command mean different things:
+ *
+ *   request_*()  SIMULATION. FE-C page 51's grade and the BLE grade seam are
+ *                a virtual road, not an order to the deck; the road may be
+ *                steeper than the machine. CLAMPS to the machine range and
+ *                returns the value adopted, which goes to the actuator.
+ *                Page 71 still echoes the controller's raw request with
+ *                PASS (the machine is doing the closest thing it can);
+ *                page 17 then reports the clamped incline.
+ *
+ *   command_*()  EXPLICIT. FTMS Set Target Inclination / Speed name a
+ *                setpoint, and the client was told the legal span by the
+ *                Supported Range characteristics. Out of range is REFUSED:
+ *                -ERANGE, target unchanged, *adopted untouched. 0 on success
+ *                with *adopted (may be NULL) set to the new target.
+ *
+ * Neither talks to the actuator - the caller passes the adopted value to
+ * treadmill_source and maps that result at its own radio's edge.
  */
 int32_t treadmill_state_request_incline(struct treadmill_state *s,
 					int32_t centi_pct);
 uint32_t treadmill_state_request_speed(struct treadmill_state *s,
 				       uint32_t mm_s);
+int treadmill_state_command_incline(struct treadmill_state *s,
+				    int32_t centi_pct, int32_t *adopted);
+int treadmill_state_command_speed(struct treadmill_state *s, uint32_t mm_s,
+				  uint32_t *adopted);
 
 /* One stride, i.e. two footfalls. */
 void treadmill_state_add_strides(struct treadmill_state *s, uint32_t n);
@@ -219,6 +266,8 @@ uint8_t treadmill_rsc_cadence_from_strides(uint32_t strides_min_16);
 /*
  * FE-C's 0.01 % to FTMS's 0.1 %, rounding to nearest and away from zero so a
  * commanded -0.05 % does not come back as 0.0 % with the sign lost.
+ * Saturates at the int16 ends: a wrap would turn a steep descent into a
+ * climb, which a clamp downstream would then send to the machine maximum.
  */
 int16_t treadmill_ftms_incline_from_fec(int32_t centi_pct);
 

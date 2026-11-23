@@ -87,9 +87,16 @@ int treadmill_ble_grade_provider_register(treadmill_ble_grade_provider_t fn,
  * The return value is the SOURCE's, unchanged - 0, -ENOTSUP or another
  * negative errno - because FTMS's three result codes and FE-C's three command
  * statuses are the same three answers and mapping them belongs at each radio's
- * own edge, not here.
+ * own edge, not here. The one exception is -ERANGE, from the state itself:
+ *
+ *   set_*()          EXPLICIT setpoints (FTMS Set Target Inclination/Speed,
+ *                    Reset). Outside CONFIG_TREADMILL_MIN/MAX_* they return
+ *                    -ERANGE without touching the target or the source.
+ *   sim_incline_*()  A SIMULATION grade (the grade seam). Clamped to the
+ *                    machine range, like FE-C page 51; never -ERANGE.
  */
 int treadmill_node_set_incline_deci(int16_t deci_pct, int32_t *adopted_centi);
+int treadmill_node_sim_incline_deci(int16_t deci_pct, int32_t *adopted_centi);
 int treadmill_node_set_speed_mm_s(uint32_t mm_s, uint32_t *adopted_mm_s);
 
 /* The live state, for the encoders. Read-only and read on the workqueue. */

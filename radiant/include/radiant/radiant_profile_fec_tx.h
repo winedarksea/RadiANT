@@ -68,6 +68,10 @@ extern "C" {
  * leaving the treadmill at its last grade would be the FE deciding to keep
  * climbing because the controller stopped saying anything.
  *
+ * Raw values above 40000 (+200.00 %, the top of SS8.8.4.1's span) other than
+ * the sentinel clamp to RADIANT_PROFILE_FEC_GRADE_MAX_CENTI_PCT and still
+ * report valid: *valid means "not the sentinel", not "in spec".
+ *
  * Out-param rather than a return value only so the "was it the sentinel"
  * answer survives; *valid may be NULL when the caller does not care.
  */
