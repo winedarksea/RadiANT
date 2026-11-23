@@ -161,8 +161,17 @@ size_t ant_health_fill(uint8_t *out, size_t cap)
 	 * always owned both, and a mirror would be a second place for them to
 	 * be wrong. The cost is that they are not saturated at the source, so
 	 * put_u16() clamps and sets the flag.
+	 *
+	 * Only a core build has that queue: radiant_event.c is compiled under
+	 * CONFIG_RADIANT, which a stub or sdk_ant build leaves off. There ev
+	 * stays NULL and the fields below fall back as they already do for a
+	 * NULL return.
 	 */
+#if defined(CONFIG_RADIANT)
 	ev = radiant_event_stats_get();
+#else
+	ev = NULL;
+#endif
 
 	/* [0] structure version, pinned at 1 for the whole beta. Fields are only
 	 * ever added at the end and an offset is never reused, so a host reads
