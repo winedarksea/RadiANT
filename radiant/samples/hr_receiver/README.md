@@ -25,9 +25,12 @@ terminal program must assert DTR or the serial port shows nothing.
 
 ## Another board
 
-Any nRF52, nRF53 network core or nRF54L board needs one thing: a devicetree
-overlay in `boards/` naming a timer with at least five compare channels. Copy
-one of the overlays here. Without it the build stops with an error saying so.
+Any nRF52, nRF53 network core or nRF54L board builds as it is. The radio takes
+a default hardware timer (TIMER4 on nRF52, TIMER20 on nRF54L, TIMER2 on the
+nRF5340 network core). Only if your board already uses that timer, or the part
+has no TIMER4 (nRF52805/810/811/820), does the build stop and ask for an overlay
+in `boards/` naming another timer with at least five compare channels. The
+module's [README](../../README.md) shows the two lines.
 
 Check that the build picked a real radio:
 

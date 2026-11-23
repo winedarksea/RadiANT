@@ -139,9 +139,10 @@ from the outside.
   one port, move the dongle, wait a minute, note it again. A quiet bench sits
   near the part's stated floor; a bad port moves it visibly and immediately.
 - **Under `-Backend core -RadiantBackend nrf`, read the first build error, not
-  the cascade.** A board with no `chosen { radiant,radio-timer }` overlay dies
-  in `radiant_radio_nrf.c`'s `#error "radiant_radio_nrf needs a timer..."`
-  guard; what follows is a wall of `DT_CHOSEN_..._undeclared` plus unrelated
+  the cascade.** A board with no `chosen { radiant,radio-timer }` overlay and no
+  usable default TIMER (its family's default is enabled by someone else, or the
+  part lacks it) dies in one of `radiant_radio_nrf.c`'s timer `#error` guards;
+  what follows is a wall of `DT_..._undeclared` plus unrelated
   `log_msg.h`/`cbprintf_internal.h` errors that look like a broken toolchain
   and are neither.
 - **The ORDER endpoints are declared in is protocol, and the whole bench was

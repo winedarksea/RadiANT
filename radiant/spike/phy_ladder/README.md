@@ -208,7 +208,8 @@ the null one.
 
 **nRF54L15 DK — UART VCOM**, 115 200, the board's default `uart20` (COM7 on this
 bench). `boards/nrf54l15dk_nrf54l15_cpuapp.overlay` in this directory supplies
-the `radiant,radio-timer` chosen node the backend `#error`s without; it is a
+the `radiant,radio-timer` chosen node the backend `#error`ed without until it
+gained a per-family default (the default is the same TIMER20); it is a
 copy of the chosen-node half of the repo-root board overlay, not an include of
 it, because a standalone spike does not see the product build's board directory.
 

@@ -112,7 +112,12 @@ config RADIANT_BACKEND_NRF
 	  src/radiant_radio_nrf.c: the RADIO, one TIMER and four (D)PPI
 	  channels, owned outright. Receive and transmit.
 
-	  The TIMER named by the radiant,radio-timer chosen node must have at
+	  The TIMER is the one the board's radiant,radio-timer chosen node
+	  names (it must be status = "okay"). With no chosen node the backend
+	  takes TIMER4 on nRF52, TIMER20 on nRF54L or TIMER2 on the nRF5340
+	  network core, provided that node is still status = "disabled" -
+	  owned by no Zephyr driver - and stops the build otherwise; see
+	  RADIANT_TIMER_NODE in src/radiant_radio_nrf.c. It must have at
 	  least five CC channels - t_sync capture, RX start, window close,
 	  software now-capture and TX start. Receive-start and transmit-start
 	  cannot share a compare, because a DPPI event may publish to only one

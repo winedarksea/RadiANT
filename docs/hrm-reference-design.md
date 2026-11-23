@@ -240,17 +240,22 @@ compiled in CI, with the ISR-context rules spelled out inline.
 There is no board file that will be right for your hardware, so the checklist is
 worth more than any of the three in `apps/hrm_ble/boards/`.
 
-1. **`chosen { radiant,radio-timer = &timerN; }`, and the TIMER must have at
-   least five CC channels.** The backend needs `t_sync` capture, RX start, window
-   close, a software now-capture and TX start; receive-start and transmit-start
-   cannot share a compare, because a DPPI event may publish to only one channel.
-   On nRF52 that means **TIMER3 or TIMER4** and it is a compile-time `#error`
-   otherwise. On nRF54L, TIMER20. Name it in devicetree rather than in source, so
-   that a second user is a devicetree conflict instead of two drivers
-   reprogramming each other's prescaler. Set `status = "okay"` too — every TIMER
-   on nRF54L is disabled by default, and an unclocked peripheral is not
-   addressable, which the backend once found by taking a bus fault on its first
-   register write.
+1. **The radio TIMER, which must have at least five CC channels.** The backend
+   needs `t_sync` capture, RX start, window close, a software now-capture and TX
+   start; receive-start and transmit-start cannot share a compare, because a DPPI
+   event may publish to only one channel. On nRF52 that means **TIMER3 or
+   TIMER4** and it is a compile-time `#error` otherwise. With no
+   `chosen { radiant,radio-timer }` the backend takes a per-family default -
+   TIMER4 on nRF52, TIMER20 on nRF54L, TIMER2 on the nRF5340 network core - as
+   long as that node is still `status = "disabled"`, i.e. no Zephyr driver owns
+   it; a board that enables it for anything else gets a build error asking for
+   the chosen node. Name it explicitly (chosen node plus `status = "okay"`, which is
+   what every board file in `apps/` does) when you want a different TIMER or want
+   the claim visible in devicetree. The `status` is bookkeeping only: the backend
+   reads the node's address and `cc-num` and nothing else, and an nRF54L15 image
+   built with timer20 disabled is byte-identical to one built with it enabled.
+   (The bus fault this paragraph used to blame on a disabled TIMER was a wrong
+   hardcoded address, 0x400F0000, not the node's status.)
    - ⚠ On nRF54L, `mpsl.rst` lists MPSL as owning TIMER10 **and** TIMER20 while
      `mpsl_hwres.h` reserves only TIMER10. TIMER20 was **measured** not to
      collide on the nRF54L15, and TIMER22 behaved identically. If a future MPSL
