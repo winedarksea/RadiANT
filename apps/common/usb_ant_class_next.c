@@ -438,10 +438,13 @@ USBD_CONFIGURATION_DEFINE(ant_hs_config, 0, 50, NULL);
 
 #if defined(CONFIG_ANT_DONGLE_UF2_REBOOT_REQUEST)
 
-/* The same request as usb_ant_class.c's - see the Kconfig help. USBD routes a
- * device-recipient vendor request to the node registered for its bRequest, so
- * only the remaining fields are matched here; a mismatch is refused, which
- * USBD answers with a STALL, as a retail stick would.
+/* The same request as usb_ant_class.c's - see the Kconfig help. USBD picks
+ * this node by bRequest alone, and not only for vendor/device requests: a
+ * CLASS or VENDOR request to an interface or endpoint that no class claims
+ * also falls through to it (nonstd_request() in usbd_ch9.c). So every field is
+ * matched here, type and recipient included, exactly as the legacy handler
+ * does; a mismatch is refused, which USBD answers with a STALL, as a retail
+ * stick would.
  */
 #define ANT_UF2_REBOOT_REQUEST  0x57
 #define ANT_UF2_REBOOT_WVALUE   0x5546 /* "UF" */
@@ -468,7 +471,9 @@ static int ant_uf2_reboot_to_dev(const struct usbd_context *const ctx,
 	ARG_UNUSED(ctx);
 	ARG_UNUSED(buf);
 
-	if (setup->wValue != ANT_UF2_REBOOT_WVALUE || setup->wIndex != 0U ||
+	if (setup->RequestType.type != USB_REQTYPE_TYPE_VENDOR ||
+	    setup->RequestType.recipient != USB_REQTYPE_RECIPIENT_DEVICE ||
+	    setup->wValue != ANT_UF2_REBOOT_WVALUE || setup->wIndex != 0U ||
 	    setup->wLength != 0U) {
 		return -ENOTSUP;
 	}
@@ -519,9 +524,13 @@ static void ant_msg_cb(struct usbd_context *const ctx,
 		 * accepts a packet the ring may have no room for, so
 		 * ant_request() drops it, and after about 30 cycles the
 		 * 32-buffer UDC pool was gone and every reply failed until a
-		 * bus reset. RESET, VBUS_REMOVED and .disable may clear the
-		 * flag, because the endpoint disable on those paths dequeues
+		 * bus reset. RESET and .disable may clear the flag, because
+		 * the endpoint disable on those paths dequeues
 		 * (usbd_ep_disable(): udc_ep_disable() then udc_ep_dequeue()).
+		 * VBUS_REMOVED dequeues nothing itself (usbd_core.c only
+		 * publishes it); it is safe because it clears was_configured,
+		 * so no RESUME re-arms before the bus reset of the reattach,
+		 * and that reset is what dequeues.
 		 *
 		 * configured still drops, so the writer thread skips frames
 		 * and arm_rx() from usb_ant_resume_rx() waits for RESUME.
