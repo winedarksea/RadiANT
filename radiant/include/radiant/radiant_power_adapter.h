@@ -177,6 +177,23 @@ extern "C" {
  */
 #define RADIANT_POWER_MAX_GAP_US (5u * 1000000u)
 
+/*
+ * THE EQUIPMENT TYPE IS DEBOUNCED, because it renames things. Every sink that
+ * names an endpoint from it treats a change as a rename: the Matter sink
+ * rewrites a stored record (flash), the MQTT sink re-sends retained discovery.
+ * A transmitter that uses a bound trainer's channel ID and alternates page 16
+ * between two types would otherwise drive one rename per flip (security
+ * review 2026-11-22).
+ *
+ * So the FIRST page 16 after a bind (adapter init) is accepted at once - that
+ * keeps the first-creation naming above - and a CHANGE is accepted only after
+ * this many consecutive page 16s agree on the new value. Until then every page
+ * 16 posts the type already accepted, so the sample stream itself never
+ * shows the candidate. A real machine never changes type while bound; the
+ * only legitimate change is a re-bind, which resets the adapter.
+ */
+#define RADIANT_POWER_FEC_TYPE_CONFIRM 4u
+
 struct radiant_power_adapter {
 	/* True once a power-bearing page has established the baseline: both
 	 * the event count and the integration clock are set on that first
@@ -188,6 +205,12 @@ struct radiant_power_adapter {
 
 	uint64_t prev_t_us;        /* the t_sync of the last power-bearing page */
 	uint64_t acc_uj;           /* exact energy integral, microjoules */
+
+	/* FE-C equipment type debounce, see RADIANT_POWER_FEC_TYPE_CONFIRM. */
+	bool    fec_type_known;    /* a page 16 has been accepted since init */
+	uint8_t fec_type;          /* the accepted (posted) type */
+	uint8_t fec_type_pending;  /* the candidate replacing it */
+	uint8_t fec_type_count;    /* consecutive page 16s carrying the candidate */
 };
 
 void radiant_power_adapter_init(struct radiant_power_adapter *a);
@@ -216,7 +239,8 @@ uint32_t radiant_power_adapter_decode(struct radiant_power_adapter *a,
  * getting this right.
  *
  * Returns samples posted: up to 3 for page 0x10 (equipment type, state,
- * speed - the speed is absent when the equipment marks it invalid), 1 or 3 for
+ * speed - the speed is absent when the equipment marks it invalid; the type
+ * posted is the debounced one, see RADIANT_POWER_FEC_TYPE_CONFIRM), 1 or 3 for
  * page 0x19 on the same first-call rule as above, and 0 when page 0x19 marks
  * its power fields invalid.
  */

@@ -1463,10 +1463,27 @@ are worth stating because each is a decision rather than a detail:
    a `labelDirty` flag beside `reachableDirty` and pushes NodeLabel through the
    same batched path Reachable uses, then re-persists — which also repairs an
    endpoint *adopted* from a boot that used the old scheme, the case that would
-   otherwise keep hex names forever. The cost is bounded and was left alone:
-   each adopted row's rename is one flash write, and a row can be renamed at
-   most 2 × the number of distinct adoption passes for its source. That is
-   per boot, and it does not recur.
+   otherwise keep hex names forever. The flash cost is bounded per boot, and
+   the bound is enforced rather than argued (security review 2026-11-22: the
+   old text called it bounded while a transmitter spoofing a bound trainer's
+   channel ID and alternating page 16's equipment type drove one write per
+   endpoint per second):
+   - **Debounce.** `radiant_power_adapter.c` posts the first page 16 after a
+     bind at once and accepts a *change* of equipment type only after
+     `RADIANT_POWER_FEC_TYPE_CONFIRM` (4) consecutive identical page 16s;
+     until then it keeps posting the accepted type. Both sinks see it.
+   - **Compare.** Each row keeps an FNV-1a hash of the NodeLabel its stored
+     record holds (seeded at creation, and at adoption from the restored
+     record), and a rename to that same name writes nothing. Adopting a
+     current-scheme endpoint therefore costs no write at boot.
+   - **Cap.** At most `LabelPersist::kMaxPersistedRenamesPerSource` (4)
+     renames per source per boot reach flash, one charge per rename however
+     many rows the source has (`bridge_storage_codec.h`). Past it the live
+     NodeLabel still changes and the next boot restores the stored name. A
+     re-bind does not refill it.
+   So a source costs at most 4 × its row count settings writes per boot from
+   renames. The MQTT sink applies the same cap to retained-discovery re-arms
+   on a subtype change.
 4. **`struct radiant_binding::label` keeps its meaning** — "what a human calls
    it". A non-empty label replaces the base name and the device number; the
    suffix still goes on, because a labelled strap is still five endpoints. A

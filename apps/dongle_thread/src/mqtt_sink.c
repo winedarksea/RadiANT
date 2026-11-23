@@ -329,6 +329,21 @@ BUILD_ASSERT((RADIANT_FIELD_ID_COMMON_MAX + 1u) <= (sizeof(announced[0]) * 8u),
  */
 static uint8_t subtype[RADIANT_BINDING_MAX];
 
+/*
+ * Subtype re-arms per source this boot (security review 2026-11-22). The
+ * adapter already debounces the equipment type (RADIANT_POWER_FEC_TYPE_CONFIRM),
+ * and this caps what is left at the Matter sink's budget
+ * (LabelPersist::kMaxPersistedRenamesPerSource in bridge_storage_codec.h, 4):
+ * a spoofed trainer cannot make this sink re-send a source's retained
+ * discovery more than SUBTYPE_REARM_MAX times per boot. The first type learned
+ * after a bind (subtype_known false) is not a change and is not charged; a
+ * flag rather than "subtype 0", because 0 is a value a transmitter can send.
+ * The count is not cleared by a re-arm or a re-bind: only a reboot refills it.
+ */
+#define SUBTYPE_REARM_MAX 4u
+static bool subtype_known[RADIANT_BINDING_MAX];
+static uint8_t subtype_rearms[RADIANT_BINDING_MAX];
+
 /* Per-source availability as last PUBLISHED. Re-sent lazily on the first fresh
  * sample after a STALE, after a bind made while disconnected (the first sample
  * is what requests a connect, and it cannot precede the first bind), and after
@@ -976,6 +991,7 @@ static void drain_owed(void)
 			announced[s] = 0u;
 			announced_derived[s] = 0u;
 			subtype[s] = 0u;
+			subtype_known[s] = false;
 			avail_online[s] = false;
 		}
 	}
@@ -1061,12 +1077,19 @@ static void publish_sample(const struct radiant_sample *s)
 	 * before the first page 16 would otherwise carry the generic name
 	 * forever. Only on a change - the value repeats at 4 Hz, and
 	 * re-publishing a retained config four times a second would be a
-	 * broker-side storm.
+	 * broker-side storm. And at most SUBTYPE_REARM_MAX changes per source
+	 * per boot; past that the change is ignored and the names stay.
 	 */
 	if (s->field_type == RADIANT_FIELD_ENUM_GENERIC &&
 	    s->field_id == FEC_TYPE_FIELD_ID && b->devtype == FEC_DEVICE_TYPE &&
 	    s->raw >= 0 && s->raw <= (int64_t)UINT8_MAX &&
-	    subtype[s->source] != (uint8_t)s->raw) {
+	    (!subtype_known[s->source] ||
+	     (subtype[s->source] != (uint8_t)s->raw &&
+	      subtype_rearms[s->source] < SUBTYPE_REARM_MAX))) {
+		if (subtype_known[s->source]) {
+			subtype_rearms[s->source]++;
+		}
+		subtype_known[s->source] = true;
 		subtype[s->source] = (uint8_t)s->raw;
 		announced[s->source] = 0u;
 		announced_derived[s->source] = 0u;

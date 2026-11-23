@@ -477,6 +477,77 @@ ZTEST(radiant_power_adapter, test_fec_general_page_posts_type_state_and_speed)
 	zassert_false(adapter.have_prev, NULL);
 }
 
+/*
+ * THE EQUIPMENT TYPE DEBOUNCE (security review 2026-11-22). Each sink renames
+ * on a type change, and the Matter sink's rename is a flash write, so a
+ * spoofed page 16 alternating two types must not get the second one onto the
+ * bus. One page 16 with type `type`, drained; returns the type it posted.
+ */
+static int64_t fec_general_type(uint8_t type)
+{
+	uint8_t body[8] = { 0x10u, 0x19u, 0x28u, 0x64u, 0x88u, 0x13u, 0x50u, 0x35u };
+	const struct radiant_sample *s;
+	int64_t raw;
+
+	body[1] = type;
+	pwr_cap_n = 0u;
+	(void)radiant_power_adapter_decode_fec(&adapter, PWR_SOURCE, body, 0u);
+	radiant_bridge_drain();
+	s = cap_field(RADIANT_POWER_FIELD_FEC_TYPE);
+	zassert_not_null(s, "page 16 posted no equipment type");
+	raw = s->raw;
+	pwr_cap_n = 0u;
+	return raw;
+}
+
+#define FEC_TYPE_TRAINER   25u
+#define FEC_TYPE_TREADMILL 19u
+
+ZTEST(radiant_power_adapter, test_fec_type_alternating_never_posts_the_second)
+{
+	uint32_t i;
+
+	zassert_equal(fec_general_type(FEC_TYPE_TRAINER), FEC_TYPE_TRAINER);
+	for (i = 0u; i < 40u; i++) {
+		uint8_t seen = (i & 1u) ? FEC_TYPE_TRAINER : FEC_TYPE_TREADMILL;
+
+		zassert_equal(fec_general_type(seen), FEC_TYPE_TRAINER,
+			      "page %u: an alternating type was accepted", i);
+	}
+}
+
+ZTEST(radiant_power_adapter, test_fec_type_change_needs_n_identical_pages)
+{
+	uint32_t i;
+
+	zassert_equal(fec_general_type(FEC_TYPE_TRAINER), FEC_TYPE_TRAINER);
+
+	/* N-1 of the new type, then one of the old: the run is broken. */
+	for (i = 0u; i + 1u < RADIANT_POWER_FEC_TYPE_CONFIRM; i++) {
+		zassert_equal(fec_general_type(FEC_TYPE_TREADMILL), FEC_TYPE_TRAINER);
+	}
+	zassert_equal(fec_general_type(FEC_TYPE_TRAINER), FEC_TYPE_TRAINER);
+
+	/* N-1 again, still the old type; the Nth posts the new one. */
+	for (i = 0u; i + 1u < RADIANT_POWER_FEC_TYPE_CONFIRM; i++) {
+		zassert_equal(fec_general_type(FEC_TYPE_TREADMILL), FEC_TYPE_TRAINER,
+			      "accepted after %u pages", i + 1u);
+	}
+	zassert_equal(fec_general_type(FEC_TYPE_TREADMILL), FEC_TYPE_TREADMILL);
+	zassert_equal(fec_general_type(FEC_TYPE_TREADMILL), FEC_TYPE_TREADMILL);
+}
+
+ZTEST(radiant_power_adapter, test_fec_type_rebind_resets_the_debounce)
+{
+	zassert_equal(fec_general_type(FEC_TYPE_TRAINER), FEC_TYPE_TRAINER);
+	zassert_equal(fec_general_type(FEC_TYPE_TREADMILL), FEC_TYPE_TRAINER);
+
+	/* rx_tap.c re-inits every adapter at bind: the next machine's first
+	 * page 16 names it at once, with no run to wait for. */
+	radiant_power_adapter_init(&adapter);
+	zassert_equal(fec_general_type(FEC_TYPE_TREADMILL), FEC_TYPE_TREADMILL);
+}
+
 ZTEST(radiant_power_adapter, test_fec_trainer_page_integrates_the_same_way)
 {
 	uint8_t body[8];

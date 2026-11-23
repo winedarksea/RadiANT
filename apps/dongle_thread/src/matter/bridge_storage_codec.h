@@ -281,4 +281,68 @@ void Inserted(uint16_t &count, bool isNewProvider);
 void Erased(uint16_t &count, bool isNewProvider, bool erased);
 
 } /* namespace ProviderSlots */
+
+/*
+ * When a renamed endpoint's NodeLabel is written back to flash (security
+ * review 2026-11-22). ant_bridge.cpp renames a source's endpoints whenever
+ * a naming input changes - the FE-C equipment type learned from page 16, a
+ * re-bind's label - and used to rewrite every row's stored record on every
+ * rename. A transmitter using a bound trainer's channel ID and alternating
+ * the equipment type drove one settings write per endpoint per second, on the
+ * partition that also holds the fabrics and the Thread dataset.
+ *
+ * Two rules, both here so apps/dongle_thread/tests/matter_storage tests them:
+ *   - COMPARE: a row keeps the FNV-1a hash of the label last stored for it
+ *     (seeded at creation and at adoption from the restored record), and a
+ *     write whose label hashes the same is skipped. A 32-bit hash rather than
+ *     the 32-byte label, because RAM is the Matter image's limit; a collision
+ *     only skips one rename's write, and the live name is still pushed.
+ *   - BUDGET: at most kMaxPersistedRenamesPerSource renames per source per
+ *     boot reach flash. One rename event charges once however many rows the
+ *     source has (all rows of a source rename in the same flush pass). Over
+ *     the budget the live NodeLabel still updates; the next boot restores the
+ *     stored name. The budget does not reset on a re-bind: only a reboot
+ *     refills it, so the bound is absolute.
+ * Together with the adapter's equipment-type debounce
+ * (RADIANT_POWER_FEC_TYPE_CONFIRM) this bounds the writes a spoofer can
+ * cause to kMaxPersistedRenamesPerSource rename events per source per boot.
+ */
+namespace LabelPersist
+{
+
+constexpr uint8_t kMaxPersistedRenamesPerSource = 4;
+
+/* FNV-1a, 32-bit, over the label's bytes up to its NUL or maxLen, whichever
+ * comes first - pass the stored capacity (or the stored length) so the hash
+ * covers exactly what a record holds. */
+uint32_t Hash(const char *label, size_t maxLen);
+
+/* A row's view of its stored record's label. Plain data, zero is "nothing
+ * known" - ant_bridge.cpp memsets the rows that hold one. */
+struct Stored {
+	bool known; /* false: never stored, or the store failed */
+	uint32_t hash;
+};
+
+/* A source's rename budget for this boot. `pass` is the flush pass that last
+ * charged it, so every row of one rename event persists on one charge. */
+struct Budget {
+	uint8_t used;
+	uint32_t pass;
+};
+
+enum class Decision : uint8_t {
+	Persist,    /* write the record */
+	Unchanged,  /* the stored label is this one: no write */
+	OverBudget, /* the source has used its renames this boot: no write */
+};
+
+/* Decide one row's write in flush pass `pass` (never 0: the Budget's initial
+ * value). Charges `budget` on the first Persist of a pass. */
+Decision Decide(const Stored &stored, uint32_t newHash, Budget &budget, uint32_t pass);
+
+/* The record was written: the row's stored label is now `newHash`. */
+void Persisted(Stored &stored, uint32_t newHash);
+
+} /* namespace LabelPersist */
 } /* namespace RadiantMatter */

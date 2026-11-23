@@ -196,6 +196,11 @@ struct Row {
 	bool storageIndexValid;
 	uint8_t storageIndex;
 
+	/* The hash of the NodeLabel that slot holds, so a rename to the same
+	 * name writes nothing (bridge_storage_codec.h's LabelPersist). CHIP
+	 * thread only: set at creation, at adoption and by the flush. */
+	RadiantMatter::LabelPersist::Stored storedLabel;
+
 	AttrCell attrs[kMaxAttrsPerEndpoint];
 };
 
@@ -222,6 +227,20 @@ struct SourceState {
 SourceState sSources[RADIANT_BINDING_MAX];
 
 /*
+ * Each source's persisted-rename budget for this boot (LabelPersist), and the
+ * flush pass counter that lets every row of one rename share one charge. CHIP
+ * thread only, and deliberately NOT in SourceState: a re-bind must not refill
+ * it, or the bound is per bind rather than per boot.
+ */
+RadiantMatter::LabelPersist::Budget sRenameBudget[RADIANT_BINDING_MAX];
+bool sRenameBudgetWarned[RADIANT_BINDING_MAX];
+uint32_t sFlushPass;
+
+/* The bytes of a NodeLabel a stored record keeps (StoreBridgedDevice()
+ * needs room for the NUL), which is what LabelPersist hashes. */
+constexpr size_t kStoredLabelMax = Nrf::MatterBridgedDevice::kNodeLabelSize - 1;
+
+/*
  * Devices loaded from persistent storage at boot. They already exist as CHIP
  * endpoints by the time anything below runs - RestoreBridgedDevices() creates
  * them inside BridgeManager::Init() - and sit here unclaimed until a sample
@@ -235,6 +254,10 @@ struct RestoredDevice {
 	uint16_t deviceType;
 	uint8_t index;
 	RadiantMatter::AntDataProvider *provider;
+	/* LabelPersist hash of the stored NodeLabel, derived at restore time
+	 * from the record - not a stored field - so adoption can seed the row
+	 * and an unchanged name is not rewritten every boot. */
+	uint32_t labelHash;
 };
 
 RestoredDevice sRestored[Nrf::BridgeManager::kMaxBridgedDevices];
@@ -515,6 +538,7 @@ bool CreateEndpointForRow(Row &row)
 		row.provider = rd.provider;
 		row.storageIndex = rd.index;
 		row.storageIndexValid = true;
+		RadiantMatter::LabelPersist::Persisted(row.storedLabel, rd.labelHash);
 		/*
 		 * THE ADOPTION BRANCH RETURNS HERE, WHICH IS WHY THIS FLAG IS
 		 * SET. The restored device was constructed from the NodeLabel
@@ -600,6 +624,11 @@ bool CreateEndpointForRow(Row &row)
 		 * reboot. Worth a line, not worth unwinding. */
 		LOG_ERR("matter: endpoint %u created but not persisted", assigned);
 	} else {
+		/* Hashed from the record itself, so it covers exactly the bytes
+		 * stored. Left unknown when the store failed: the first rename
+		 * then writes. */
+		RadiantMatter::LabelPersist::Persisted(
+			row.storedLabel, RadiantMatter::LabelPersist::Hash(stored.mNodeLabel, stored.mNodeLabelLength));
 		PersistIndexes();
 	}
 
@@ -622,15 +651,19 @@ bool CreateEndpointForRow(Row &row)
  * exists, or an adopted endpoint carrying a name from an older scheme - would
  * therefore be correct until the next power cycle and then revert, which is a
  * worse experience than never having improved.
+ *
+ * The caller decides WHETHER to write (LabelPersist: unchanged names and
+ * renames past the per-boot budget are skipped). True if the record was
+ * written.
  */
-void PersistRowLabel(const Row &row, const char *nodeLabel)
+bool PersistRowLabel(const Row &row, const char *nodeLabel)
 {
 	Nrf::BridgeStorageManager::BridgedDevice stored;
 	char uniqueID[Nrf::MatterBridgedDevice::kUniqueIDSize + 1];
 	uint64_t key;
 
 	if (!row.storageIndexValid) {
-		return;
+		return false;
 	}
 
 	k_mutex_lock(&sShadowLock, K_FOREVER);
@@ -653,7 +686,9 @@ void PersistRowLabel(const Row &row, const char *nodeLabel)
 		/* The live name is already correct; only the next boot loses
 		 * it. Worth a line, not worth unwinding. */
 		LOG_ERR("matter: endpoint %u renamed but not re-persisted", row.chipEndpoint);
+		return false;
 	}
+	return true;
 }
 
 void RemoveEndpointForRow(Row &row)
@@ -678,6 +713,11 @@ void FlushHandler(intptr_t)
 	/* Cleared first: a write landing during this pass must arm the next
 	 * flush rather than be lost behind a flag that is still set. */
 	atomic_set(&sFlushPending, 0);
+
+	/* Never 0, which is a fresh Budget's pass (LabelPersist::Decide()). */
+	if (++sFlushPass == 0u) {
+		sFlushPass = 1u;
+	}
 
 	/*
 	 * THE PER-SOURCE FLAGS ARE SNAPSHOTTED AND CLEARED HERE, IN ONE LOCK HOLD,
@@ -865,8 +905,44 @@ void FlushHandler(intptr_t)
 			provider->NotifyUpdateState(Clusters::BridgedDeviceBasicInformation::Id,
 						    Clusters::BridgedDeviceBasicInformation::Attributes::NodeLabel::Id,
 						    nodeLabel, strlen(nodeLabel));
-			PersistRowLabel(row, nodeLabel);
-			LOG_INF("matter: endpoint %u renamed to \"%s\"", row.chipEndpoint, nodeLabel);
+
+			/*
+			 * THE WRITE IS BOUNDED, the live name above is not
+			 * (security review 2026-11-22). A spoofed page 16
+			 * alternating the equipment type used to rewrite every
+			 * row's record every second. Now a name equal to the
+			 * stored one writes nothing - which also spares every
+			 * adopted row a rewrite at every boot - and a source gets
+			 * LabelPersist::kMaxPersistedRenamesPerSource renames per
+			 * boot; past that the next boot restores the stored name.
+			 */
+			uint32_t h = RadiantMatter::LabelPersist::Hash(nodeLabel, kStoredLabelMax);
+
+			switch (RadiantMatter::LabelPersist::Decide(row.storedLabel, h, sRenameBudget[source], sFlushPass)) {
+			case RadiantMatter::LabelPersist::Decision::Persist:
+				if (PersistRowLabel(row, nodeLabel)) {
+					RadiantMatter::LabelPersist::Persisted(row.storedLabel, h);
+				}
+				LOG_INF("matter: endpoint %u renamed to \"%s\"", row.chipEndpoint, nodeLabel);
+				break;
+			case RadiantMatter::LabelPersist::Decision::Unchanged:
+				LOG_INF("matter: endpoint %u named \"%s\" (stored name unchanged)", row.chipEndpoint,
+					nodeLabel);
+				break;
+			case RadiantMatter::LabelPersist::Decision::OverBudget:
+				/* Once per source per boot at WRN: past this it
+				 * is the attack's own rate, one line a second. */
+				if (!sRenameBudgetWarned[source]) {
+					sRenameBudgetWarned[source] = true;
+					LOG_WRN("matter: source %u renamed past %u persisted renames this boot; "
+						"names now live-only until reboot",
+						static_cast<unsigned int>(source),
+						RadiantMatter::LabelPersist::kMaxPersistedRenamesPerSource);
+				}
+				LOG_DBG("matter: endpoint %u renamed to \"%s\", not persisted (rename budget spent)",
+					row.chipEndpoint, nodeLabel);
+				break;
+			}
 		}
 
 		if (reachableDirty) {
@@ -1025,6 +1101,9 @@ CHIP_ERROR RestoreBridgedDevices()
 		rd.deviceType = stored.mDeviceType;
 		rd.index = indexes[i];
 		rd.provider = provider;
+		/* The decoder NUL-terminated mNodeLabel and capped its length
+		 * below the array, so this hashes exactly the stored bytes. */
+		rd.labelHash = RadiantMatter::LabelPersist::Hash(stored.mNodeLabel, stored.mNodeLabelLength);
 
 		LOG_INF("matter: restored endpoint %u (%s, type 0x%04x), unreachable until heard", rd.endpointId,
 			rd.uniqueID, rd.deviceType);

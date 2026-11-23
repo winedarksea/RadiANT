@@ -126,11 +126,41 @@ uint32_t radiant_power_adapter_decode(struct radiant_power_adapter *a,
 	return post_power(a, source, p.inst_power_w, p.event_count, t_us, 0u);
 }
 
-static uint32_t decode_fec_general(uint32_t source,
+/*
+ * The equipment type this page 16 posts: the debounced one. See
+ * RADIANT_POWER_FEC_TYPE_CONFIRM in the header for why a change waits.
+ */
+static uint8_t fec_type_accept(struct radiant_power_adapter *a, uint8_t seen)
+{
+	if (!a->fec_type_known) {
+		/* The first page 16 since the bind names the endpoint. */
+		a->fec_type_known = true;
+		a->fec_type = seen;
+		a->fec_type_count = 0u;
+	} else if (seen == a->fec_type) {
+		/* Any page agreeing with the accepted type breaks a run. */
+		a->fec_type_count = 0u;
+	} else {
+		if (a->fec_type_count == 0u || seen != a->fec_type_pending) {
+			a->fec_type_pending = seen;
+			a->fec_type_count = 0u;
+		}
+		a->fec_type_count++;
+		if (a->fec_type_count >= RADIANT_POWER_FEC_TYPE_CONFIRM) {
+			a->fec_type = seen;
+			a->fec_type_count = 0u;
+		}
+	}
+	return a->fec_type;
+}
+
+static uint32_t decode_fec_general(struct radiant_power_adapter *a,
+				   uint32_t source,
 				   const struct radiant_profile_fec_general *g,
 				   uint64_t t_us)
 {
 	uint32_t n = 0u;
+	uint8_t type = fec_type_accept(a, g->equipment_type);
 
 	/* THE EQUIPMENT TYPE FIRST, and the order is the point: a sink that
 	 * creates its endpoint on this page has the subtype in hand before the
@@ -138,7 +168,7 @@ static uint32_t decode_fec_general(uint32_t source,
 	 * Use" the first time rather than being renamed a second later. See
 	 * radiant_power_adapter.h's RADIANT_POWER_FIELD_FEC_TYPE block. */
 	post(source, RADIANT_POWER_FIELD_FEC_TYPE, RADIANT_FIELD_ENUM_GENERIC,
-	     RADIANT_SAMPLE_ROTATED, 0, (int64_t)g->equipment_type, t_us);
+	     RADIANT_SAMPLE_ROTATED, 0, (int64_t)type, t_us);
 	n++;
 
 	/* The equipment state, as an enum rather than a boolean. Turning
@@ -175,7 +205,7 @@ uint32_t radiant_power_adapter_decode_fec(struct radiant_power_adapter *a,
 	}
 
 	if (radiant_profile_fec_decode_general(body8, &g) == 0) {
-		return decode_fec_general(source, &g, t_us);
+		return decode_fec_general(a, source, &g, t_us);
 	}
 
 	if (radiant_profile_fec_decode_trainer(body8, &tr) == 0) {
