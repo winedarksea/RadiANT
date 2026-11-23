@@ -103,6 +103,8 @@ ships the API (v1.2.0 does not), they were renamed to follow the rule above:
 | `CONFIG_RADIANT_ANTR_API` | `CONFIG_RADIANT_ANT_API` |
 | `ANTW_*`, `<radiant/ant_wire.h>` | `RADIANT_WIRE_*`, `<radiant/radiant_wire.h>` (`ant_wire.h` deleted) |
 | exported `profile_*` / `node_*` in `radiant/src/profiles`, `radiant/src/node` | `radiant_profile_*` / `radiant_node_*`, files likewise |
+| the bridge's `MATTER_*` cluster/attribute macros | `RADIANT_MATTER_*` |
+| `"profile_hr.h"`, `"radiant_bridge.h"` via `src/` include dirs | `<radiant/radiant_profile_hr.h>`, `<radiant/radiant_bridge.h>` |
 
 The prefix is `radiant_ant_`, not `radiant_`, because `radiant_channel_*`
 already uses the bare prefix for the lower-level API. The sdk-ant shim still

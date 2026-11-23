@@ -14,9 +14,12 @@ ADR 0003 amendment 2026-11-22):
     profile_* / PROFILE_*    -> radiant_profile_* / RADIANT_PROFILE_*
     node_* / NODE_*          -> radiant_node_* / RADIANT_NODE_*
                                 (only the names the module's headers export)
+    MATTER_* (radiant_matter.h) -> RADIANT_MATTER_*
+    #include "radiant_profile_hr.h" (and the other profile, node and bridge
+    headers, which lived in radiant/src/) -> #include <radiant/radiant_profile_hr.h>
 
-Run it on your own application code if you tracked RadiANT's master branch
-between 2026-11-09 and this rename:
+Run it on your own application code if it was written against v1.2.0's
+profile, node or bridge headers, or against master before 2026-11-22:
 
     python scripts/migrate_radiant_names.py --module <radiant checkout> <your dirs>
 

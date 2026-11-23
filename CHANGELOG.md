@@ -33,10 +33,14 @@ reads.
   module with heart-rate samples, and builds on stock Zephyr. Every public name
   is `radiant_*`/`RADIANT_*`, and a west project entry is all a project needs:
   the repository root is a Zephyr module ([radiant/README.md](radiant/README.md)).
-  If you tracked master before 2026-11-22: `antr_` became `radiant_ant_`,
-  `ANTW_` became `RADIANT_WIRE_`, and exported `profile_`/`node_` names became
-  `radiant_profile_`/`radiant_node_`. Run `scripts/migrate_radiant_names.py
-  <your dirs>` to rename your code.
+  Every header is `<radiant/...>`, profiles and the bridge included.
+  **Renamed since v1.2.0** (and since master before 2026-11-22): `antr_` is
+  `radiant_ant_`, `ANTW_` is `RADIANT_WIRE_`, exported `profile_`/`node_`
+  names are `radiant_profile_`/`radiant_node_`, the bridge's `MATTER_*`
+  macros are `RADIANT_MATTER_*`, and `#include "profile_hr.h"` or
+  `"radiant_bridge.h"` is `#include <radiant/radiant_profile_hr.h>` or
+  `<radiant/radiant_bridge.h>`. Run `scripts/migrate_radiant_names.py <your
+  dirs>` to rewrite your code.
 - **Low-power options for battery nodes, default n**
   ([ADR 0025](docs/decisions/0025-power-diag-struct-and-lp-timebase.md)):
   `CONFIG_RADIANT_NRF_LOW_POWER` releases the HFXO and radio timer between

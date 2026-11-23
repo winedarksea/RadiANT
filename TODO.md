@@ -363,20 +363,9 @@ the HR sample). Every current so far is an estimate from the power-diag proxy
   `doc/develop/manifest/external/radiant.rst` from `external.rst.tmpl`.
   Apache-2.0 skips the licence review. Use the "compatible, not certified"
   wording from ADR 0003. The default manifest is not the target.
-- [ ] **Public headers for profiles and the bridge under `include/radiant/`.**
-  Since 2026-11-22 every exported name is `radiant_*` and the files are
-  `radiant_profile_*.h`, `radiant_node_*.h` and `radiant_bridge*.h`, but they
-  are still reached through `src/profiles`, `src/node` and `src/bridge` on the
-  include path (`#include "radiant_profile_hr.h"`), not as
-  `<radiant/...>`. Decide whether they become `<radiant/...>` headers.
-- [ ] **`radiant/src/radiant_ti_rf_hwattrs.c:231` reads the app's
-  `CONFIG_ANT_DONGLE_TRANSPORT_*`** to refuse
-  `CONFIG_RADIANT_CC26XX_XOSC_HF_RELEASE` in a dongle image. That is module
-  code testing application Kconfig, the same seam problem the health counters
-  had until 2026-11-22. Replace it with a module symbol the dongle selects.
 - [ ] **Delete `scripts/migrate_radiant_names.py` after the first release that
-  ships `radiant_ant_*`** (the one after v1.2.0). It exists for code that
-  tracked master before the 2026-11-22 rename. Also remove its CHANGELOG
+  ships `radiant_ant_*`** (the one after v1.2.0). It exists for code written
+  against v1.2.0's or master's old names and header paths. Also remove its CHANGELOG
   pointer from the next release's notes.
 
 # Reviews to run
