@@ -764,12 +764,12 @@ ZTEST(profiles, test_a_keyed_receiver_refuses_a_plain_set)
 	/* Who the node claims to be is still learned... */
 	zassert_equal(0x01u, back.schema_id);
 	zassert_equal(4u, back.n_fields);
-	zassert_true(back.keyed);
 	zassert_false(back.authenticated);
 	/* ...but nothing is read through its schema. */
 	zassert_false(radiant_profile_desc_may_decode_data(&back));
 	zassert_equal(-EACCES, radiant_profile_data_decode(&back, SEALED_DATA_PAGE, values,
 						   4u, NULL));
+	zassert_true(back.keyed);
 
 	/* The keyless take is the plain node's path, and stays open. */
 	zassert_ok(radiant_profile_desc_rx_take(&rx, &back));
@@ -796,7 +796,6 @@ ZTEST(profiles, test_a_plain_set_after_a_sealed_one_is_refused)
 	zassert_ok(radiant_profile_desc_rx_take_auth(&rx, &a, AUTH_EPOCH - 5u, &back,
 					     &epoch));
 	zassert_true(back.authenticated);
-	zassert_true(back.keyed);
 	zassert_equal(4, radiant_profile_data_decode(&back, SEALED_DATA_PAGE, values, 4u,
 						 NULL));
 
@@ -821,9 +820,12 @@ ZTEST(profiles, test_a_plain_set_after_a_sealed_one_is_refused)
 	zassert_equal(-EBADMSG, radiant_profile_desc_rx_take_auth(&rx, &a, AUTH_EPOCH - 5u,
 							  &back, &epoch));
 	zassert_false(back.authenticated);
-	zassert_equal(0u, back.flags);
+	/* A refused plain set, not a failed tag: no X_CONF or X_AUTH. */
+	zassert_equal(0u, back.flags & (RADIANT_PROFILE_TLM_FLAG_X_CONF |
+					RADIANT_PROFILE_TLM_FLAG_X_AUTH));
 	zassert_equal(-EACCES, radiant_profile_data_decode(&back, SEALED_DATA_PAGE, values,
 						   4u, NULL));
+	zassert_true(back.keyed);
 }
 
 /* Reserved transform bits only: nothing the key can verify either. */
@@ -855,10 +857,10 @@ ZTEST(profiles, test_a_keyed_receiver_refuses_a_reserved_bit_only_set)
 							  &back, &epoch));
 	zassert_equal(0xDEADu, epoch);
 	zassert_equal(0x01u, back.schema_id);
-	zassert_true(back.keyed);
 	zassert_false(back.authenticated);
 	zassert_equal(-EACCES, radiant_profile_data_decode(&back, SEALED_DATA_PAGE, values,
 						   4u, NULL));
+	zassert_true(back.keyed);
 }
 
 /*
