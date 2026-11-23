@@ -352,35 +352,115 @@ jobs:
         with:
           python-version: "3.12"
 
-      # As in the ztest job: app-path: app means this repository's west.yml is
-      # the manifest, so the SDK version is that file's sdk-nrf revision
-      # (currently v3.4.0) and nothing here pins it. That freedom is the point:
-      # sdk-ant v2.1.0 cannot build on v3.4.0 at all (its Kconfig keys
-      # ANT_LIB_DIR off a SoC symbol Zephyr renamed), and this lane no longer
-      # contains a single sdk-ant build to be held back by it. A local
-      # comparison build still needs NCS v3.2.4 - see scripts/build_all.ps1's
-      # -NcsVersion - and nothing in CI has to care.
-      - name: Set up Zephyr workspace and toolchain
-        uses: zephyrproject-rtos/action-zephyr-setup@cc223fe61661d8573c1cd3f95f72f90cce729ae9 # v1.0.16
-        with:
-          app-path: app
-          toolchains: arm-zephyr-eabi
+      # ── NO CACHES AND A PINNED TOOLCHAIN (security review 2026-11-22) ────
+      #
+      # This job used zephyrproject-rtos/action-zephyr-setup plus a ccache
+      # restore keyed `ccache-core-<index>-`. Both restored caches that
+      # ordinary master CI runs had written: ccache objects, a pip cache, and
+      # the Zephyr SDK itself under a key with no content hash. Code running in
+      # any default-branch job at any earlier time could therefore plant a
+      # compiler or object files that a tag build would ship, with a matching
+      # .sha256. The action also downloaded the SDK with no digest, installed
+      # the latest west, and installed Zephyr's open-range requirements
+      # unhashed.
+      #
+      # So this job restores no cache of any kind (it is the whole job, not
+      # just the five `release: true` rows - one setup for 17 rows is cheaper
+      # to keep honest than a per-row branch), and every input below is pinned
+      # by digest or commit:
+      #   * Python packages: .github/release-build-requirements.txt, hashes;
+      #   * sources: .github/west-release-frozen.yml, every project by SHA;
+      #   * Zephyr SDK and arm-zephyr-eabi: release URLs plus sha256 here.
+      # What is NOT pinned: the runner image (cmake, ninja, git, wget, the
+      # system libraries) and setup-python's interpreter and pip. SECURITY.md
+      # says the same. tools/test_ci_actions.py fails if a cache, the setup
+      # action, an unhashed download or an unhashed pip install comes back.
+      #
+      # The other jobs in this file still use action-zephyr-setup and their
+      # caches. None of them ships an artifact.
+      - name: Install the hash-locked Python packages
+        run: |
+          set -euxo pipefail
+          # --force-reinstall: a package the runner already has at a pinned
+          # version is otherwise "already satisfied" and its hash is never
+          # checked (the 2026-11-21 Matter lock hit exactly that).
+          python -m pip install --force-reinstall --require-hashes --no-deps \
+            --only-binary :all: -r app/.github/release-build-requirements.txt
+          west --version
 
-      # Keyed on the matrix index rather than on the board, because four
-      # entries share the Feather and a shared key makes three of them warn
-      # that the cache is already reserved. Reordering the matrix rebinds an
-      # index to a different configuration, which is harmless: ccache is
-      # content-addressed, so a mismatched cache misses rather than lies.
-      - name: Cache ccache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ~/.cache/ccache
-          key: ccache-core-${{ strategy.job-index }}-${{ github.sha }}
-          restore-keys: |
-            ccache-core-${{ strategy.job-index }}-
+      # The frozen manifest, not west.yml. west.yml pins sdk-nrf by commit, but
+      # sdk-nrf v3.4.0's own manifest names zephyr, mcuboot, nrfxlib, matter
+      # and others by tag, and a tag can be moved. The frozen file is
+      # `west manifest --freeze` of that same workspace, so every project is a
+      # SHA; tools/test_ci_actions.py checks that it agrees with west.yml.
+      # Depth 1 and narrow, as the action did: a SHA fetch works on GitHub.
+      - name: Set up the west workspace (frozen manifest)
+        run: |
+          set -euxo pipefail
+          west init -l app --mf .github/west-release-frozen.yml
+          west update -o=--depth=1 -n
 
+      # The minimal SDK bundle plus the one GNU toolchain, from versioned
+      # GitHub release URLs, checked against the digests the SDK publishes in
+      # that release's sha256.sum (cross-checked against a fresh download when
+      # pinned). setup.sh is never asked to download anything: the toolchain is
+      # unpacked where `setup.sh -t` would put it (gnu/), and -h installs the
+      # host tools from an installer that is inside the checked minimal
+      # tarball. -c registers the CMake package. The version must equal the
+      # SDK_VERSION the pinned Zephyr asks for, so a future NCS bump cannot
+      # quietly build with the old SDK.
+      #
+      # Versions are matched with [[ ]], never `| head`: under pipefail an
+      # early-closing head can fail the step at random (see "Collect DFU
+      # package").
+      - name: Install the pinned Zephyr SDK
+        env:
+          ZEPHYR_SDK_VERSION: 1.0.1
+          ZEPHYR_SDK_URL: https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v1.0.1/zephyr-sdk-1.0.1_linux-x86_64_minimal.tar.xz
+          ZEPHYR_SDK_SHA256: ca9bc0ff66fafca1dac9d592a36d953cf16d096a9d09b1c0357f021cf9f6a7eb
+          ARM_TOOLCHAIN_URL: https://github.com/zephyrproject-rtos/sdk-ng/releases/download/v1.0.1/toolchain_gnu_linux-x86_64_arm-zephyr-eabi.tar.xz
+          ARM_TOOLCHAIN_SHA256: 21b85981cb5a1818d9bc53d82af80f208946ec038b982ff1907287572ed3a634
+        run: |
+          set -euxo pipefail
+          want="$(cat zephyr/SDK_VERSION)"
+          if [[ "${want}" != "${ZEPHYR_SDK_VERSION}" ]]; then
+            echo "::error::the pinned Zephyr wants SDK ${want}, this step pins ${ZEPHYR_SDK_VERSION}. Re-pin the URLs and digests."
+            exit 1
+          fi
+          sdk="${GITHUB_WORKSPACE}/zephyr-sdk"
+          dl="${RUNNER_TEMP}/zephyr-sdk-dl"
+          rm -rf "${sdk}" "${dl}"
+          mkdir -p "${sdk}/gnu" "${dl}"
+          curl -fsSL -o "${dl}/minimal.tar.xz" "${ZEPHYR_SDK_URL}"
+          curl -fsSL -o "${dl}/arm.tar.xz" "${ARM_TOOLCHAIN_URL}"
+          sha256sum -c - <<SUMS
+          ${ZEPHYR_SDK_SHA256}  ${dl}/minimal.tar.xz
+          ${ARM_TOOLCHAIN_SHA256}  ${dl}/arm.tar.xz
+          SUMS
+          tar xf "${dl}/minimal.tar.xz" -C "${sdk}" --strip-components=1
+          tar xf "${dl}/arm.tar.xz" -C "${sdk}/gnu"
+          rm -rf "${dl}"
+          got="$(cat "${sdk}/sdk_version")"
+          if [[ "${got}" != "${ZEPHYR_SDK_VERSION}" ]]; then
+            echo "::error::the SDK bundle reports ${got}, expected ${ZEPHYR_SDK_VERSION}"
+            exit 1
+          fi
+          test -x "${sdk}/gnu/arm-zephyr-eabi/bin/arm-zephyr-eabi-gcc"
+          (cd "${sdk}" && ./setup.sh -h -c)
+          echo "ZEPHYR_SDK_INSTALL_DIR=${sdk}" >> "${GITHUB_ENV}"
+
+      # No ccache, by two means. No cache is restored, but the runner may
+      # still have a ccache on PATH, and Zephyr wraps every compile in it
+      # whenever it finds one. -DUSE_CCACHE=0 alone is NOT enough: it lands in
+      # the sysbuild cache, and Zephyr's ccache.cmake reads the plain variable,
+      # which sysbuild does not hand to the dongle image (a dry run on
+      # 2026-11-23 found `ccache` in build/dongle's rules.ninja with only the
+      # -D; `-Ddongle_USE_CCACHE=0` did not reach it either). CCACHE_DISABLE
+      # makes any ccache that does run call the compiler directly, reading and
+      # writing no cache.
       - name: Build
         env:
+          CCACHE_DISABLE: "1"
           BOARD: ${{ matrix.board }}
           RADIO: ${{ matrix.radio }}
           EXTRA_CONF: ${{ matrix.extra_conf }}
@@ -412,6 +492,7 @@ jobs:
             -d build \
             -p always \
             -- \
+            -DUSE_CCACHE=0 \
             "-DANT_RADIO=${RADIO}" \
             "${extra[@]}"
 

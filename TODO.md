@@ -433,6 +433,11 @@ group.
   Fix: no cache restore in the five shipping rows (`enable-ccache: false`, skip
   "Cache ccache" on tags, `-DUSE_CCACHE=0`), and install the SDK there with
   explicit pinned-URL-plus-sha256 steps.
+  *Status (wip/s22-release-pins):* all of `build-core` is now cache-free (no
+  `actions/cache`, no setup action, `-DUSE_CCACHE=0` plus `CCACHE_DISABLE=1`,
+  because the -D does not reach the sysbuild image), linted in
+  `tools/test_ci_actions.py`. Left: the non-shipping release jobs still use
+  `action-zephyr-setup` and their caches; an owner `workflow_dispatch`.
 - [ ] **Release: the shipping rows' toolchain is not pinned.** The same action
   downloads the Zephyr SDK with `wget` and no digest, installs the latest
   `west`, and installs Zephyr's open-range requirements unhashed. `west.yml`
@@ -442,6 +447,12 @@ group.
   toolchain. Fix: pin `west.yml` to the v3.4.0 commit SHA (or build tags from a
   committed `west manifest --freeze`), set `west-version`, and use a
   hash-locked requirements file and a sha256-checked SDK in the shipping rows.
+  *Status (wip/s22-release-pins):* `west.yml` pins nrf by SHA, `build-core`
+  builds from `.github/west-release-frozen.yml`, installs
+  `.github/release-build-requirements.txt` with `--require-hashes`, and checks
+  the SDK and toolchain digests; `SECURITY.md` lists what is not pinned (runner
+  image, setup-python's interpreter and pip). Left: the same for the
+  non-shipping jobs if wanted; an owner `workflow_dispatch`.
 - [ ] **New USB stack: each suspend/resume leaves one more bulk-OUT buffer
   armed** (USB_NEXT images only, none shipped; any host that suspends the bus).
   `usb_ant_class_next.c`: `USBD_MSG_SUSPEND` (~:454) clears `rx_armed` without

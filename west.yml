@@ -79,10 +79,21 @@ manifest:
     # v3.4.0 is the version this application is developed and released against.
     # Locally it corresponds to the C:\ncs\v3.4.0 install and toolchain bundle
     # dcbdc366a1 (Zephyr SDK 1.0.1); sdk-nrf v3.4.0 imports Zephyr ncs-v3.4.0.
+    #
+    # PINNED BY COMMIT, NOT BY TAG (security review 2026-11-22). A tag is a
+    # mutable name: whoever can push to nrfconnect/sdk-nrf can move v3.4.0 and
+    # every later `west update` follows it silently. The SHA below is what
+    # v3.4.0 pointed at when this was pinned (`git rev-parse v3.4.0^{commit}`
+    # in an NCS v3.4.0 install). This pins sdk-nrf's own tree only: its
+    # west.yml still names zephyr, mcuboot, nrfxlib and others by tag, so the
+    # release lane builds from the fully frozen
+    # .github/west-release-frozen.yml instead. Move this line and regenerate
+    # that file together (its header has the recipe); tools/test_ci_actions.py
+    # fails if they disagree.
     - name: nrf
       remote: nrfconnect
       repo-path: sdk-nrf
-      revision: v3.4.0
+      revision: 99553055607b2e9885fbc80ccd11fa9da81c2df0
       path: nrf
       import: true
 
