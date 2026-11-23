@@ -78,7 +78,7 @@ MATTER_NAMES = (
     "OCCUPANCY_TYPE_PHYSICAL_CONTACT", "OCCUPANCY_BITMAP_PHYSICAL_CONTACT",
     "ATTR_SCALED_VALUE", "ATTR_SCALE", "PRESSURE_SCALE",
 )
-MATTER_RE = r"\bMATTER_(%s)\b" % "|".join(MATTER_NAMES)
+MATTER_RE = r"\bMATTER_(" + "|".join(MATTER_NAMES) + r")\b"
 
 # Headers that lived in radiant/src/{profiles,node,bridge}/ and were reached
 # through those directories on the include path. Since 2026-11-22 they are in
@@ -89,7 +89,7 @@ BRIDGE_HEADERS = (
     "radiant_matter", "radiant_naming", "radiant_owed", "radiant_power_adapter",
     "radiant_rd_adapter", "radiant_rules", "radiant_self_policy",
 )
-MOVED_HEADER = r"(?:radiant_(?:profile|node)_\w+|%s)\.h" % "|".join(BRIDGE_HEADERS)
+MOVED_HEADER = r"(?:radiant_(?:profile|node)_\w+|" + "|".join(BRIDGE_HEADERS) + r")\.h"
 
 # ---------------------------------------------------------------------------
 # Fixed rewrites, applied in order before the prefix rules. Paths first, so a
@@ -133,7 +133,7 @@ OLD_PATTERNS = {
     "wire": r"\bANTW_\w+",
     "ant": r"\b(?:antr_\w+|ANTR_\w+)|RADIANT_ANTR_API\b",
     "matter": MATTER_RE,
-    "headers": r'#include\s*"%s"|\bsrc/(?:profiles|node|bridge)/%s' % (MOVED_HEADER, MOVED_HEADER),
+    "headers": r'#include\s*"' + MOVED_HEADER + r'"|\bsrc/(?:profiles|node|bridge)/' + MOVED_HEADER,
 }
 
 MATTER_FIXED = [(MATTER_RE, r"RADIANT_MATTER_\1")]
@@ -141,8 +141,8 @@ MATTER_FIXED = [(MATTER_RE, r"RADIANT_MATTER_\1")]
 # Run after the profiles phase, so an old "profile_hr.h" is already
 # "radiant_profile_hr.h" when it gets here.
 HEADERS_FIXED = [
-    (r'#include\s*"(%s)"' % MOVED_HEADER, r"#include <radiant/\1>"),
-    (r"\bsrc/(?:profiles|node|bridge)/(%s)" % MOVED_HEADER, r"include/radiant/\1"),
+    (r'#include\s*"(' + MOVED_HEADER + r')"', r"#include <radiant/\1>"),
+    (r"\bsrc/(?:profiles|node|bridge)/(" + MOVED_HEADER + ")", r"include/radiant/\1"),
 ]
 
 IDENT_RE = re.compile(r"\b(?:radiant_)?(?:profile|node)_\w+|\b(?:RADIANT_)?(?:PROFILE|NODE)_\w+")
