@@ -1480,7 +1480,13 @@ are worth stating because each is a decision rather than a detail:
      renames per source per boot reach flash, one charge per rename however
      many rows the source has (`bridge_storage_codec.h`). Past it the live
      NodeLabel still changes and the next boot restores the stored name. A
-     re-bind does not refill it.
+     re-bind does not refill it. Every rename trigger shares this budget, not
+     only page 16: a binding-label or device-number change, the subtype
+     dropping to generic on a re-bind, and adopted rows repaired in separate
+     flush passes all charge it. A source with more than four rows of stale
+     names, or a user renaming a binding more than four times in one boot,
+     therefore gets the excess live-only until the next boot, which compares
+     and persists again.
    So a source costs at most 4 × its row count settings writes per boot from
    renames. The MQTT sink applies the same cap to retained-discovery re-arms
    on a subtype change.
