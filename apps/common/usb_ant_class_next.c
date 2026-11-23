@@ -26,10 +26,12 @@
  *               suspend/resume via the device message callback, rather than
  *               one status callback.
  *
- * Suspend/resume below deliberately mirrors the legacy file's: a host does
+ * Suspend/resume below follows the legacy file's in one respect: a host does
  * not repeat SET_CONFIGURATION after a bus resume, so nothing re-arms OUT
  * unless resume does it explicitly - that bug cost a replug after every
- * laptop sleep and isn't worth rediscovering here.
+ * laptop sleep and isn't worth rediscovering here. It differs in another: the
+ * legacy stack cancels transfers on suspend, UDC keeps them, so here suspend
+ * must not forget the bulk-OUT buffer it already queued.
  */
 
 #include <zephyr/kernel.h>
@@ -442,19 +444,38 @@ static void ant_msg_cb(struct usbd_context *const ctx,
 		 * EP_OUT. Without this the dongle enumerates, binds, and then
 		 * answers nothing until it is physically replugged - triggered
 		 * by any host sleep/wake.
+		 *
+		 * rx_armed is left as suspend found it. If a bulk-OUT buffer
+		 * was queued then, it still is (see SUSPEND), and arm_rx()
+		 * returns early; only an endpoint that was unarmed at suspend
+		 * (back-pressured, or completed while suspend was being
+		 * delivered) gets a buffer here.
 		 */
 		if (was_configured && !configured) {
 			configured = true;
-			rx_armed = false;
-			rx_backpressured = false;
 			arm_rx();
 			LOG_INF("USB resumed");
 		}
 		break;
 	case USBD_MSG_SUSPEND:
+		/* Leave rx_armed and rx_backpressured alone. Suspend does not
+		 * take the queued bulk-OUT buffer back: udc_nrf.c only drops
+		 * the controller into low power and posts UDC_EVT_SUSPEND
+		 * (udc_nrf_thread_handler), and usbd_core.c only broadcasts it
+		 * and publishes this message - nothing dequeues. Clearing
+		 * rx_armed here made RESUME queue a second buffer behind the
+		 * first, one more per suspend/resume cycle. Each extra buffer
+		 * accepts a packet the ring may have no room for, so
+		 * ant_request() drops it, and after about 30 cycles the
+		 * 32-buffer UDC pool was gone and every reply failed until a
+		 * bus reset. RESET, VBUS_REMOVED and .disable may clear the
+		 * flag, because the endpoint disable on those paths dequeues
+		 * (usbd_ep_disable(): udc_ep_disable() then udc_ep_dequeue()).
+		 *
+		 * configured still drops, so the writer thread skips frames
+		 * and arm_rx() from usb_ant_resume_rx() waits for RESUME.
+		 */
 		configured = false;
-		rx_armed = false;
-		rx_backpressured = false;
 		k_msgq_purge(&ant_tx_msgq);
 		/* Release anyone blocked in usb_ant_send(): the completion
 		 * that would have woken them is not coming while suspended.
