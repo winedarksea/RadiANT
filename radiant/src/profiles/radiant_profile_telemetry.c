@@ -113,6 +113,12 @@ bool radiant_profile_desc_may_decode_data(const struct radiant_profile_descripto
 	if ((d->flags & RADIANT_PROFILE_TLM_FLAG_TRANSFORM_MASK) != 0u) {
 		return d->authenticated;
 	}
+	/* A receiver holding the key takes nothing it could not verify: a
+	 * wholly plain set is what a peer without the key sends to lay its
+	 * own schema over genuine, correctly MAC'd data pages. */
+	if (d->keyed) {
+		return d->authenticated;
+	}
 	return true;
 }
 
@@ -991,13 +997,21 @@ int radiant_profile_desc_rx_take_auth(const struct radiant_profile_desc_rx *rx,
 		return rc;
 	}
 
+	/* The key is mandatory here, so every set this function sees is one
+	 * a keyed receiver must be able to verify. Marked first: whatever the
+	 * return, this descriptor decodes data only once `authenticated`. */
+	d.keyed = true;
+
 	if ((d.flags & (RADIANT_PROFILE_TLM_FLAG_X_CONF | RADIANT_PROFILE_TLM_FLAG_X_AUTH)) ==
 	    0u) {
-		/* No transform this build implements: nothing to verify, and
-		 * `authenticated` stays false - a plain schema needs nothing,
-		 * and a reserved-bit one may not decode data anyway. */
+		/* No transform this build implements - wholly plain, or
+		 * reserved bits only: nothing the key can verify. Refused, not
+		 * waved through: a plain set carrying the genuine schema id
+		 * would otherwise lay a forged schema over correctly MAC'd
+		 * data pages. `out` still carries the node's identity, and
+		 * `keyed` without `authenticated` keeps its data undecoded. */
 		*out = d;
-		return 0;
+		return -EBADMSG;
 	}
 
 	rc = radiant_profile_desc_auth_find_epoch(flat, rx->count, a_template,

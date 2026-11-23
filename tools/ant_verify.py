@@ -150,6 +150,11 @@ ATTEST_LOST = "lost"
 DESC_AUTHENTICATED = "authenticated"
 DESC_FAILED = "FAILED"
 DESC_NO_KEY = "no key"
+# A wholly plain set while this run holds the key: refused, as
+# radiant_profile_desc_rx_take_auth() refuses it (security review 2026-11-22).
+# A keyed receiver takes nothing it could not verify - otherwise a peer
+# without the key lays its own schema over the node's genuine data pages.
+DESC_PLAIN = "PLAIN under a key"
 
 
 #: Tier I's counter is two bytes on the air; a wrap advances the epoch.
@@ -611,7 +616,8 @@ class ChannelAnalyzer:
         self.tlm_schema_changes = 0
         # The descriptor authentication frame's verdict, for a set announcing
         # X_CONF/X_AUTH: DESC_AUTHENTICATED, DESC_FAILED, or DESC_NO_KEY when
-        # this run holds no key. None for a plain descriptor.
+        # this run holds no key. For a plain descriptor, DESC_PLAIN when this
+        # run holds the key (refused) and None when it does not.
         self.tlm_auth: str | None = None
         self.tlm_auth_epoch: int | None = None
         self.tlm_data_before_schema = 0
@@ -791,6 +797,10 @@ class ChannelAnalyzer:
         the on-air and provisioned numbers (as CompatVerifier derives), and a
         forward search from --epoch. Without the key the verdict is "no key",
         which is not the same as unauthenticated.
+
+        With the key, a wholly plain set is refused (DESC_PLAIN, a violation,
+        no data decoded against it): it is nothing the key can verify, and
+        the firmware's keyed take refuses it the same way.
         """
         if self.compat is None:
             schema = self.tlm_rx.take()
@@ -802,7 +812,21 @@ class ChannelAnalyzer:
                               devnum=self.compat.devnum,
                               base_devnum=self.compat.devnum)
         schema, epoch = self.tlm_rx.take(auth, from_epoch=self.compat.epoch)
-        if not schema.flags & (ap.TLM_FLAG_X_CONF | ap.TLM_FLAG_X_AUTH):
+        if not schema.flags & ap.TLM_FLAG_TRANSFORM_MASK:
+            # take(auth) came back keyed and unauthenticated, so
+            # may_decode_data already refuses its data; say why.
+            self.tlm_auth = DESC_PLAIN
+            self._violation("descriptor set is PLAIN while this run holds "
+                            "the node's key: refused - a keyed receiver "
+                            "takes no schema it cannot verify, or a peer "
+                            "without the key could relabel the node's "
+                            "genuine data pages. (--compat-key applies to "
+                            "every telemetry channel in this run, so a "
+                            "genuinely plain node is flagged too: analyse "
+                            "it in a run without the key)")
+        elif not schema.flags & (ap.TLM_FLAG_X_CONF | ap.TLM_FLAG_X_AUTH):
+            # Reserved transform bits only: may_decode_data refuses the
+            # data, and the data path says so.
             self.tlm_auth = None
         elif schema.authenticated:
             self.tlm_auth = DESC_AUTHENTICATED
@@ -871,7 +895,11 @@ class ChannelAnalyzer:
         if not self.tlm_desc.may_decode_data:
             # Fail closed: a reserved transform bit, or a sealed schema whose
             # authentication frame did not verify (or could not be checked).
-            if self.tlm_auth in (DESC_NO_KEY, DESC_FAILED):
+            if self.tlm_auth == DESC_PLAIN:
+                self._violation("the node's schema arrived plain under a "
+                                "key; its data pages must not be decoded "
+                                "against it")
+            elif self.tlm_auth in (DESC_NO_KEY, DESC_FAILED):
                 self._violation(f"the node's schema is sealed and its "
                                 f"descriptor is {self.tlm_auth}; its data "
                                 "pages must not be decoded against it")
@@ -1453,10 +1481,13 @@ class ChannelAnalyzer:
                   f"({self.tlm_data_before_schema} seen before it arrived"
                   + (f", {self.tlm_data_sealed} sealed page(s) counted, not "
                      "decoded" if self.tlm_data_sealed else "") + ")")
-            # A sealed schema with a key in hand must verify. Without a key
-            # there is nothing to judge, so no check - the summary says
-            # "no key" instead.
-            if self.tlm_auth in (DESC_AUTHENTICATED, DESC_FAILED):
+            # A schema with a key in hand must verify - and a plain one
+            # cannot. Without a key there is nothing to judge, so no check -
+            # the summary says "no key" instead.
+            if self.tlm_auth == DESC_PLAIN:
+                check("descriptor authenticated", False,
+                      "the set is plain, nothing to verify under the key")
+            elif self.tlm_auth in (DESC_AUTHENTICATED, DESC_FAILED):
                 check("descriptor authenticated",
                       self.tlm_auth == DESC_AUTHENTICATED,
                       f"epoch {self.tlm_auth_epoch}"
@@ -2298,7 +2329,10 @@ def main() -> int:
                              "delivers no attestation at all reports "
                              "'unverified' rather than falling back to clear - "
                              "which is the whole of receiver-side downgrade "
-                             "protection")
+                             "protection. It applies to EVERY channel, so a "
+                             "0x60 telemetry node sending a plain descriptor "
+                             "set is refused and flagged (PLAIN under a key); "
+                             "analyse a plain node in a run without it")
     parser.add_argument("--epoch", type=int, default=1,
                         help="epoch the keys and nonces are derived under "
                              "(default: 1). It is not on the air; a receiver "

@@ -284,6 +284,13 @@ struct radiant_profile_descriptor {
 	 * false. radiant_profile_desc_may_decode_data() reads it.
 	 */
 	bool     authenticated;
+	/*
+	 * Receiver-side only, never encoded: true when this came through
+	 * radiant_profile_desc_rx_take_auth(), whatever it returned - the
+	 * receiver holds the key, so a set it cannot verify (a wholly plain one
+	 * included) may not decode data. Only that function sets it.
+	 */
+	bool     keyed;
 };
 
 /* Bits of field area a data page has: 48, or 40 when X_AUTH claims byte [7]. */
@@ -306,7 +313,15 @@ uint16_t radiant_profile_desc_clock_ppm(const struct radiant_profile_descriptor 
  *   - X_CONF or X_AUTH set: true only when `authenticated` - the descriptor
  *     came through radiant_profile_desc_rx_take_auth() and its authentication frame
  *     verified;
- *   - no transform bit: true.
+ *   - no transform bit and `keyed` (taken by a receiver holding the key):
+ *     false - a plain set is nothing the key can verify;
+ *   - no transform bit otherwise: true.
+ *
+ * `keyed` is per descriptor, not per node, and it fails OPEN: a descriptor
+ * from radiant_profile_desc_rx_take() or radiant_profile_desc_decode(), or
+ * one built by hand or memset, has `keyed` false and is treated as keyless.
+ * Keeping a keyed node's descriptors on the keyed take is the caller's job -
+ * see radiant_profile_desc_rx_take().
  *
  * True here is about the SCHEMA, not the packets. With a transform on, the
  * data bytes handed to radiant_profile_data_decode() must have come through
@@ -521,8 +536,18 @@ int radiant_profile_desc_rx_feed(struct radiant_profile_desc_rx *rx, const uint8
 
 bool radiant_profile_desc_rx_complete(const struct radiant_profile_desc_rx *rx);
 
-/* Decode the assembled set. -EAGAIN while it is still incomplete. Never sets
- * `authenticated`; radiant_profile_desc_rx_take_auth() is the verified version. */
+/*
+ * Decode the assembled set. -EAGAIN while it is still incomplete. Never sets
+ * `authenticated` or `keyed`; radiant_profile_desc_rx_take_auth() is the
+ * verified version.
+ *
+ * KEYLESS NODES ONLY. A receiver holding a node's key must never call this
+ * for that node - not even as a fallback after the keyed take returned
+ * -EBADMSG. The node's identity is already in that take's `out`, and a plain
+ * set decoded here comes back `keyed` false, so its data decodes: exactly the
+ * forged-schema attack the keyed take refuses (docs/radiant-security.md
+ * 5.3). Which take a node gets is decided by provisioning, never by the set.
+ */
 int radiant_profile_desc_rx_take(const struct radiant_profile_desc_rx *rx,
 			 struct radiant_profile_descriptor *out);
 
@@ -531,12 +556,28 @@ int radiant_profile_desc_rx_take(const struct radiant_profile_desc_rx *rx,
  * recover its epoch with radiant_profile_desc_auth_find_epoch() and set
  * out->authenticated.
  *
- * Returns 0 with *epoch set for a verified set; 0 with *epoch untouched and
- * `authenticated` false for a set with no transform (nothing to verify, and
- * radiant_profile_desc_may_decode_data() needs nothing); -EBADMSG when the
- * authentication frame does not verify - and `out` still holds the
+ * The key is mandatory, so calling this IS holding the key: every set it
+ * writes has out->keyed true, and data decodes only from a set that
+ * verified. A set with neither X_CONF nor X_AUTH - wholly plain, or reserved
+ * transform bits only - has nothing to verify and is REFUSED: a peer without
+ * the key could otherwise send a plain set with the genuine schema id and
+ * have genuine, correctly MAC'd data pages read through its own schema
+ * (docs/radiant-security.md 5.3). A plain node reaches the data decoder only
+ * through the keyless radiant_profile_desc_rx_take(); a receiver expecting
+ * both kinds of node chooses per node (provisioned key or not), never per
+ * set.
+ *
+ * Returns 0 with *epoch set for a verified set; -EBADMSG with *epoch
+ * untouched when the authentication frame does not verify, or when the set
+ * carries no implemented transform at all. On -EBADMSG `out` still holds the
  * unauthenticated schema, so the receiver keeps the node's identity while
  * radiant_profile_desc_may_decode_data() refuses its data. Decode errors as
+ * radiant_profile_desc_rx_take(), with `out` unwritten.
+ *
+ * Telling the two -EBADMSG cases apart: out->flags has neither
+ * RADIANT_PROFILE_TLM_FLAG_X_CONF nor RADIANT_PROFILE_TLM_FLAG_X_AUTH for a
+ * refused plain or reserved-bit-only set, and at least one of them for a set
+ * whose tag failed. Either way the data stays refused, and the remedy is not
  * radiant_profile_desc_rx_take().
  */
 int radiant_profile_desc_rx_take_auth(const struct radiant_profile_desc_rx *rx,

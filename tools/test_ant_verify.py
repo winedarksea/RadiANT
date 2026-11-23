@@ -871,6 +871,50 @@ class SealedTelemetryDescriptor(unittest.TestCase):
         self.assertFalse(self.check(summary, "descriptor authenticated")
                          ["pass"])
 
+    def plain_frames(self):
+        # The sealed schema's id and field, every transform bit gone: what a
+        # peer without the key can send.
+        fields = [ap.TlmField(id=1, type=0x10, page=1, bit_offset=0,
+                              width_code=7)]
+        return ap.encode_tlm_descriptor(
+            ap.TlmDescriptor(schema_id=0x05, period=8192, fields=fields))
+
+    def test_with_the_key_a_plain_swap_is_refused(self):
+        # Security review 2026-11-22: a genuine sealed set verifies, then a
+        # plain set with the same schema id arrives, then a genuine page. It
+        # used to be decoded against the plain schema with 0 violations.
+        compat = ant_verify.CompatVerifier(self.ROOT, self.EPOCH - 3,
+                                           self.DEVNUM)
+        page = bytes([0x01, 0x05, 0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC])
+        summary = self.run_frames(self.sealed_frames() + self.plain_frames()
+                                  + [page], compat)
+        tlm = summary["telemetry"]
+        self.assertEqual(tlm["schema_id"], 0x05)
+        self.assertEqual(tlm["descriptor_auth"], ant_verify.DESC_PLAIN)
+        self.assertEqual(tlm["data_pages_decoded"], 0)
+        self.assertGreaterEqual(summary["violations"]["count"], 2)
+        self.assertIn("PLAIN", summary["violations"]["first"][0])
+        self.assertFalse(self.check(summary, "descriptor authenticated")
+                         ["pass"])
+
+    def test_with_the_key_a_plain_set_alone_is_refused(self):
+        compat = ant_verify.CompatVerifier(self.ROOT, self.EPOCH - 3,
+                                           self.DEVNUM)
+        page = bytes([0x01, 0x05, 0x12, 0x34, 0, 0, 0, 0])
+        summary = self.run_frames(self.plain_frames() + [page], compat)
+        self.assertEqual(summary["telemetry"]["descriptor_auth"],
+                         ant_verify.DESC_PLAIN)
+        self.assertEqual(summary["telemetry"]["data_pages_decoded"], 0)
+
+    def test_without_a_key_a_plain_set_still_decodes(self):
+        # The plain node's path stays open: no key, nothing to hold it to.
+        page = bytes([0x01, 0x05, 0x12, 0x34, 0, 0, 0, 0])
+        summary = self.run_frames(self.plain_frames() + [page], None)
+        self.assertIsNone(summary["telemetry"]["descriptor_auth"])
+        self.assertEqual(summary["telemetry"]["data_pages_decoded"], 1)
+        self.assertEqual(summary["violations"]["count"], 0,
+                         summary["violations"]["first"])
+
 
 class TestCompatTierIILateWindow(unittest.TestCase):
     """A tag due on message 119 or 120 is owed past them (radiant_sec_compat.c,

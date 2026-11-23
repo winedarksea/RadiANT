@@ -716,6 +716,153 @@ ZTEST(profiles, test_a_keyless_receiver_learns_the_node_but_not_its_data)
 	zassert_false(radiant_profile_desc_may_decode_data(&back));
 }
 
+/* A genuine sealed data page: page 1, slot 0, glucose and friends in bits
+ * 0..39 and the spread-MAC tag byte at [7]. Read through a forged plain
+ * schema, the tag byte becomes field data. */
+static const uint8_t SEALED_DATA_PAGE[8] = { 0x01u, 0x00u, 0x12u, 0x34u,
+					     0x56u, 0x78u, 0x9Au, 0xBCu };
+
+/* Encode `d` with the plain encoder and assemble it in `rx`. */
+static void feed_plain_set(struct radiant_profile_desc_rx *rx,
+			   const struct radiant_profile_descriptor *d)
+{
+	uint8_t frames[RADIANT_PROFILE_TLM_MAX_FRAMES * RADIANT_PROFILE_TLM_FRAME_LEN];
+	int n = radiant_profile_desc_encode(d, frames, RADIANT_PROFILE_TLM_MAX_FRAMES);
+	int i;
+
+	zassert_true(n > 0, "plain encode %d", n);
+	radiant_profile_desc_rx_init(rx);
+	for (i = 0; i < n; i++) {
+		(void)radiant_profile_desc_rx_feed(rx, &frames[(size_t)i * 8u]);
+	}
+	zassert_true(radiant_profile_desc_rx_complete(rx));
+}
+
+/*
+ * Security review 2026-11-22: a receiver holding the key took a wholly plain
+ * set - same schema id, no transform bit - as success, and its data then
+ * decoded. A peer without the key laid its own schema over genuine, correctly
+ * MAC'd data pages. Refused now: -EBADMSG, identity kept, data refused.
+ */
+ZTEST(profiles, test_a_keyed_receiver_refuses_a_plain_set)
+{
+	struct radiant_profile_descriptor d;
+	struct radiant_profile_descriptor back;
+	struct radiant_profile_desc_auth a;
+	struct radiant_profile_desc_rx rx;
+	int64_t values[4] = { 0 };
+	uint32_t epoch = 0xDEADu;
+
+	build_cgm_descriptor(&d, 0u);
+	feed_plain_set(&rx, &d);
+	auth_init(&a, 0u, false);
+
+	memset(&back, 0, sizeof(back));
+	zassert_equal(-EBADMSG, radiant_profile_desc_rx_take_auth(&rx, &a, AUTH_EPOCH - 5u,
+							  &back, &epoch));
+	zassert_equal(0xDEADu, epoch);
+	/* Who the node claims to be is still learned... */
+	zassert_equal(0x01u, back.schema_id);
+	zassert_equal(4u, back.n_fields);
+	zassert_false(back.authenticated);
+	/* ...but nothing is read through its schema. */
+	zassert_false(radiant_profile_desc_may_decode_data(&back));
+	zassert_equal(-EACCES, radiant_profile_data_decode(&back, SEALED_DATA_PAGE, values,
+						   4u, NULL));
+	zassert_true(back.keyed);
+
+	/* The keyless take is the plain node's path, and stays open. */
+	zassert_ok(radiant_profile_desc_rx_take(&rx, &back));
+	zassert_false(back.keyed);
+	zassert_true(radiant_profile_desc_may_decode_data(&back));
+}
+
+/* The swap: a sealed set verifies, then the same schema id arrives plain. */
+ZTEST(profiles, test_a_plain_set_after_a_sealed_one_is_refused)
+{
+	struct radiant_profile_descriptor d;
+	struct radiant_profile_descriptor back;
+	struct radiant_profile_desc_auth a;
+	struct radiant_profile_desc_rx rx;
+	int64_t values[4] = { 0 };
+	uint32_t epoch = 0u;
+	uint8_t i;
+
+	radiant_profile_desc_rx_init(&rx);
+	for (i = 0u; i < AUTH_FRAMES; i++) {
+		(void)radiant_profile_desc_rx_feed(&rx, AUTH_VECTOR_HIDDEN[i]);
+	}
+	auth_init(&a, 0u, false);
+	zassert_ok(radiant_profile_desc_rx_take_auth(&rx, &a, AUTH_EPOCH - 5u, &back,
+					     &epoch));
+	zassert_true(back.authenticated);
+	zassert_equal(4, radiant_profile_data_decode(&back, SEALED_DATA_PAGE, values, 4u,
+						 NULL));
+
+	/* Same schema id, every transform bit gone. Fed into the same
+	 * receiver: the frame count changes, so it restarts and assembles the
+	 * plain set. */
+	build_cgm_descriptor(&d, 0u);
+	{
+		uint8_t frames[RADIANT_PROFILE_TLM_MAX_FRAMES *
+			       RADIANT_PROFILE_TLM_FRAME_LEN];
+		int n = radiant_profile_desc_encode(&d, frames,
+						    RADIANT_PROFILE_TLM_MAX_FRAMES);
+		int j;
+
+		zassert_true(n > 0);
+		zassert_equal(0x01u, frames[3]);
+		for (j = 0; j < n; j++) {
+			(void)radiant_profile_desc_rx_feed(&rx, &frames[(size_t)j * 8u]);
+		}
+	}
+	zassert_true(radiant_profile_desc_rx_complete(&rx));
+	zassert_equal(-EBADMSG, radiant_profile_desc_rx_take_auth(&rx, &a, AUTH_EPOCH - 5u,
+							  &back, &epoch));
+	zassert_false(back.authenticated);
+	/* A refused plain set, not a failed tag: no X_CONF or X_AUTH. */
+	zassert_equal(0u, back.flags & (RADIANT_PROFILE_TLM_FLAG_X_CONF |
+					RADIANT_PROFILE_TLM_FLAG_X_AUTH));
+	zassert_equal(-EACCES, radiant_profile_data_decode(&back, SEALED_DATA_PAGE, values,
+						   4u, NULL));
+	zassert_true(back.keyed);
+}
+
+/* Reserved transform bits only: nothing the key can verify either. */
+ZTEST(profiles, test_a_keyed_receiver_refuses_a_reserved_bit_only_set)
+{
+	struct radiant_profile_descriptor back;
+	struct radiant_profile_desc_auth a;
+	struct radiant_profile_desc_rx rx;
+	uint8_t frames[AUTH_FRAMES][8];
+	int64_t values[4] = { 0 };
+	uint32_t epoch = 0xDEADu;
+	uint8_t i;
+
+	/* The sealed vector with X_AUTH swapped for reserved bit 5, and its
+	 * MAC window cleared - the reservation every set without X_AUTH keeps.
+	 * Still a well-formed set: it decodes keyless. */
+	memcpy(frames, AUTH_VECTOR_HIDDEN, sizeof(frames));
+	frames[0][7] = (uint8_t)((frames[0][7] & ~RADIANT_PROFILE_TLM_FLAG_X_AUTH) |
+				 RADIANT_PROFILE_TLM_FLAG_RSVD_5);
+	frames[1][3] &= 0x3Fu;
+	zassert_ok(radiant_profile_desc_decode(&frames[0][0], AUTH_FRAMES, &back));
+
+	radiant_profile_desc_rx_init(&rx);
+	for (i = 0u; i < AUTH_FRAMES; i++) {
+		(void)radiant_profile_desc_rx_feed(&rx, frames[i]);
+	}
+	auth_init(&a, 0u, false);
+	zassert_equal(-EBADMSG, radiant_profile_desc_rx_take_auth(&rx, &a, AUTH_EPOCH - 5u,
+							  &back, &epoch));
+	zassert_equal(0xDEADu, epoch);
+	zassert_equal(0x01u, back.schema_id);
+	zassert_false(back.authenticated);
+	zassert_equal(-EACCES, radiant_profile_data_decode(&back, SEALED_DATA_PAGE, values,
+						   4u, NULL));
+	zassert_true(back.keyed);
+}
+
 /*
  * TODO item 2's done criterion: a receiver rejects a descriptor whose frame 1
  * was altered. Every covered byte of every frame but the tag - frame 1's

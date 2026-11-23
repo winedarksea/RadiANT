@@ -997,6 +997,17 @@ MAC'd packets** — the tag verifies and the numbers are still a lie.
 So: a **descriptor authentication frame**, the last frame of the descriptor set,
 mandatory whenever any transform bit is set.
 
+The tag only helps if a receiver demands it. A set that drops every transform
+bit carries no tag to fail, so **a receiver holding the key refuses any set
+without X_CONF or X_AUTH** — wholly plain, or reserved bits only:
+`radiant_profile_desc_rx_take_auth()` returns `-EBADMSG`, keeps the node's
+identity, and marks the result so that `radiant_profile_desc_may_decode_data()`
+refuses its data. Otherwise a peer without the key sends a plain set under the
+genuine schema id and the receiver reads genuine, correctly MAC'd data pages
+through the forged schema (security review 2026-11-22). A plain node is
+received with the keyless `radiant_profile_desc_rx_take()`; whether a node is
+keyed is the receiver's provisioning decision, never the set's.
+
 ```
 [0]    0x00                        page number, like every descriptor frame
 [1]    (index << 4) | (count - 1)  frame index, like every descriptor frame
@@ -1195,6 +1206,13 @@ scratch copy. Sizes are from the `radiant/tests` image (nRF5340 application
 core, `-Os`); the times are that core, 16 calls timed on the 32768 Hz kernel
 counter, and include the KDF, the CMAC over at most 106 bytes and the
 encoding. A node seals once per epoch change, not per cycle.
+
+2026-11-23, the plain-set refusal (security review 2026-11-22): a keyed
+receiver grows by **+34 B** — `radiant_profile_desc_rx_take_auth` +22 and
+`radiant_profile_desc_may_decode_data` +12, both measured as a standalone
+Cortex-M33 `-Os` object against the parent commit. The standard devices and
+every dongle image still link neither symbol (`nm --defined-only`), so the
++20 B row and the dongle's security text gate are unchanged.
 
 ---
 
@@ -1598,8 +1616,11 @@ epoch via `0xF3`, not on anything it hears. Section 5.3's descriptor
 authentication frame narrows that and does not remove it. What it does, plainly:
 
 - **It stops forgery of a schema or an epoch.** A changed offset, scale, W,
-  transform bit, field count or frame-1 epoch fails the tag, and a receiver
-  does not decode data against a schema that did not verify
+  field count or frame-1 epoch fails the tag, and so does a changed transform
+  bit while X_CONF or X_AUTH remains. A set with every transform bit removed
+  has no tag to fail, so it is refused by rule instead: a receiver holding the
+  key takes no set without X_CONF or X_AUTH (section 5.3). Either way a
+  receiver does not decode data against a schema that did not verify
   (`radiant_profile_desc_may_decode_data()`).
 - **It stops a replayed descriptor only against a receiver that already knows
   a newer epoch.** The epoch search runs forward only, from the last epoch the
