@@ -42,8 +42,33 @@ So the honest guarantee is integrity-on-download, not authenticity-at-flash:
   can write to the release, and it runs only after every build job passes.
 - Compare the sum before flashing (`sha256sum -c <artifact>.sha256` beside the
   downloaded file). If it does not match, do not flash it.
-- The build is reproducible from the tagged source with the toolchain the
-  release workflow pins ([`.github/workflows/release.yml`](.github/workflows/release.yml)).
+- The job that builds the shipping images (`build-core` in
+  [`.github/workflows/release.yml`](.github/workflows/release.yml)) restores
+  no cache and pins its inputs:
+  - **sources:** every west project by commit SHA, from
+    [`.github/west-release-frozen.yml`](.github/west-release-frozen.yml), a
+    `west manifest --freeze` of the sdk-nrf v3.4.0 workspace (`west.yml`
+    itself pins sdk-nrf by commit; sdk-nrf's own manifest still names its
+    imports by tag, which is why the frozen file exists);
+  - **compiler:** Zephyr SDK 1.0.1 (minimal bundle plus `arm-zephyr-eabi`),
+    fetched from versioned release URLs and checked against SHA-256 digests in
+    the workflow;
+  - **Python:** `west` and the packages a Zephyr build imports, installed with
+    `--require-hashes` from
+    [`.github/release-build-requirements.txt`](.github/release-build-requirements.txt);
+  - **DFU packaging:** nrfutil, its core and `nrf5sdk-tools`, by version and
+    SHA-256.
+
+  **Not pinned:** the GitHub-hosted runner image (`ubuntu-24.04`: CMake,
+  Ninja, git, the system libraries), the Python interpreter and pip that
+  `actions/setup-python` provides, and the third-party actions beyond their
+  commit SHAs. The build is **not** shown to be reproducible: no job rebuilds
+  and compares, and the DFU zip carries entry timestamps. The other jobs in
+  the release workflow (the Matter, TI and other non-shipping rows) still use
+  `action-zephyr-setup` and its caches. Nothing they build is attached to a
+  release, but they run in the same workflow run, and `publish` picks
+  artifacts by name; tying each artifact to the job that built it is still
+  open.
 
 **What this does not protect against:** an attacker who can write to the
 release, or who has physical access to the board. Neither is addressed by

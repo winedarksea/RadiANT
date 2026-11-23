@@ -1,0 +1,121 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# The Python packages release.yml's build-core job installs, locked with hashes
+# (security review 2026-11-22). build-core is the job that cuts the five
+# shipping images. Installed with
+#   pip install --force-reinstall --require-hashes --no-deps
+#     --only-binary :all: -r <this file>
+# so every package, transitive ones included, must be listed here with its
+# exact version and the hash of the one wheel pip may use. --force-reinstall
+# matters: a package that is already installed at a pinned version is
+# otherwise "already satisfied" and skips the hash check.
+#
+# Target: CPython 3.12 on x86_64 glibc Linux (setup-python "3.12" on
+# ubuntu-24.04). Each hash is for one wheel, so a different Python or platform
+# needs that wheel's hash added, not a looser pin.
+#
+# What is in it: west (1.5.0, the version the NCS v3.4.0 toolchain bundle
+# ships) plus the closure of Zephyr ncs-v3.4.0's scripts/requirements-base.txt,
+# which upstream calls "required to build or create images with zephyr".
+# windows-curses is win32-only and is left out. docopt is left out too: it is
+# a dependency of pykwalify, but only pykwalify's command-line entry point
+# imports it, and docopt 0.6.2 is published as an sdist only, so
+# --only-binary :all: cannot install it. `pip check` will report it missing.
+# That is expected: the build imports pykwalify.core, which does not need it.
+# This replaces action-zephyr-setup's unhashed, open-range install of
+# zephyr/scripts/requirements.txt, which also pulled in the test, run and
+# compliance extras. A shipping build does not import those.
+#
+# Regenerated 2026-11-23 in an ubuntu:24.04 container (Python 3.12.3):
+#   python3 -m venv v && v/bin/pip install west==1.5.0 \
+#     -r <zephyr>/scripts/requirements-base.txt   (minus windows-curses)
+#   v/bin/pip freeze --all, minus pip and docopt  -> the pins below
+#   pip download --no-deps --only-binary=:all: --platform manylinux2014_x86_64
+#     --platform manylinux_2_17_x86_64 --platform manylinux_2_28_x86_64
+#     --python-version 3.12 --implementation cp --abi cp312 --abi abi3
+#     --abi none <pin>   (for each pin)
+# then sha256 of each wheel, cross-checked against the digest PyPI's JSON API
+# publishes for that file (all 40 agreed). The locked install was then run in a
+# fresh venv with the flags above, followed by west init/update and a west
+# build of a shipping row.
+
+anytree==2.13.0 \
+    --hash=sha256:4cbcf10df36b1f1cba131b7e487ff3edafc9d6e932a3c70071b5b768bab901ff
+attrs==26.1.0 \
+    --hash=sha256:c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309
+boolean.py==5.0 \
+    --hash=sha256:ef28a70bd43115208441b53a045d1549e2f0ec6e3d08a9d142cbc41c1938e8d9
+canopen==2.4.1 \
+    --hash=sha256:651dfb189978fb9083f491128e9fb8cb0e85dc8ccb82b12dd7139236d0080b77
+certifi==2026.11.20 \
+    --hash=sha256:7422df25243767b9877031a2248cb14d09ddac9beee846f4cef3d5c9191d488f
+charset-normalizer==3.5.3 \
+    --hash=sha256:e5e4785d8a0adeadfbdf75f4efc357911842674651cbafd7e97f69b11ec3cbc6
+click==8.5.1 \
+    --hash=sha256:8bb5376d2006950386f8c6427613334a2acadc5f559cb80e638d00b4df957e37
+colorama==0.4.6 \
+    --hash=sha256:4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6
+idna==3.20 \
+    --hash=sha256:ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c
+intelhex==2.3.0 \
+    --hash=sha256:87cc5225657524ec6361354be928adfd56bcf2a3dcc646c40f8f094c39c07db4
+jinja2==3.1.6 \
+    --hash=sha256:85ece4451f492d0c13c5dd7c13a64681a86afae63a5f347908daf103ce6d2f67
+jsonschema==4.26.0 \
+    --hash=sha256:d489f15263b8d200f8387e64b4c3a75f06629559fb73deb8fdfb525f2dab50ce
+jsonschema-specifications==2025.9.1 \
+    --hash=sha256:98802fee3a11ee76ecaca44429fda8a41bff98b00a0f2838151b113f210cc6fe
+license-expression==30.4.4 \
+    --hash=sha256:421788fdcadb41f049d2dc934ce666626265aeccefddd25e162a26f23bcbf8a4
+markupsafe==3.0.4 \
+    --hash=sha256:8e124f974786f831d6043728e38296969d3579db8896fe004682f5758e613581
+packaging==26.3 \
+    --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c
+patool==4.1.0 \
+    --hash=sha256:acb7cdc5c5b9138eb9713e021aa5450aa32bf3d5c9e778b51e7b6786407eac46
+psutil==7.2.2 \
+    --hash=sha256:076a2d2f923fd4821644f5ba89f059523da90dc9014e85f8e45a5774ca5bc6f9
+pyelftools==0.33 \
+    --hash=sha256:f215ad5f47d3f1373a21496a6c9e0707c622840d0622f23ff7ce08678b020036
+pykwalify==1.8.0 \
+    --hash=sha256:731dfa87338cca9f559d1fca2bdea37299116e3139b73f78ca90a543722d6651
+pylink-square==2.1.0 \
+    --hash=sha256:51086a922c3fa1572fef6c0648ca11737e630f95d024f7acaad0bfe34f02aae2
+pyserial==3.5 \
+    --hash=sha256:c4451db6ba391ca6ca299fb3ec7bae67a5c55dde170964c7a14ceefec02f2cf0
+python-can==4.6.1 \
+    --hash=sha256:17f95255868a95108dcfcb90565a684dad32d5a3ebb35afd14f739e18c84ff6c
+python-dateutil==4.0.0 \
+    --hash=sha256:a5e246f79eb80475e691bf93862cead98decd8a498cf53ba0516fcdc0f50dc1c
+python-debian==1.1.1 \
+    --hash=sha256:f98ae013e8e5310e49041cc3860a7105df73af73d4ff1d8afb474770d328a6ad
+python-magic==0.4.27 \
+    --hash=sha256:c212960ad306f700aa0d01e5d7a325d20548ff97eb9920dcd29513174f0294d3
+pyyaml==6.0.4 \
+    --hash=sha256:93bfb2459195406a518e2f487a9bbf01df240175f31e06f5a252ac6734c7bbf0
+referencing==0.37.0 \
+    --hash=sha256:381329a9f99628c9069361716891d34ad94af76e461dcb0335825aecc7692231
+requests==2.34.2 \
+    --hash=sha256:2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0
+reuse==6.3.0 \
+    --hash=sha256:be6b598aa6d5cdf44af0da265572a72f0adcd30033857af874fd8607188259c1
+rpds-py==2026.9.1 \
+    --hash=sha256:addeda51556dac7c1a2f14cda62db8b621cd12afba3091d03a96c72932387eab
+ruamel.yaml==0.19.1 \
+    --hash=sha256:27592957fedf6e0b62f281e96effd28043345e0e66001f97683aa9a40c667c93
+semver==3.1.2 \
+    --hash=sha256:45d107c3fa880910441dfab9d555046cba2829a25feeadfe4a1566439635c510
+tomlkit==0.15.2 \
+    --hash=sha256:05562412163a3037b94497385fb7f9204c637bc605af7a48199e41cf2272f437
+tqdm==4.70.1 \
+    --hash=sha256:c293e525e6fef9c20e8728fd4612df02a0aa31bb5fe91ecd93e123b1b7bffa73
+typing_extensions==4.16.0 \
+    --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8
+tzdata==2026.6 \
+    --hash=sha256:0a10eec6e13ef16b627fabed9a5f2ba61a62b1c67f327305f4e7e412a70b4aec
+urllib3==2.8.0 \
+    --hash=sha256:0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3
+west==1.5.0 \
+    --hash=sha256:f71411d11ed9ed00847405c6a83600374c2e0cf8676ed5af5d8b572f92c4765a
+wrapt==1.17.3 \
+    --hash=sha256:042ec3bb8f319c147b1301f2393bc19dba6e176b7da446853406d041c36c7828

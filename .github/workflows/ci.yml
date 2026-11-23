@@ -139,9 +139,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-multilib g++-multilib
 
-      # Same action, same shape as every job in release.yml - app-path is the
-      # manifest repository and sdk-version is left unset so the fetched Zephyr
-      # tree chooses. No sdk-ant checkout and no token: radiant/tests is a
+      # Same action, same shape as the non-shipping jobs in release.yml -
+      # app-path is the manifest repository and sdk-version is left unset so
+      # the fetched Zephyr tree chooses. (build-core, which cuts the shipping
+      # images, no longer uses this action: it restores no cache and pins its
+      # toolchain by digest; see there.) No sdk-ant checkout and no token: radiant/tests is a
       # standalone Zephyr application that never includes the dongle's
       # CMakeLists.txt, so nothing on this path can reach an ANT header. As of
       # 2026-08-20 that is true of every job in both lanes, publishing included.
