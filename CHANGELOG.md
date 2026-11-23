@@ -51,6 +51,10 @@ reads.
 
 ### Changed
 
+- **The nRF backend no longer needs a board overlay.** Without a
+  `radiant,radio-timer` chosen node it uses TIMER4 (nRF52), TIMER20 (nRF54L)
+  or TIMER2 (nRF5340 network core), and stops the build if the board already
+  enables that TIMER. A chosen node still wins; existing images are unchanged.
 - **Wildcard search is on by default on nRF and TI**
   ([ADR 0022](docs/decisions/0022-search-matches-a-wildcard-device-number.md)):
   the sweep is one set, and discovery went from about 0.5-1 to 4-12

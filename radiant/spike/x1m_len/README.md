@@ -143,7 +143,8 @@ warning is itself the confirmation that the **nrf** backend was selected and not
 the null one; `.config` says `CONFIG_RADIANT_BACKEND_NRF=y`.
 
 `boards/nrf54l15dk_nrf54l15_cpuapp.overlay` in this directory supplies the
-`radiant,radio-timer` chosen node the backend `#error`s without. It is a copy of
+`radiant,radio-timer` chosen node the backend `#error`ed without until it gained
+a per-family default (the default is the same TIMER20). It is a copy of
 the chosen-node half of the repo-root board overlay, not an include of it — a
 standalone spike does not see the product build's board directory.
 

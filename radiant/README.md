@@ -53,8 +53,17 @@ CONFIG_RADIANT=y
 CONFIG_RADIANT_ANT_API=y
 ```
 
-On nRF, also copy a devicetree overlay from the samples' `boards/` directory. It
-names the timer the radio uses, and the build stops with an error if it is missing.
+No devicetree overlay is needed. On nRF the radio owns one hardware timer, and
+when your board names none RadiANT takes a default: TIMER4 on nRF52, TIMER20 on
+nRF54L, TIMER2 on the nRF5340 network core. If your board already enables that
+timer for something else, the build stops and asks you to name another. To name
+one, add an overlay like this, with any TIMER that has five or more compare
+channels (TIMER3 here is an nRF52 example; on nRF54L, TIMER21 would do):
+
+```dts
+/ { chosen { radiant,radio-timer = &timer3; }; };
+&timer3 { status = "okay"; };
+```
 
 **3. Write your application.** Call `radiant_ant_init()`, configure a channel, and
 implement `radiant_ant_on_message()`. The [integration guide](docs/integration.md) walks
@@ -78,7 +87,7 @@ Nordic Connect SDK.
 |---|---|---|
 | nRF52840 | `nrf` | Used on air by the RadiANT dongle on three boards. Samples build for the nRF52840 DK; the transmitter also for the Pro Micro |
 | nRF54L15, nRF54LM20 | `nrf` | nRF54L15 on-air verified, including both samples on the nRF54L15 DK |
-| nRF5340 network core | `nrf` | On-air verified. No sample overlay |
+| nRF5340 network core | `nrf` | On-air verified, with TIMER1 named by an overlay; the TIMER2 default is build-checked only |
 | TI CC13x2 / CC26x2 | `cc26xx` | On-air verified on the CC2652P. Needs the `hal_ti` module. No sample overlay |
 
 Builds are verified on Nordic Connect SDK v3.4.0 and on stock Zephyr v4.4.0, where

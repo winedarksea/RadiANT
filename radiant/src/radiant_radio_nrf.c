@@ -209,20 +209,67 @@ BUILD_ASSERT(!IS_ENABLED(CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL) ||
 /* ---- The timebase: one free-running 1 MHz TIMER ---- */
 
 /*
- * The TIMER comes from devicetree: TIMER nodes default to disabled, and a
- * second user of the same TIMER becomes a devicetree conflict.
+ * The TIMER comes from devicetree. A board's `radiant,radio-timer` chosen node
+ * always wins, and must be status = "okay": that is the visible claim, so a
+ * second devicetree user of the same TIMER is a conflict someone can see.
+ *
+ * Without one, the backend takes a per-family default so a board needs no
+ * overlay - but only while that node is still status = "disabled", which means
+ * no Zephyr driver owns it (the counter driver, for one, binds every "okay"
+ * nordic,nrf-timer). An enabled default belongs to somebody else unless the
+ * board chose it for radiant, so that is an #error, not a silent share. The
+ * status is bookkeeping only: this file takes the node's address and cc-num and
+ * nothing else - no Zephyr device, no TIMER interrupt, no clock or power-domain
+ * handle - and samples/hr_receiver's nRF54L15 DK and nRF52840 DK images built
+ * from a disabled default are byte-identical to ones from an "okay" chosen node.
+ *
+ * The defaults, each a TIMER the family's radio stacks leave alone:
+ *   nRF52        timer4   Only TIMER3/4 have five CC channels; MPSL takes
+ *                         TIMER0, the 802.15.4 driver TIMER0/1.
+ *   nRF54L       timer20  What every nRF54L board file in this repo names.
+ *                         MPSL's timer is TIMER10 (mpsl_hwres.h, and the only
+ *                         TIMER address in libmpsl); mpsl.rst also lists
+ *                         TIMER20, measured not to collide on the nRF54L15.
+ *   nRF5340 net  timer2   mpsl.rst reserves TIMER0 and TIMER1 on nRF53 and the
+ *                         802.15.4 driver uses TIMER0/1. (The dongle's cpunet
+ *                         overlay names timer1, safe there because BT is off.)
+ * A part without the default's label (nRF52805/810/811/820) and the nRF5340
+ * application core (no radio) get the "needs a timer" #error.
  */
+#if DT_HAS_CHOSEN(radiant_radio_timer)
 #define RADIANT_TIMER_NODE  DT_CHOSEN(radiant_radio_timer)
-
-#if !DT_NODE_EXISTS(RADIANT_TIMER_NODE)
-#error "radiant_radio_nrf needs a timer. Add to the board overlay:\n\
-    / { chosen { radiant,radio-timer = &timer20; }; };\n\
-    &timer20 { status = \"okay\"; };\n\
-It must be a TIMER this backend owns outright - it runs at 1 MHz forever and \
-is what t_sync is hardware-captured into."
-#endif
 #if !DT_NODE_HAS_STATUS(RADIANT_TIMER_NODE, okay)
 #error "radiant,radio-timer names a disabled node. Set status = \"okay\" on it."
+#endif
+#else /* no chosen node: the family default */
+#if defined(CONFIG_SOC_COMPATIBLE_NRF54LX)
+#define RADIANT_TIMER_DEFAULT       DT_NODELABEL(timer20)
+#define RADIANT_TIMER_DEFAULT_NAME  "timer20"
+#elif defined(CONFIG_SOC_NRF5340_CPUNET)
+#define RADIANT_TIMER_DEFAULT       DT_NODELABEL(timer2)
+#define RADIANT_TIMER_DEFAULT_NAME  "timer2"
+#elif defined(CONFIG_SOC_COMPATIBLE_NRF52X)
+#define RADIANT_TIMER_DEFAULT       DT_NODELABEL(timer4)
+#define RADIANT_TIMER_DEFAULT_NAME  "timer4"
+#endif
+#if !defined(RADIANT_TIMER_DEFAULT) || !DT_NODE_EXISTS(RADIANT_TIMER_DEFAULT)
+#error "radiant_radio_nrf needs a timer and this SoC has no default one. Add to \
+the board overlay, naming a TIMER with at least five CC channels:\n\
+    / { chosen { radiant,radio-timer = &timer3; }; };\n\
+    &timer3 { status = \"okay\"; };\n\
+It must be a TIMER this backend owns outright - it runs at 1 MHz forever and \
+is what t_sync is hardware-captured into."
+#else
+#define RADIANT_TIMER_NODE  RADIANT_TIMER_DEFAULT
+/* A BUILD_ASSERT, not an #error, so the message can name the TIMER. */
+BUILD_ASSERT(DT_NODE_HAS_STATUS(RADIANT_TIMER_DEFAULT, disabled),
+	     "radiant_radio_nrf's default timer, " RADIANT_TIMER_DEFAULT_NAME
+	     ", is enabled in devicetree, so something else may own it. If it "
+	     "is free for radiant, claim it in the board overlay with "
+	     "/ { chosen { radiant,radio-timer = &" RADIANT_TIMER_DEFAULT_NAME
+	     "; }; }; otherwise name another TIMER with at least five CC "
+	     "channels there, with status = \"okay\" on it.");
+#endif
 #endif
 
 #define TIMER_ADDR      ((NRF_TIMER_Type *)DT_REG_ADDR(RADIANT_TIMER_NODE))
@@ -238,7 +285,7 @@ is what t_sync is hardware-captured into."
 #define CC_NOW      3u   /* software captures here to read the counter */
 #define CC_TXSTART  4u   /* fires TASKS_TXEN */
 
-#if DT_PROP_OR(RADIANT_TIMER_NODE, cc_num, 0) < 5
+#if defined(RADIANT_TIMER_NODE) && DT_PROP_OR(RADIANT_TIMER_NODE, cc_num, 0) < 5
 #error "radiant,radio-timer names a TIMER with fewer than 5 CC channels (or a \
 binding with no cc-num). This backend needs five: t_sync capture, RX start, \
 window close, software now-capture, and TX start. On nRF52 that means TIMER3 or \

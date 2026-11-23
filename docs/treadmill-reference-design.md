@@ -339,11 +339,13 @@ failure this project keeps paying for.
 
 ## 5. Porting to your board
 
-1. **Copy an overlay.** `boards/nrf54l15dk_nrf54l15_cpuapp.overlay` is three
-   lines and the important one is `chosen { radiant,radio-timer }`. On nRF52
-   only TIMER3 and TIMER4 have the five compare/capture channels the backend
-   needs, which is a compile-time `#error` rather than something to find on the
-   air.
+1. **Check the radio TIMER.** With no `chosen { radiant,radio-timer }` the
+   backend takes TIMER4 on nRF52, TIMER20 on nRF54L or TIMER2 on the nRF5340
+   network core, and stops the build if your board already enables that TIMER.
+   `boards/nrf54l15dk_nrf54l15_cpuapp.overlay` shows the explicit form, for
+   naming another. On nRF52 only TIMER3 and TIMER4 have the five
+   compare/capture channels the backend needs, which is a compile-time `#error`
+   rather than something to find on the air.
 2. **Write your source.** Start from `src/treadmill_source_custom.c`, which
    contains the instructions, and read `src/treadmill_sim.c` as the worked
    example — particularly its ramp, which is what exercises the reporting loop
