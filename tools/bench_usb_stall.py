@@ -268,6 +268,10 @@ POWER_CONTROL_VALUES = ("auto", "on")
 # answer is in, and a wedged board does not need 30 more cycles of proof.
 MAX_CONSECUTIVE_FAILURES = 3
 
+NEED_ROOT = ("cannot read the kernel log (dmesg): run as root. The bus resets "
+             "it records are the only\nhost-visible sign of the leak, so the "
+             "test cannot judge without it.")
+
 
 def suspend_cycles_arg(text: str) -> int:
     """argparse type for --suspend-cycles: a whole number, at least 1."""
@@ -462,6 +466,10 @@ def run_suspend_cycles(args) -> int:
     if reason is not None:
         print(f"SKIP: --suspend-cycles {reason}")
         return 0
+    # Root for the sysfs power writes and for dmesg. Checked up front, so a
+    # plain-user run stops here rather than halfway, with runtime PM changed.
+    if os.geteuid() != 0:
+        sys.exit(NEED_ROOT)
 
     dev = find_without_set_configuration(args.serial, 5.0)
     if dev is None:
@@ -498,9 +506,12 @@ def run_suspend_cycles(args) -> int:
     consecutive = 0
     log = read_kernel_log()
     if log is None:
-        sys.exit("cannot read the kernel log (dmesg): run as root. The bus "
-                 "resets it records are the only\nhost-visible sign of the "
-                 "leak, so the test cannot judge without it.")
+        sys.exit(NEED_ROOT)
+    # A count, not a diff of the text: if the kernel ring buffer wraps
+    # during the run, old reset lines can fall out as new ones come in and
+    # the count can stay level - a false negative. A 40-cycle run logs a few
+    # lines per reset at most, so on a quiet host it does not, but a host
+    # spamming its kernel log could hide a reset.
     resets0 = resets_seen = count_resets(log, name)
     suspended_ms0 = parse_sysfs_int(_sysfs_read(suspended_time_path))
     try:
@@ -547,6 +558,10 @@ def run_suspend_cycles(args) -> int:
             written, replies = flood_capabilities(dev, args.flood, 10.0)
             print(f"  wrote {written}, {replies} replies")
             after = read_health(dev, FrameReader(dev), "after")
+        # Once more after the flood and the final 0xF6 read: a reset the
+        # host issued during those counts too.
+        resets_seen = max(resets_seen,
+                          count_resets(read_kernel_log() or "", name))
     finally:
         try:
             _sysfs_write(control_path, old_control)
