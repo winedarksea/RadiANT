@@ -197,4 +197,46 @@ void Erased(uint16_t &count, bool isNewProvider, bool erased)
 }
 
 } /* namespace ProviderSlots */
+
+namespace LabelPersist
+{
+
+uint32_t Hash(const char *label, size_t maxLen)
+{
+	uint32_t h = 0x811c9dc5u;
+
+	if (label == nullptr) {
+		return h;
+	}
+	for (size_t i = 0; i < maxLen && label[i] != '\0'; i++) {
+		h ^= static_cast<uint8_t>(label[i]);
+		h *= 0x01000193u;
+	}
+	return h;
+}
+
+Decision Decide(const Stored &stored, uint32_t newHash, Budget &budget, uint32_t pass)
+{
+	if (stored.known && stored.hash == newHash) {
+		return Decision::Unchanged;
+	}
+	if (budget.used > 0 && budget.pass == pass) {
+		/* Another row of this rename event already paid. */
+		return Decision::Persist;
+	}
+	if (budget.used >= kMaxPersistedRenamesPerSource) {
+		return Decision::OverBudget;
+	}
+	budget.used++;
+	budget.pass = pass;
+	return Decision::Persist;
+}
+
+void Persisted(Stored &stored, uint32_t newHash)
+{
+	stored.known = true;
+	stored.hash = newHash;
+}
+
+} /* namespace LabelPersist */
 } /* namespace RadiantMatter */

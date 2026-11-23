@@ -1044,6 +1044,133 @@ ZTEST(matter_storage, test_provider_slot_not_returned_twice)
 	zassert_equal(br.Bind(), 0, "a double give-back let a third provider in");
 }
 
+/* ---- renamed-label writes (security review 2026-11-22) ----------------- */
+
+namespace
+{
+
+/* ant_bridge.cpp's flush, reduced to the write decision: every row of a
+ * source composes the same label in a pass and asks LabelPersist whether to
+ * store it. Counts the StoreBridgedDevice() calls that would happen. */
+struct ModelSource {
+	static constexpr size_t kRows = 3;
+	LabelPersist::Stored rows[kRows] = {};
+	LabelPersist::Budget budget = {};
+	uint32_t writes = 0;
+
+	void Create(const char *label)
+	{
+		for (LabelPersist::Stored &r : rows) {
+			LabelPersist::Persisted(r, LabelPersist::Hash(label, kNodeLabelSize - 1));
+		}
+	}
+
+	void Pass(const char *label, uint32_t pass)
+	{
+		uint32_t h = LabelPersist::Hash(label, kNodeLabelSize - 1);
+
+		for (LabelPersist::Stored &r : rows) {
+			if (LabelPersist::Decide(r, h, budget, pass) == LabelPersist::Decision::Persist) {
+				writes++;
+				LabelPersist::Persisted(r, h);
+			}
+		}
+	}
+};
+
+} /* namespace */
+
+ZTEST(matter_storage, test_label_persist_hash_is_fnv1a_over_the_stored_bytes)
+{
+	/* FNV-1a 32 reference vectors. */
+	zassert_equal(LabelPersist::Hash("", 31), 0x811c9dc5u);
+	zassert_equal(LabelPersist::Hash("a", 31), 0xe40c292cu);
+	zassert_equal(LabelPersist::Hash("foobar", 31), 0xbf9cf968u);
+	/* Bounded by maxLen (a record stores at most capacity - 1 bytes) and
+	 * by the NUL, whichever comes first. */
+	zassert_equal(LabelPersist::Hash("foobar", 3), LabelPersist::Hash("foo", 31));
+	zassert_equal(LabelPersist::Hash(nullptr, 31), 0x811c9dc5u);
+}
+
+ZTEST(matter_storage, test_label_persist_unchanged_label_writes_nothing)
+{
+	/* The adoption case: every boot re-pushes each adopted row's composed
+	 * name, which is normally the stored one. */
+	ModelSource src;
+
+	src.Create("Indoor Bike 51234 Speed");
+	for (uint32_t pass = 1; pass <= 100; pass++) {
+		src.Pass("Indoor Bike 51234 Speed", pass);
+	}
+	zassert_equal(src.writes, 0, "%u writes for an unchanged label", src.writes);
+	zassert_equal(src.budget.used, 0, "an unchanged label charged the budget");
+}
+
+ZTEST(matter_storage, test_label_persist_unknown_stored_label_persists)
+{
+	/* A creation whose store failed: nothing is known about the record. */
+	LabelPersist::Stored stored = {};
+	LabelPersist::Budget budget = {};
+	uint32_t h = LabelPersist::Hash("Treadmill 7 Speed", kNodeLabelSize - 1);
+
+	zassert_equal(LabelPersist::Decide(stored, h, budget, 1), LabelPersist::Decision::Persist);
+	zassert_equal(budget.used, 1);
+	LabelPersist::Persisted(stored, h);
+	zassert_equal(LabelPersist::Decide(stored, h, budget, 2), LabelPersist::Decision::Unchanged);
+}
+
+ZTEST(matter_storage, test_label_persist_alternating_label_is_bounded_per_boot)
+{
+	/* The review's attack: the equipment type flips each second, so the
+	 * composed label alternates. Every row of the source used to be
+	 * rewritten every pass - 300 writes here. */
+	ModelSource src;
+	uint32_t pass;
+
+	src.Create("Indoor Bike 51234 Speed");
+	for (pass = 1; pass <= 100; pass++) {
+		src.Pass((pass & 1u) ? "Treadmill 51234 Speed" : "Indoor Bike 51234 Speed", pass);
+	}
+	zassert_equal(src.budget.used, LabelPersist::kMaxPersistedRenamesPerSource);
+	zassert_equal(src.writes, LabelPersist::kMaxPersistedRenamesPerSource * ModelSource::kRows,
+		      "%u writes", src.writes);
+
+	/* Over budget the stored label stays whatever the last write left
+	 * (here the bike name, written by pass 4), and a label equal to it is
+	 * still Unchanged rather than OverBudget. */
+	uint32_t bike = LabelPersist::Hash("Indoor Bike 51234 Speed", kNodeLabelSize - 1);
+	uint32_t mill = LabelPersist::Hash("Treadmill 51234 Speed", kNodeLabelSize - 1);
+
+	zassert_equal(LabelPersist::Decide(src.rows[0], bike, src.budget, pass),
+		      LabelPersist::Decision::Unchanged);
+	zassert_equal(LabelPersist::Decide(src.rows[0], mill, src.budget, pass + 1),
+		      LabelPersist::Decision::OverBudget);
+}
+
+ZTEST(matter_storage, test_label_persist_one_charge_per_rename_event_per_source)
+{
+	ModelSource a;
+	ModelSource b;
+
+	a.Create("Fitness Equip 1 Speed");
+	b.Create("Fitness Equip 2 Speed");
+
+	/* One rename of A: all three rows written, one charge. */
+	a.Pass("Indoor Bike 1 Speed", 1);
+	zassert_equal(a.writes, ModelSource::kRows);
+	zassert_equal(a.budget.used, 1, "one rename event charged %u", a.budget.used);
+
+	/* A spending its whole budget leaves B's untouched. */
+	a.Pass("Treadmill 1 Speed", 2);
+	a.Pass("Rower 1 Speed", 3);
+	a.Pass("Climber 1 Speed", 4);
+	a.Pass("Elliptical 1 Speed", 5);
+	zassert_equal(a.budget.used, LabelPersist::kMaxPersistedRenamesPerSource);
+	b.Pass("Indoor Bike 2 Speed", 5);
+	zassert_equal(b.writes, ModelSource::kRows, "a busy source spent another source's budget");
+	zassert_equal(b.budget.used, 1);
+}
+
 /* ---- lengths near SIZE_MAX: `counter + length` wraps ------------------- */
 
 ZTEST(matter_storage, test_wrap_unique_id_length_rejected)
