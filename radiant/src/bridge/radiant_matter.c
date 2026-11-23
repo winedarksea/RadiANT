@@ -24,9 +24,9 @@ static const struct radiant_matter_type_map type_map[] = {
 		/* Occupancy: a stretch (section 8.2), but it's the row that
 		 * surfaces the four derived booleans of section 6. */
 		.field_type = RADIANT_FIELD_OCCUPANCY,
-		.device_type = MATTER_DEVTYPE_OCCUPANCY_SENSOR,
-		.cluster = MATTER_CLUSTER_OCCUPANCY_SENSING,
-		.attribute = MATTER_ATTR_OCCUPANCY,
+		.device_type = RADIANT_MATTER_DEVTYPE_OCCUPANCY_SENSOR,
+		.cluster = RADIANT_MATTER_CLUSTER_OCCUPANCY_SENSING,
+		.attribute = RADIANT_MATTER_ATTR_OCCUPANCY,
 		.mul = 1, .div = 1, .offset = 0,
 		/* ON CHANGE ONLY. The value is one bit; anything else would be
 		 * a threshold on a boolean. radiant_rules.c already publishes
@@ -48,12 +48,12 @@ static const struct radiant_matter_type_map type_map[] = {
 		 */
 		.n_extra = 2u,
 		.extra = {
-			{ .attribute = MATTER_ATTR_OCCUPANCY_SENSOR_TYPE,
+			{ .attribute = RADIANT_MATTER_ATTR_OCCUPANCY_SENSOR_TYPE,
 			  .mul = 0, .div = 1,
-			  .offset = MATTER_OCCUPANCY_TYPE_PHYSICAL_CONTACT },
-			{ .attribute = MATTER_ATTR_OCCUPANCY_SENSOR_BITMAP,
+			  .offset = RADIANT_MATTER_OCCUPANCY_TYPE_PHYSICAL_CONTACT },
+			{ .attribute = RADIANT_MATTER_ATTR_OCCUPANCY_SENSOR_BITMAP,
 			  .mul = 0, .div = 1,
-			  .offset = MATTER_OCCUPANCY_BITMAP_PHYSICAL_CONTACT },
+			  .offset = RADIANT_MATTER_OCCUPANCY_BITMAP_PHYSICAL_CONTACT },
 		},
 	},
 	{
@@ -61,9 +61,9 @@ static const struct radiant_matter_type_map type_map[] = {
 		 * is kelvin, Matter wants 0.01degC, so K*100-27315 is a scale
 		 * and a shift, not a pure decimal scale. */
 		.field_type = RADIANT_FIELD_TEMPERATURE,
-		.device_type = MATTER_DEVTYPE_TEMPERATURE_SENSOR,
-		.cluster = MATTER_CLUSTER_TEMP_MEASUREMENT,
-		.attribute = MATTER_ATTR_MEASURED_VALUE,
+		.device_type = RADIANT_MATTER_DEVTYPE_TEMPERATURE_SENSOR,
+		.cluster = RADIANT_MATTER_CLUSTER_TEMP_MEASUREMENT,
+		.attribute = RADIANT_MATTER_ATTR_MEASURED_VALUE,
 		.mul = 100, .div = 1, .offset = -27315,
 		/* 0.5 degC, in the cluster's 0.01 degC units. Below an ANT+
 		 * thermometer's own quoted accuracy, so nothing a user could
@@ -75,9 +75,9 @@ static const struct radiant_matter_type_map type_map[] = {
 	{
 		/* Percent to 0.01 percent. */
 		.field_type = RADIANT_FIELD_HUMIDITY,
-		.device_type = MATTER_DEVTYPE_HUMIDITY_SENSOR,
-		.cluster = MATTER_CLUSTER_REL_HUMIDITY,
-		.attribute = MATTER_ATTR_MEASURED_VALUE,
+		.device_type = RADIANT_MATTER_DEVTYPE_HUMIDITY_SENSOR,
+		.cluster = RADIANT_MATTER_CLUSTER_REL_HUMIDITY,
+		.attribute = RADIANT_MATTER_ATTR_MEASURED_VALUE,
 		.mul = 100, .div = 1, .offset = 0,
 		/* 1 %RH, in the cluster's 0.01 % units. */
 		.deadband = 100,
@@ -118,9 +118,9 @@ static const struct radiant_matter_type_map type_map[] = {
 		 * citation that settles either.
 		 */
 		.field_type = RADIANT_FIELD_PRESSURE,
-		.device_type = MATTER_DEVTYPE_PRESSURE_SENSOR,
-		.cluster = MATTER_CLUSTER_PRESSURE_MEASUREMENT,
-		.attribute = MATTER_ATTR_MEASURED_VALUE,
+		.device_type = RADIANT_MATTER_DEVTYPE_PRESSURE_SENSOR,
+		.cluster = RADIANT_MATTER_CLUSTER_PRESSURE_MEASUREMENT,
+		.attribute = RADIANT_MATTER_ATTR_MEASURED_VALUE,
 		.mul = 1, .div = 100, .offset = 0,
 		/*
 		 * NO DEADBAND, AND THAT IS DELIBERATE RATHER THAN AN OMISSION.
@@ -142,11 +142,11 @@ static const struct radiant_matter_type_map type_map[] = {
 		.heartbeat_s = 0u,
 		.n_extra = 2u,
 		.extra = {
-			{ .attribute = MATTER_ATTR_SCALED_VALUE,
+			{ .attribute = RADIANT_MATTER_ATTR_SCALED_VALUE,
 			  .mul = 1, .div = 10, .offset = 0 },
-			{ .attribute = MATTER_ATTR_SCALE,
+			{ .attribute = RADIANT_MATTER_ATTR_SCALE,
 			  .mul = 0, .div = 1,
-			  .offset = MATTER_PRESSURE_SCALE },
+			  .offset = RADIANT_MATTER_PRESSURE_SCALE },
 		},
 	},
 	{
@@ -156,8 +156,8 @@ static const struct radiant_matter_type_map type_map[] = {
 		 * that; it used to only say it. */
 		.field_type = RADIANT_FIELD_BATTERY_SOC,
 		.device_type = 0u,
-		.cluster = MATTER_CLUSTER_POWER_SOURCE,
-		.attribute = MATTER_ATTR_BAT_PERCENT_REMAINING,
+		.cluster = RADIANT_MATTER_CLUSTER_POWER_SOURCE,
+		.attribute = RADIANT_MATTER_ATTR_BAT_PERCENT_REMAINING,
 		.mul = 2, .div = 1, .offset = 0,
 		/* 1 %, in the cluster's 0.5 %-per-step units, so 2. The
 		 * heartbeat is 300 s rather than 60: a battery that has not
@@ -330,7 +330,7 @@ bool radiant_matter_convert_with(const struct radiant_sample *s,
  * why a data model that knows one stack's fixed-endpoint layout has stopped
  * being a data model.
  */
-#define MATTER_ENDPOINT_FIRST 1u
+#define RADIANT_MATTER_ENDPOINT_FIRST 1u
 
 static struct radiant_matter_endpoint endpoints[RADIANT_MATTER_MAX_ENDPOINTS];
 static uint16_t endpoint_used;
@@ -358,7 +358,7 @@ static uint16_t endpoint_used;
  * deliberately knows nothing about bindings) so the number is restated with
  * this comment rather than imported.
  */
-#define MATTER_DEADBAND_SLOTS (RADIANT_MATTER_MAX_ENDPOINTS + 8u)
+#define RADIANT_MATTER_DEADBAND_SLOTS (RADIANT_MATTER_MAX_ENDPOINTS + 8u)
 
 struct publish_state {
 	bool     valid;   /* this slot is allocated AND has a last value */
@@ -368,7 +368,7 @@ struct publish_state {
 	uint64_t last_us; /* ...at this sample time */
 };
 
-static struct publish_state published[MATTER_DEADBAND_SLOTS];
+static struct publish_state published[RADIANT_MATTER_DEADBAND_SLOTS];
 
 /* Sources to forget, one bit each, set from any thread by
  * radiant_matter_forget_source() and applied on the sink's thread. 32 bits
@@ -548,7 +548,7 @@ static const struct radiant_matter_endpoint *endpoint_get_or_add(
 			return NULL;
 		}
 		e = &endpoints[endpoint_used];
-		e->endpoint_id = (uint16_t)(MATTER_ENDPOINT_FIRST + endpoint_used);
+		e->endpoint_id = (uint16_t)(RADIANT_MATTER_ENDPOINT_FIRST + endpoint_used);
 		endpoint_used++;
 	}
 	e->source = s->source;

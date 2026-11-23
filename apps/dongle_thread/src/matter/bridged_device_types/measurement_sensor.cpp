@@ -144,7 +144,7 @@ MeasurementSensorDevice::MeasurementSensorDevice(uint16_t deviceType, const char
 		mMaxMeasuredValue = 1200;
 		/* The same envelope in ScaledValue's units, which are NOT
 		 * MeasuredValue's: section 2.4.5.5 puts ScaledValue in Pa x
-		 * 10^Scale, and at radiant_matter.h's MATTER_PRESSURE_SCALE of
+		 * 10^Scale, and at radiant_matter.h's RADIANT_MATTER_PRESSURE_SCALE of
 		 * -1 that is 10 Pa per count, so 30 kPa is 3000. Mandatory
 		 * under the EXT feature this endpoint advertises - serving
 		 * ScaledValue without its bounds was a conformance gap, not a

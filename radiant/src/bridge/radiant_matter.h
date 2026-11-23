@@ -138,28 +138,28 @@ struct radiant_matter_type_map {
 /* Matter cluster and device-type identifiers, named rather than left as bare
  * hex - a wrong constant here is invisible until a controller shows the
  * wrong icon. */
-#define MATTER_DEVTYPE_OCCUPANCY_SENSOR   0x0107u
-#define MATTER_DEVTYPE_TEMPERATURE_SENSOR 0x0302u
-#define MATTER_DEVTYPE_HUMIDITY_SENSOR    0x0307u
-#define MATTER_DEVTYPE_PRESSURE_SENSOR    0x0305u
+#define RADIANT_MATTER_DEVTYPE_OCCUPANCY_SENSOR   0x0107u
+#define RADIANT_MATTER_DEVTYPE_TEMPERATURE_SENSOR 0x0302u
+#define RADIANT_MATTER_DEVTYPE_HUMIDITY_SENSOR    0x0307u
+#define RADIANT_MATTER_DEVTYPE_PRESSURE_SENSOR    0x0305u
 
-#define MATTER_CLUSTER_TEMP_MEASUREMENT     0x0402u
-#define MATTER_CLUSTER_PRESSURE_MEASUREMENT 0x0403u
-#define MATTER_CLUSTER_REL_HUMIDITY         0x0405u
-#define MATTER_CLUSTER_OCCUPANCY_SENSING    0x0406u
-#define MATTER_CLUSTER_POWER_SOURCE         0x002Fu
+#define RADIANT_MATTER_CLUSTER_TEMP_MEASUREMENT     0x0402u
+#define RADIANT_MATTER_CLUSTER_PRESSURE_MEASUREMENT 0x0403u
+#define RADIANT_MATTER_CLUSTER_REL_HUMIDITY         0x0405u
+#define RADIANT_MATTER_CLUSTER_OCCUPANCY_SENSING    0x0406u
+#define RADIANT_MATTER_CLUSTER_POWER_SOURCE         0x002Fu
 
-#define MATTER_ATTR_MEASURED_VALUE          0x0000u
-#define MATTER_ATTR_OCCUPANCY               0x0000u
-#define MATTER_ATTR_BAT_PERCENT_REMAINING   0x000Cu
+#define RADIANT_MATTER_ATTR_MEASURED_VALUE          0x0000u
+#define RADIANT_MATTER_ATTR_OCCUPANCY               0x0000u
+#define RADIANT_MATTER_ATTR_BAT_PERCENT_REMAINING   0x000Cu
 
 /* Occupancy Sensing. `OccupancySensorType` is an enum and
  * `OccupancySensorTypeBitmap` a bitmap over the same four kinds, so the two
  * constants below must agree - a controller may read either. */
-#define MATTER_ATTR_OCCUPANCY_SENSOR_TYPE   0x0001u
-#define MATTER_ATTR_OCCUPANCY_SENSOR_BITMAP 0x0002u
-#define MATTER_OCCUPANCY_TYPE_PHYSICAL_CONTACT     3    /* enum: 0 PIR, 1 ultrasonic, 2 both, 3 contact */
-#define MATTER_OCCUPANCY_BITMAP_PHYSICAL_CONTACT   0x04 /* bit 0 PIR, bit 1 ultrasonic, bit 2 contact */
+#define RADIANT_MATTER_ATTR_OCCUPANCY_SENSOR_TYPE   0x0001u
+#define RADIANT_MATTER_ATTR_OCCUPANCY_SENSOR_BITMAP 0x0002u
+#define RADIANT_MATTER_OCCUPANCY_TYPE_PHYSICAL_CONTACT     3    /* enum: 0 PIR, 1 ultrasonic, 2 both, 3 contact */
+#define RADIANT_MATTER_OCCUPANCY_BITMAP_PHYSICAL_CONTACT   0x04 /* bit 0 PIR, bit 1 ultrasonic, bit 2 contact */
 
 /* Pressure Measurement's optional high-resolution pair (the EXT feature).
  * ScaledValue = 10^Scale x pressure in PASCALS (Matter 1.5.1 section
@@ -168,9 +168,9 @@ struct radiant_matter_type_map {
  * constant used to carry (Scale 2 against Pa/10 told a conformant controller
  * 101.33 Pa for a standard atmosphere). Scale -1 makes ScaledValue
  * P[Pa] x 10^-1 = P[Pa] / 10, which tops out at 327.67 kPa in an int16s. */
-#define MATTER_ATTR_SCALED_VALUE            0x0010u
-#define MATTER_ATTR_SCALE                   0x0014u
-#define MATTER_PRESSURE_SCALE               (-1) /* 10 Pa per step */
+#define RADIANT_MATTER_ATTR_SCALED_VALUE            0x0010u
+#define RADIANT_MATTER_ATTR_SCALE                   0x0014u
+#define RADIANT_MATTER_PRESSURE_SCALE               (-1) /* 10 Pa per step */
 
 /* The row for a vocabulary type, or NULL if the Matter plane declines it
  * (a normal answer - see header comment). */

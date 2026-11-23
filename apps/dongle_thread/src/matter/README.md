@@ -233,7 +233,7 @@ is left alone because removing it needs the ZAP GUI (trap 14) and because
 against exactly this shape.
 
 **This is trap 6 in the plan, and it is now a fact rather than a prediction:**
-`radiant_matter.c`'s `MATTER_ENDPOINT_FIRST` is `1u`, and CHIP endpoint 1 is the
+`radiant_matter.c`'s `RADIANT_MATTER_ENDPOINT_FIRST` is `1u`, and CHIP endpoint 1 is the
 aggregator. RadiANT's endpoint ids are an opaque key and the glue maps them to
 CHIP ids — package D/E4's problem, recorded here because this directory is where
 the collision becomes visible.

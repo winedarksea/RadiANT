@@ -736,7 +736,7 @@ The pair being guarded is the CHIP side against `RADIANT_MATTER_MAX_ENDPOINTS`.
 `CONFIG_BRIDGE_MAX_DYNAMIC_ENDPOINTS_NUMBER` cannot drift — upstream defines the
 first *as* the second. Not pinned, and confirmed as a fact rather than fixed:
 **the aggregator really is endpoint 1 in this ZAP and `radiant_matter.c`'s
-`MATTER_ENDPOINT_FIRST` really is `1u`** (trap 6).
+`RADIANT_MATTER_ENDPOINT_FIRST` really is `1u`** (trap 6).
 
 ---
 

@@ -54,8 +54,8 @@
  * with.
  *
  * THE VALUES ARE NOT HARDCODED HERE. radiant/src/bridge/radiant_matter.h
- * already states them - MATTER_OCCUPANCY_TYPE_PHYSICAL_CONTACT and
- * MATTER_OCCUPANCY_BITMAP_PHYSICAL_CONTACT - and radiant_matter.c already
+ * already states them - RADIANT_MATTER_OCCUPANCY_TYPE_PHYSICAL_CONTACT and
+ * RADIANT_MATTER_OCCUPANCY_BITMAP_PHYSICAL_CONTACT - and radiant_matter.c already
  * emits them through its `extra[]` mechanism, where `mul == 0` means
  * "constant, written once when the endpoint is created". So they arrive here
  * as ordinary HandleAttributeChange calls on the first sample, exactly like

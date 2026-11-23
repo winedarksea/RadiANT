@@ -141,10 +141,10 @@ namespace
  * because this is the only translation unit that includes both, and the same
  * reasoning bridge_core_asserts.cpp records for trap 15.
  */
-static_assert(RadiantMatter::kDeviceTypeOccupancySensor == MATTER_DEVTYPE_OCCUPANCY_SENSOR, "");
-static_assert(RadiantMatter::kDeviceTypeTemperatureSensor == MATTER_DEVTYPE_TEMPERATURE_SENSOR, "");
-static_assert(RadiantMatter::kDeviceTypeHumiditySensor == MATTER_DEVTYPE_HUMIDITY_SENSOR, "");
-static_assert(RadiantMatter::kDeviceTypePressureSensor == MATTER_DEVTYPE_PRESSURE_SENSOR, "");
+static_assert(RadiantMatter::kDeviceTypeOccupancySensor == RADIANT_MATTER_DEVTYPE_OCCUPANCY_SENSOR, "");
+static_assert(RadiantMatter::kDeviceTypeTemperatureSensor == RADIANT_MATTER_DEVTYPE_TEMPERATURE_SENSOR, "");
+static_assert(RadiantMatter::kDeviceTypeHumiditySensor == RADIANT_MATTER_DEVTYPE_HUMIDITY_SENSOR, "");
+static_assert(RadiantMatter::kDeviceTypePressureSensor == RADIANT_MATTER_DEVTYPE_PRESSURE_SENSOR, "");
 
 /*
  * Attribute slots per endpoint. THREE, and the number is the pressure row:

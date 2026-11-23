@@ -121,25 +121,25 @@ ZTEST(radiant_matter, test_the_four_rows_section_8_1_lists_are_all_present)
 
 	r = radiant_matter_row(RADIANT_FIELD_OCCUPANCY);
 	zassert_not_null(r);
-	zassert_equal(r->device_type, MATTER_DEVTYPE_OCCUPANCY_SENSOR);
-	zassert_equal(r->cluster, MATTER_CLUSTER_OCCUPANCY_SENSING);
+	zassert_equal(r->device_type, RADIANT_MATTER_DEVTYPE_OCCUPANCY_SENSOR);
+	zassert_equal(r->cluster, RADIANT_MATTER_CLUSTER_OCCUPANCY_SENSING);
 
 	r = radiant_matter_row(RADIANT_FIELD_TEMPERATURE);
 	zassert_not_null(r);
-	zassert_equal(r->device_type, MATTER_DEVTYPE_TEMPERATURE_SENSOR);
-	zassert_equal(r->cluster, MATTER_CLUSTER_TEMP_MEASUREMENT);
+	zassert_equal(r->device_type, RADIANT_MATTER_DEVTYPE_TEMPERATURE_SENSOR);
+	zassert_equal(r->cluster, RADIANT_MATTER_CLUSTER_TEMP_MEASUREMENT);
 
 	r = radiant_matter_row(RADIANT_FIELD_HUMIDITY);
 	zassert_not_null(r);
-	zassert_equal(r->device_type, MATTER_DEVTYPE_HUMIDITY_SENSOR);
-	zassert_equal(r->cluster, MATTER_CLUSTER_REL_HUMIDITY);
+	zassert_equal(r->device_type, RADIANT_MATTER_DEVTYPE_HUMIDITY_SENSOR);
+	zassert_equal(r->cluster, RADIANT_MATTER_CLUSTER_REL_HUMIDITY);
 
 	r = radiant_matter_row(RADIANT_FIELD_BATTERY_SOC);
 	zassert_not_null(r);
 	/* Battery is cluster only, on the binding's own endpoint: a device type
 	 * here would put a phantom entity in every controller (section 8.1). */
 	zassert_equal(r->device_type, 0u);
-	zassert_equal(r->cluster, MATTER_CLUSTER_POWER_SOURCE);
+	zassert_equal(r->cluster, RADIANT_MATTER_CLUSTER_POWER_SOURCE);
 }
 
 ZTEST(radiant_matter, test_heart_rate_has_no_row_and_that_is_the_design)
@@ -305,7 +305,7 @@ ZTEST(radiant_matter, test_endpoints_are_assigned_on_first_sample_and_are_stable
 	first_id = a->endpoint_id;
 	zassert_equal(last.writes, 1u);
 	zassert_equal(last.value, 2500);
-	zassert_equal(last.cluster, MATTER_CLUSTER_TEMP_MEASUREMENT);
+	zassert_equal(last.cluster, RADIANT_MATTER_CLUSTER_TEMP_MEASUREMENT);
 
 	/* A second sample on the same field reuses the endpoint. An endpoint
 	 * number that moved would re-create the entity in every controller. */
@@ -440,13 +440,13 @@ ZTEST(radiant_matter, test_pressure_serves_both_the_mandatory_and_the_useful_att
 
 	zassert_equal(radiant_matter_endpoint_count(), 1u);
 
-	zassert_equal(find_write(MATTER_CLUSTER_PRESSURE_MEASUREMENT,
-				 MATTER_ATTR_MEASURED_VALUE, &v, &ep_measured),
+	zassert_equal(find_write(RADIANT_MATTER_CLUSTER_PRESSURE_MEASUREMENT,
+				 RADIANT_MATTER_ATTR_MEASURED_VALUE, &v, &ep_measured),
 		      1);
 	zassert_equal(v, 1013, "%lld", (long long)v);
 
-	zassert_equal(find_write(MATTER_CLUSTER_PRESSURE_MEASUREMENT,
-				 MATTER_ATTR_SCALED_VALUE, &v, &ep_scaled),
+	zassert_equal(find_write(RADIANT_MATTER_CLUSTER_PRESSURE_MEASUREMENT,
+				 RADIANT_MATTER_ATTR_SCALED_VALUE, &v, &ep_scaled),
 		      1);
 	zassert_equal(v, 10133, "%lld", (long long)v);
 
@@ -454,12 +454,12 @@ ZTEST(radiant_matter, test_pressure_serves_both_the_mandatory_and_the_useful_att
 	 * ScaledValue is unreadable - it reads back as 0, i.e. whole Pa,
 	 * i.e. a barometer reporting 10133 Pa. And it must be -1 LITERALLY,
 	 * not merely equal to the header's constant: comparing against
-	 * MATTER_PRESSURE_SCALE alone is how Scale 2 sat beside Pa/10 with a
+	 * RADIANT_MATTER_PRESSURE_SCALE alone is how Scale 2 sat beside Pa/10 with a
 	 * green test. */
-	zassert_equal(find_write(MATTER_CLUSTER_PRESSURE_MEASUREMENT,
-				 MATTER_ATTR_SCALE, &v, NULL),
+	zassert_equal(find_write(RADIANT_MATTER_CLUSTER_PRESSURE_MEASUREMENT,
+				 RADIANT_MATTER_ATTR_SCALE, &v, NULL),
 		      1);
-	zassert_equal(v, MATTER_PRESSURE_SCALE);
+	zassert_equal(v, RADIANT_MATTER_PRESSURE_SCALE);
 	zassert_equal(v, -1, "%lld", (long long)v);
 
 	zassert_equal(ep_measured, ep_scaled);
@@ -480,11 +480,11 @@ ZTEST(radiant_matter, test_the_pressure_constant_is_written_once_not_per_sample)
 	 * constant re-written per sample would dirty a subscription path 4 Hz
 	 * for a value that never changes - the exact waste finding 7's
 	 * deadband argument is about. */
-	zassert_equal(find_write(MATTER_CLUSTER_PRESSURE_MEASUREMENT,
-				 MATTER_ATTR_SCALE, NULL, NULL),
+	zassert_equal(find_write(RADIANT_MATTER_CLUSTER_PRESSURE_MEASUREMENT,
+				 RADIANT_MATTER_ATTR_SCALE, NULL, NULL),
 		      1);
-	zassert_equal(find_write(MATTER_CLUSTER_PRESSURE_MEASUREMENT,
-				 MATTER_ATTR_SCALED_VALUE, NULL, NULL),
+	zassert_equal(find_write(RADIANT_MATTER_CLUSTER_PRESSURE_MEASUREMENT,
+				 RADIANT_MATTER_ATTR_SCALED_VALUE, NULL, NULL),
 		      5);
 }
 
@@ -507,16 +507,16 @@ ZTEST(radiant_matter, test_occupancy_declares_itself_as_not_a_pir)
 	radiant_bridge_post(&s);
 	radiant_bridge_drain();
 
-	zassert_equal(find_write(MATTER_CLUSTER_OCCUPANCY_SENSING,
-				 MATTER_ATTR_OCCUPANCY_SENSOR_TYPE, &v, NULL),
+	zassert_equal(find_write(RADIANT_MATTER_CLUSTER_OCCUPANCY_SENSING,
+				 RADIANT_MATTER_ATTR_OCCUPANCY_SENSOR_TYPE, &v, NULL),
 		      1);
-	zassert_equal(v, MATTER_OCCUPANCY_TYPE_PHYSICAL_CONTACT);
+	zassert_equal(v, RADIANT_MATTER_OCCUPANCY_TYPE_PHYSICAL_CONTACT);
 	zassert_not_equal(v, 0);
 
-	zassert_equal(find_write(MATTER_CLUSTER_OCCUPANCY_SENSING,
-				 MATTER_ATTR_OCCUPANCY_SENSOR_BITMAP, &v, NULL),
+	zassert_equal(find_write(RADIANT_MATTER_CLUSTER_OCCUPANCY_SENSING,
+				 RADIANT_MATTER_ATTR_OCCUPANCY_SENSOR_BITMAP, &v, NULL),
 		      1);
-	zassert_equal(v, MATTER_OCCUPANCY_BITMAP_PHYSICAL_CONTACT);
+	zassert_equal(v, RADIANT_MATTER_OCCUPANCY_BITMAP_PHYSICAL_CONTACT);
 }
 
 ZTEST(radiant_matter, test_a_battery_does_not_become_its_own_phantom_entity)
@@ -548,8 +548,8 @@ ZTEST(radiant_matter, test_a_battery_does_not_become_its_own_phantom_entity)
 
 	zassert_equal(radiant_matter_endpoint_count(), 1u, "got %u",
 		      (unsigned int)radiant_matter_endpoint_count());
-	zassert_equal(find_write(MATTER_CLUSTER_POWER_SOURCE,
-				 MATTER_ATTR_BAT_PERCENT_REMAINING, &v, &ep),
+	zassert_equal(find_write(RADIANT_MATTER_CLUSTER_POWER_SOURCE,
+				 RADIANT_MATTER_ATTR_BAT_PERCENT_REMAINING, &v, &ep),
 		      1);
 	zassert_equal(v, 160);
 	zassert_equal(ep, primary->endpoint_id);
@@ -575,8 +575,8 @@ ZTEST(radiant_matter, test_a_battery_with_no_primary_yet_is_deferred_not_dropped
 	radiant_bridge_drain();
 
 	zassert_equal(radiant_matter_endpoint_count(), 1u);
-	zassert_equal(find_write(MATTER_CLUSTER_POWER_SOURCE,
-				 MATTER_ATTR_BAT_PERCENT_REMAINING, NULL, NULL),
+	zassert_equal(find_write(RADIANT_MATTER_CLUSTER_POWER_SOURCE,
+				 RADIANT_MATTER_ATTR_BAT_PERCENT_REMAINING, NULL, NULL),
 		      1);
 }
 
@@ -709,8 +709,8 @@ ZTEST(radiant_matter, test_occupancy_is_on_change_only)
 	s = mk_at(13u, 0u, RADIANT_FIELD_OCCUPANCY, 1, 0, 1000000u);
 	s.flags = RADIANT_SAMPLE_DERIVED;
 	post_drain(&s);
-	zassert_equal(find_write(MATTER_CLUSTER_OCCUPANCY_SENSING,
-				 MATTER_ATTR_OCCUPANCY, NULL, NULL),
+	zassert_equal(find_write(RADIANT_MATTER_CLUSTER_OCCUPANCY_SENSING,
+				 RADIANT_MATTER_ATTR_OCCUPANCY, NULL, NULL),
 		      1);
 
 	/* The same boolean again. A threshold on a one-bit value can only be
@@ -718,23 +718,23 @@ ZTEST(radiant_matter, test_occupancy_is_on_change_only)
 	s = mk_at(13u, 0u, RADIANT_FIELD_OCCUPANCY, 1, 0, 2000000u);
 	s.flags = RADIANT_SAMPLE_DERIVED;
 	post_drain(&s);
-	zassert_equal(find_write(MATTER_CLUSTER_OCCUPANCY_SENSING,
-				 MATTER_ATTR_OCCUPANCY, NULL, NULL),
+	zassert_equal(find_write(RADIANT_MATTER_CLUSTER_OCCUPANCY_SENSING,
+				 RADIANT_MATTER_ATTR_OCCUPANCY, NULL, NULL),
 		      1);
 
 	s = mk_at(13u, 0u, RADIANT_FIELD_OCCUPANCY, 0, 0, 3000000u);
 	s.flags = RADIANT_SAMPLE_DERIVED;
 	post_drain(&s);
-	zassert_equal(find_write(MATTER_CLUSTER_OCCUPANCY_SENSING,
-				 MATTER_ATTR_OCCUPANCY, NULL, NULL),
+	zassert_equal(find_write(RADIANT_MATTER_CLUSTER_OCCUPANCY_SENSING,
+				 RADIANT_MATTER_ATTR_OCCUPANCY, NULL, NULL),
 		      2);
 
 	/* And the two constants are still written exactly once, at creation -
 	 * a deadband that suppressed the first sample's writes would have taken
 	 * OccupancySensorType with it, which is trap 16 arriving through the
 	 * back door. */
-	zassert_equal(find_write(MATTER_CLUSTER_OCCUPANCY_SENSING,
-				 MATTER_ATTR_OCCUPANCY_SENSOR_TYPE, NULL, NULL),
+	zassert_equal(find_write(RADIANT_MATTER_CLUSTER_OCCUPANCY_SENSING,
+				 RADIANT_MATTER_ATTR_OCCUPANCY_SENSOR_TYPE, NULL, NULL),
 		      1);
 }
 
@@ -789,8 +789,8 @@ ZTEST(radiant_matter, test_a_battery_and_its_primary_do_not_share_a_deadband)
 	/* 80 % -> 160 in the cluster's 0.5 % steps, onto the same endpoint. */
 	s = mk_at(14u, 1u, RADIANT_FIELD_BATTERY_SOC, 80, 0, 1100000u);
 	post_drain(&s);
-	zassert_equal(find_write(MATTER_CLUSTER_POWER_SOURCE,
-				 MATTER_ATTR_BAT_PERCENT_REMAINING, NULL, NULL),
+	zassert_equal(find_write(RADIANT_MATTER_CLUSTER_POWER_SOURCE,
+				 RADIANT_MATTER_ATTR_BAT_PERCENT_REMAINING, NULL, NULL),
 		      1);
 
 	/* The occupancy edge must still get through, and must not be measured
@@ -798,8 +798,8 @@ ZTEST(radiant_matter, test_a_battery_and_its_primary_do_not_share_a_deadband)
 	s = mk_at(14u, 0u, RADIANT_FIELD_OCCUPANCY, 0, 0, 1200000u);
 	s.flags = RADIANT_SAMPLE_DERIVED;
 	post_drain(&s);
-	zassert_equal(find_write(MATTER_CLUSTER_OCCUPANCY_SENSING,
-				 MATTER_ATTR_OCCUPANCY, NULL, NULL),
+	zassert_equal(find_write(RADIANT_MATTER_CLUSTER_OCCUPANCY_SENSING,
+				 RADIANT_MATTER_ATTR_OCCUPANCY, NULL, NULL),
 		      2);
 
 	/* And a 0.5 % battery step is still inside the battery's own 1 %
@@ -807,8 +807,8 @@ ZTEST(radiant_matter, test_a_battery_and_its_primary_do_not_share_a_deadband)
 	 * either. */
 	s = mk_at(14u, 1u, RADIANT_FIELD_BATTERY_SOC, 805, -1, 1300000u);
 	post_drain(&s);
-	zassert_equal(find_write(MATTER_CLUSTER_POWER_SOURCE,
-				 MATTER_ATTR_BAT_PERCENT_REMAINING, NULL, NULL),
+	zassert_equal(find_write(RADIANT_MATTER_CLUSTER_POWER_SOURCE,
+				 RADIANT_MATTER_ATTR_BAT_PERCENT_REMAINING, NULL, NULL),
 		      1);
 }
 
@@ -892,7 +892,7 @@ ZTEST(radiant_matter, test_a_forgotten_source_releases_its_endpoints_for_reuse)
 	s.flags = RADIANT_SAMPLE_DERIVED;
 	radiant_bridge_post(&s);
 	radiant_bridge_drain();
-	zassert_true(find_write(MATTER_CLUSTER_OCCUPANCY_SENSING, MATTER_ATTR_OCCUPANCY,
+	zassert_true(find_write(RADIANT_MATTER_CLUSTER_OCCUPANCY_SENSING, RADIANT_MATTER_ATTR_OCCUPANCY,
 				NULL, NULL) >= 1);
 }
 
@@ -928,9 +928,9 @@ ZTEST(radiant_matter, test_a_forgotten_source_creates_nothing_until_admitted)
 	radiant_bridge_post(&s);
 	radiant_bridge_drain();
 	zassert_not_null(radiant_matter_endpoint_for(3u, 0u));
-	zassert_equal(find_write(MATTER_CLUSTER_OCCUPANCY_SENSING,
-				 MATTER_ATTR_OCCUPANCY_SENSOR_TYPE, &v, NULL),
+	zassert_equal(find_write(RADIANT_MATTER_CLUSTER_OCCUPANCY_SENSING,
+				 RADIANT_MATTER_ATTR_OCCUPANCY_SENSOR_TYPE, &v, NULL),
 		      1);
-	zassert_equal(v, MATTER_OCCUPANCY_TYPE_PHYSICAL_CONTACT);
+	zassert_equal(v, RADIANT_MATTER_OCCUPANCY_TYPE_PHYSICAL_CONTACT);
 }
 
