@@ -820,7 +820,10 @@ class ChannelAnalyzer:
                             "the node's key: refused - a keyed receiver "
                             "takes no schema it cannot verify, or a peer "
                             "without the key could relabel the node's "
-                            "genuine data pages")
+                            "genuine data pages. (--compat-key applies to "
+                            "every telemetry channel in this run, so a "
+                            "genuinely plain node is flagged too: analyse "
+                            "it in a run without the key)")
         elif not schema.flags & (ap.TLM_FLAG_X_CONF | ap.TLM_FLAG_X_AUTH):
             # Reserved transform bits only: may_decode_data refuses the
             # data, and the data path says so.
@@ -2326,7 +2329,10 @@ def main() -> int:
                              "delivers no attestation at all reports "
                              "'unverified' rather than falling back to clear - "
                              "which is the whole of receiver-side downgrade "
-                             "protection")
+                             "protection. It applies to EVERY channel, so a "
+                             "0x60 telemetry node sending a plain descriptor "
+                             "set is refused and flagged (PLAIN under a key); "
+                             "analyse a plain node in a run without it")
     parser.add_argument("--epoch", type=int, default=1,
                         help="epoch the keys and nonces are derived under "
                              "(default: 1). It is not on the air; a receiver "

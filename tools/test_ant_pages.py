@@ -1945,11 +1945,11 @@ class TestTelemetryDescriptorAuth(unittest.TestCase):
             frames, desc_auth(epoch=0), from_epoch=DESC_AUTH_EPOCH - 5)
         self.assertIsNone(epoch)
         self.assertEqual(back.schema_id, 0x01)
-        self.assertTrue(back.keyed)
         self.assertFalse(back.authenticated)
         self.assertFalse(back.may_decode_data)
         with self.assertRaises(ValueError):
             ap.decode_tlm_data(back, sealed_page)
+        self.assertTrue(back.keyed)
         # Through the assembler, the same.
         rx = ap.TlmDescriptorRx()
         for f in frames:
@@ -1993,9 +1993,9 @@ class TestTelemetryDescriptorAuth(unittest.TestCase):
         back, epoch = ap.decode_tlm_descriptor(
             frames, desc_auth(epoch=0), from_epoch=DESC_AUTH_EPOCH - 5)
         self.assertIsNone(epoch)
-        self.assertTrue(back.keyed)
         self.assertFalse(back.authenticated)
         self.assertFalse(back.may_decode_data)
+        self.assertTrue(back.keyed)
 
     def test_every_altered_body_byte_fails(self):
         # Frame 1 (heartbeat, W, the clock nibble, the epoch) and every field
