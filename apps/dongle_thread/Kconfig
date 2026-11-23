@@ -38,6 +38,7 @@ choice ANT_DONGLE_TRANSPORT
 config ANT_DONGLE_TRANSPORT_USB_LEGACY
 	bool "USB, legacy device stack"
 	depends on DT_HAS_NORDIC_NRF_USBD_ENABLED
+	select RADIANT_HOST_LINK
 	help
 	  The proven path: this is the build verified against Zwift on the
 	  Feather, and the default anywhere it is available. Available means
@@ -48,6 +49,7 @@ config ANT_DONGLE_TRANSPORT_USB_LEGACY
 config ANT_DONGLE_TRANSPORT_USB_NEXT
 	bool "USB, new device stack (USBD/UDC)"
 	depends on DT_HAS_NORDIC_NRF_USBD_ENABLED || DT_HAS_SNPS_DWC2_ENABLED
+	select RADIANT_HOST_LINK
 	help
 	  Same device on the wire, different plumbing. Mandatory on nRF54: those
 	  parts carry a DesignWare DWC2 controller whose only Zephyr driver is
@@ -59,6 +61,7 @@ config ANT_DONGLE_TRANSPORT_USB_NEXT
 
 config ANT_DONGLE_TRANSPORT_UART
 	bool "Plain UART"
+	select RADIANT_HOST_LINK
 	help
 	  For parts with no USB device peripheral at all - the nRF54L05, L10 and
 	  L15 among them, and the choice this application's own P4 gate boards

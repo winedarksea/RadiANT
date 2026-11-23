@@ -227,12 +227,9 @@
 	"crystal always on. Turn it off for this build."
 #endif
 
-#if defined(CONFIG_RADIANT_CC26XX_XOSC_HF_RELEASE) && \
-	(defined(CONFIG_ANT_DONGLE_TRANSPORT_UART) || \
-	 defined(CONFIG_ANT_DONGLE_TRANSPORT_USB_LEGACY) || \
-	 defined(CONFIG_ANT_DONGLE_TRANSPORT_USB_NEXT))
+#if defined(CONFIG_RADIANT_CC26XX_XOSC_HF_RELEASE) && defined(CONFIG_RADIANT_HOST_LINK)
 #error "CONFIG_RADIANT_CC26XX_XOSC_HF_RELEASE is refused in an image with an ANT " \
-	"host link (CONFIG_ANT_DONGLE_TRANSPORT_*): a dongle's RF core is rarely off " \
+	"host link (CONFIG_RADIANT_HOST_LINK): a dongle's RF core is rarely off " \
 	"long enough to gain anything, and a host link on RCOSC_HF is untested. " \
 	"The option is for battery nodes (radiant/samples/hr_transmitter ti_lowpower.conf)."
 #endif

@@ -17,6 +17,7 @@ choice ANT_DONGLE_TRANSPORT
 
 config ANT_DONGLE_TRANSPORT_UART
 	bool "Plain UART"
+	select RADIANT_HOST_LINK
 	help
 	  The CP2102N-based module this board's UART stands in for is a
 	  Dynastream ANT2USB - a UART-to-USB bridge in a plastic shell, which is

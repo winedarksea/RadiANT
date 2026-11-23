@@ -16,6 +16,29 @@ config RADIANT
 	  build leaves this symbol at n, and that n is the positive assertion
 	  that the clean-room boundary held.
 
+config RADIANT_HOST_LINK
+	bool
+	help
+	  The image carries a host serial link (USB or UART) whose traffic
+	  keeps the radio busy, as a dongle's does. No prompt: the
+	  application's transport option selects it (the dongle's
+	  ANT_DONGLE_TRANSPORT_* do). Module options that only make sense
+	  for a battery node, such as RADIANT_CC26XX_XOSC_HF_RELEASE, are
+	  refused when it is set. Outside `if RADIANT` so a stub or sdk_ant
+	  build can select it without a dependency warning.
+
+config RADIANT_ANT_HEALTH_HOOK
+	bool
+	help
+	  The application defines radiant_ant_health_note() and is told about
+	  the runtime's silent loss and refusal events (sweep busy, receive
+	  for a channel op that moved on, scheduler windows missed, failed or
+	  denied, refused network keys). No prompt: an application selects it
+	  when it has somewhere to put them, as the dongle's
+	  ANT_DONGLE_HEALTH_COUNTERS does. Off, every report compiles to
+	  nothing. See <radiant/radiant_ant.h>. Outside `if RADIANT`, like
+	  RADIANT_HOST_LINK, so a non-radiant build can select it harmlessly.
+
 if RADIANT
 
 module = RADIANT
@@ -1293,17 +1316,6 @@ config RADIANT_ANT_API
 	  and the radiant_event_* functions) that a project using the
 	  low-level API writes for itself.
 
-config RADIANT_ANT_HEALTH_HOOK
-	bool
-	help
-	  The application defines radiant_ant_health_note() and is told about
-	  the runtime's silent loss and refusal events (sweep busy, receive
-	  for a channel op that moved on, scheduler windows missed, failed or
-	  denied, refused network keys). No prompt: an application selects it
-	  when it has somewhere to put them, as the dongle's
-	  ANT_DONGLE_HEALTH_COUNTERS does. Off, every report compiles to
-	  nothing. See <radiant/radiant_ant.h>.
-
 config RADIANT_PHY_LR_CODED
 	bool "advertise the coded (LE Coded S=8) PHY"
 	depends on RADIANT_BACKEND_NRF
@@ -1958,7 +1970,7 @@ config RADIANT_CC26XX_XOSC_HF_RELEASE
 
 	  Enabled only in radiant/samples/hr_transmitter/ti_lowpower.conf.
 	  Refused at compile time, as policy, in any image with an ANT host
-	  link (CONFIG_ANT_DONGLE_TRANSPORT_*, e.g. apps/dongle_ti): a
+	  link (RADIANT_HOST_LINK, e.g. apps/dongle_ti): a
 	  dongle's RF core is rarely off long enough to gain anything, and
 	  a host link on RCOSC_HF is untested. Also refused on the
 	  cc2652p_dongle and on 802.15.4/BLE coexistence builds, as
