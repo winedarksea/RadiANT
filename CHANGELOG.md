@@ -37,7 +37,7 @@ reads.
   **Renamed since v1.2.0** (and since master before 2026-11-22): `antr_` is
   `radiant_ant_`, `ANTW_` is `RADIANT_WIRE_`, exported `profile_`/`node_`
   names are `radiant_profile_`/`radiant_node_`, the bridge's `MATTER_*`
-  macros are `RADIANT_MATTER_*`, and `#include "profile_hr.h"` or
+  macros are `RADIANT_MATTER_*`, and `#include "profile_*.h"` or
   `"radiant_bridge.h"` is `#include <radiant/radiant_profile_hr.h>` or
   `<radiant/radiant_bridge.h>`. Run `scripts/migrate_radiant_names.py <your
   dirs>` to rewrite your code.
