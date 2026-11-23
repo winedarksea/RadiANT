@@ -450,41 +450,110 @@ class TheWorkflowsThemselvesAreWellFormed(unittest.TestCase):
     FROZEN = REPO / ".github" / "west-release-frozen.yml"
     LOCK = REPO / ".github" / "release-build-requirements.txt"
     SHA40 = re.compile(r"^[0-9a-f]{40}$")
-    TAG_GUARD = "!startsWith(github.ref, 'refs/tags/v')"
+    # The only actions build-core may run. Anything else - actions/cache, a
+    # third-party ccache action, the Zephyr setup action - is a way back in
+    # for a cache or an unpinned download, so it has to be argued for here.
+    ALLOWED_USES = ("actions/checkout@", "actions/setup-python@",
+                    "actions/upload-artifact@", "./app/.github/actions/")
+    # Shell that fetches code or rewires the manifest outside the pinned paths.
+    FORBIDDEN_RUN = (
+        (r"\bgit\s+clone\b", "git clone"),
+        (r"\bgh\s+release\s+download\b", "gh release download"),
+        (r"\bpip3?\s+download\b", "pip download"),
+        (r"\|\s*(sudo\s+)?(ba|z)?sh\b", "a download piped into a shell"),
+        (r"\bwest\s+config\s+manifest\b", "west config manifest.*"),
+        (r"\bwest\s+update\b[^\n]*--mf\b", "west update --mf"),
+        (r"\bwest\s+update\b[^\n]*(-m|--manifest)\b", "west update -m"),
+    )
+
+    @staticmethod
+    def _indent(line):
+        return len(line) - len(line.lstrip())
 
     def job_steps(self, path, job):
-        """The steps of one job as lists of (lineno, line), comments dropped.
+        """The steps of one job, parsed just far enough for these checks.
 
-        Comment lines are dropped so that a comment which names the setup
-        action or a cache (as build-core's own explanation does) is not read
-        as a use of it."""
+        Each step is a dict: line (1-based), name, uses, with {key: value},
+        env {key: value}, run (the shell body, whatever YAML form it was
+        written in: `|`, `|-`, `>`, or inline). Not a YAML parser: steps are
+        the `      - ` items, their keys sit at indent 8, and `with:`/`env:`
+        entries one level deeper. A YAML comment line between keys is
+        skipped; a `#` line inside a run block is shell and stays in run."""
         lines = path.read_text(encoding="utf-8").splitlines()
         header = re.compile(r"^  [A-Za-z0-9_-]+:\s*$")
-        inside = False
-        steps = []
-        for n, line in enumerate(lines, 1):
-            if not inside:
-                inside = line.rstrip() == f"  {job}:"
-                continue
-            if header.match(line) or (line and not line[0].isspace()):
+        start = next((i for i, ln in enumerate(lines)
+                      if ln.rstrip() == f"  {job}:"), None)
+        self.assertIsNotNone(start, f"no job {job} in {path.name}")
+        body = []
+        for ln in lines[start + 1:]:
+            if header.match(ln) or (ln and not ln[0].isspace()):
                 break
-            if line.lstrip().startswith("#") or not line.strip():
+            body.append(ln)
+        base = start + 2  # 1-based line number of body[0]
+        in_steps = False
+        steps = []
+        i = 0
+        while i < len(body):
+            ln = body[i]
+            if ln.rstrip() == "    steps:":
+                in_steps = True
+                i += 1
                 continue
-            if line.startswith("      - "):
-                steps.append([])
-            if steps:
-                steps[-1].append((n, line))
+            if not in_steps:
+                i += 1
+                continue
+            if ln.startswith("      - "):
+                steps.append({"line": base + i, "name": "", "uses": "",
+                              "with": {}, "env": {}, "run": None})
+                ln = "        " + ln[8:]  # the item's first key is at indent 8
+            if not steps or not ln.strip() or ln.lstrip().startswith("#"):
+                i += 1
+                continue
+            step = steps[-1]
+            m = re.match(r"^        ([A-Za-z0-9_-]+):\s*(.*?)\s*$", ln)
+            if not m:
+                i += 1
+                continue
+            key, val = m.group(1), m.group(2)
+            i += 1
+            if key in ("with", "env") and not val:
+                while i < len(body) and (not body[i].strip()
+                                         or self._indent(body[i]) > 8):
+                    sub = re.match(r"^\s+([A-Za-z0-9_-]+):\s*(.*?)\s*$",
+                                   body[i])
+                    if sub and self._indent(body[i]) == 10:
+                        step[key][sub.group(1)] = sub.group(2).strip("'\"")
+                    i += 1
+            elif key == "run" and re.match(r"^[|>][-+]?$", val):
+                block = []
+                while i < len(body) and (not body[i].strip()
+                                         or self._indent(body[i]) > 8):
+                    block.append(body[i])
+                    i += 1
+                text = textwrap.dedent("\n".join(block)).strip("\n")
+                if val.startswith(">"):
+                    text = " ".join(text.split("\n"))
+                step["run"] = text
+            elif key == "run":
+                step["run"] = val.strip("'\"")
+            elif key in ("name", "uses"):
+                step[key] = val.split(" #")[0].strip("'\"")
         self.assertTrue(steps, f"no steps found for job {job} in {path.name}")
         return steps
 
-    @staticmethod
-    def step_text(step):
-        return "\n".join(line for _, line in step)
+    def build_core(self):
+        return self.job_steps(self.RELEASE, "build-core")
 
     @staticmethod
-    def step_name(step):
-        m = re.search(r"-?\s*name:\s*(.+)$", step[0][1])
-        return m.group(1).strip() if m else step[0][1].strip()
+    def where(step):
+        return f"release.yml:{step['line']} ({step['name'] or step['uses']})"
+
+    @staticmethod
+    def commands(run):
+        """Shell commands of a run body, continuation lines folded."""
+        folded = re.sub(r"\\\n\s*", " ", run or "")
+        return [c for c in folded.splitlines()
+                if c.strip() and not c.lstrip().startswith("#")]
 
     def manifest_projects(self, path):
         """{name: revision or None} for the top-level `projects:` list of a
@@ -518,60 +587,112 @@ class TheWorkflowsThemselvesAreWellFormed(unittest.TestCase):
                 projects[current] = r.group(1).strip("'\"")
         return projects
 
-    def test_build_core_restores_no_cache_and_drops_the_setup_action(self):
-        """No actions/cache restore on a tag, and no action-zephyr-setup (it
-        restores its own SDK, pip and ccache caches)."""
+    def test_the_step_parser_reads_every_run_form(self):
+        """The checks below are only as good as this parse."""
+        with tempfile.TemporaryDirectory() as tmp:
+            wf = Path(tmp) / "w.yml"
+            wf.write_text(textwrap.dedent("""\
+                jobs:
+                  j:
+                    runs-on: x
+                    steps:
+                      - name: a
+                        run: curl -fsSL https://x | sh
+                      # a YAML comment between steps
+                      - uses: actions/setup-python@abc # v5
+                        with:
+                          python-version: "3.12"
+                          cache: pip
+                      - name: b
+                        env:
+                          K: v
+                        run: |-
+                          echo one
+                          # shell comment
+                          echo two
+                      - name: c
+                        run: >
+                          echo
+                          folded
+                  k:
+                    steps:
+                      - run: never
+                """), encoding="utf-8")
+            steps = self.job_steps(wf, "j")
+        self.assertEqual(len(steps), 4)
+        self.assertEqual(steps[0]["run"], "curl -fsSL https://x | sh")
+        self.assertEqual(steps[1]["uses"], "actions/setup-python@abc")
+        self.assertEqual(steps[1]["with"],
+                         {"python-version": "3.12", "cache": "pip"})
+        self.assertEqual(steps[2]["env"], {"K": "v"})
+        self.assertEqual(steps[2]["run"],
+                         "echo one\n# shell comment\necho two")
+        self.assertEqual(steps[3]["run"], "echo folded")
+
+    def test_build_core_runs_only_allowlisted_actions_with_no_cache(self):
+        """No actions/cache, no action-zephyr-setup (it restores its own SDK,
+        pip and ccache caches), no third-party cache action, and no `cache:`
+        input on the actions it does use (setup-python's `cache: pip`)."""
         offenders = []
-        for step in self.job_steps(self.RELEASE, "build-core"):
-            text = self.step_text(step)
-            line = step[0][0]
-            if "action-zephyr-setup" in text:
-                offenders.append(f"release.yml:{line}: action-zephyr-setup")
-            if re.search(r"uses:\s*actions/cache[@/]", text) and \
-                    self.TAG_GUARD not in text:
-                offenders.append(f"release.yml:{line}: actions/cache with no "
-                                 f"`if: {self.TAG_GUARD}`")
+        for step in self.build_core():
+            if step["uses"] and not step["uses"].startswith(
+                    self.ALLOWED_USES):
+                offenders.append(f"{self.where(step)}: uses {step['uses']}")
+            for key in step["with"]:
+                if key.startswith("cache"):
+                    offenders.append(f"{self.where(step)}: with {key}:")
         self.assertEqual(offenders, [],
                          "build-core cuts the shipping images and must not "
                          "restore what master CI runs wrote:\n  "
                          + "\n  ".join(offenders))
 
     def test_build_core_build_step_turns_ccache_off(self):
-        builds = [s for s in self.job_steps(self.RELEASE, "build-core")
-                  if self.step_name(s) == "Build"]
+        builds = [s for s in self.build_core() if s["name"] == "Build"]
         self.assertEqual(len(builds), 1, "build-core has no single Build step")
-        text = self.step_text(builds[0])
-        self.assertIn("-DUSE_CCACHE=0", text)
+        self.assertIn("-DUSE_CCACHE=0", builds[0]["run"] or "")
         # The -D only reaches the sysbuild cache, not the dongle image; a dry
         # run found ccache still wrapping the image's compiles without this.
-        self.assertRegex(text, r"(?m)^\s+CCACHE_DISABLE:\s*[\"']?1[\"']?\s*$")
+        self.assertEqual(builds[0]["env"].get("CCACHE_DISABLE"), "1")
+
+    def test_build_core_shell_fetches_nothing_outside_the_pins(self):
+        offenders = []
+        for step in self.build_core():
+            for pattern, what in self.FORBIDDEN_RUN:
+                if re.search(pattern, step["run"] or ""):
+                    offenders.append(f"{self.where(step)}: {what}")
+        self.assertEqual(offenders, [], "\n  ".join([""] + offenders))
 
     def test_every_build_core_download_is_digest_checked(self):
         """Each download goes through a <X>_URL env value with a <X>_SHA256
-        beside it, and the step runs `sha256sum -c` on it. The SDK and the
-        arm toolchain must be among them: they used to come from the setup
-        action's unchecked wget."""
+        beside it, and the step runs an unguarded `sha256sum -c` under
+        `set -e`. The SDK and the arm toolchain must be among them: they used
+        to come from the setup action's unchecked wget."""
         offenders = []
         urls = []
-        for step in self.job_steps(self.RELEASE, "build-core"):
-            text = self.step_text(step)
-            run = text.split("run: |", 1)[1] if "run: |" in text else ""
+        for step in self.build_core():
+            run = step["run"] or ""
             if not re.search(r"\b(curl|wget)\b", run):
                 continue
-            where = f"release.yml:{step[0][0]} ({self.step_name(step)})"
+            where = self.where(step)
             if re.search(r"https?://", run):
                 offenders.append(f"{where}: a literal URL in run:, not in env")
-            if "sha256sum -c" not in run:
+            checks = [c for c in self.commands(run) if "sha256sum" in c]
+            if not any("sha256sum -c" in c for c in checks):
                 offenders.append(f"{where}: downloads with no sha256sum -c")
-            env_urls = re.findall(r"^\s+([A-Z0-9_]+)_URL:\s*(\S+)\s*$", text,
-                                  re.M)
+            for c in checks:
+                if "||" in c or re.match(r"^\s*!", c):
+                    offenders.append(f"{where}: guarded checksum: {c.strip()}")
+            if not re.search(r"(?m)^\s*set -[a-z]*e", run):
+                offenders.append(f"{where}: no `set -e`, so a failed "
+                                 "checksum would not stop the step")
+            env_urls = [(k[:-4], v) for k, v in step["env"].items()
+                        if k.endswith("_URL")]
             if not env_urls:
                 offenders.append(f"{where}: downloads, but no *_URL env")
             for key, url in env_urls:
                 urls.append(url)
-                digest = re.search(rf"^\s+{key}_SHA256:\s*([0-9a-f]{{64}})\s*$",
-                                   text, re.M)
-                if not digest:
+                digest = step["env"].get(f"{key}_SHA256", "")
+                if not re.fullmatch(r"[0-9a-f]{64}", digest):
                     offenders.append(f"{where}: {key}_URL has no {key}_SHA256")
                 elif f"${{{key}_SHA256}}" not in run:
                     offenders.append(f"{where}: {key}_SHA256 is never checked")
@@ -589,12 +710,9 @@ class TheWorkflowsThemselvesAreWellFormed(unittest.TestCase):
                          "west.yml pins sdk-nrf by a name that can be moved")
 
     def test_build_core_pip_installs_are_hash_locked(self):
-        installs = []
-        for step in self.job_steps(self.RELEASE, "build-core"):
-            # Fold shell continuations so one command is one string.
-            text = re.sub(r"\\\n\s*", " ", self.step_text(step))
-            installs += [c for c in text.splitlines()
-                         if re.search(r"\bpip3?\s+install\b", c)]
+        installs = [c for s in self.build_core()
+                    for c in self.commands(s["run"])
+                    if re.search(r"\bpip3?\s+install\b", c)]
         self.assertTrue(installs, "build-core installs no Python packages; "
                                   "where does west come from?")
         for cmd in installs:
@@ -615,11 +733,10 @@ class TheWorkflowsThemselvesAreWellFormed(unittest.TestCase):
     def test_build_core_uses_a_frozen_manifest_that_agrees_with_west_yml(self):
         """sdk-nrf's own manifest pins zephyr, mcuboot and others by tag, so
         pinning nrf in west.yml is not enough on its own."""
-        init = [line for s in self.job_steps(self.RELEASE, "build-core")
-                for _, line in s if "west init" in line]
+        init = [c.strip() for s in self.build_core()
+                for c in self.commands(s["run"]) if "west init" in c]
         self.assertEqual(
-            [i.strip() for i in init],
-            ["west init -l app --mf .github/west-release-frozen.yml"])
+            init, ["west init -l app --mf .github/west-release-frozen.yml"])
         frozen = self.manifest_projects(self.FROZEN)
         self.assertIn("zephyr", frozen)
         loose = {k: v for k, v in frozen.items()
@@ -628,9 +745,11 @@ class TheWorkflowsThemselvesAreWellFormed(unittest.TestCase):
         self.assertNotRegex(self.FROZEN.read_text(encoding="utf-8"),
                             r"(?m)^\s*import:",
                             "a frozen manifest must not import anything")
+        # Every west.yml project the release lane uses must be pinned the same
+        # way in both files. sdk-ant is not in the frozen file (inactive).
         for name, rev in self.manifest_projects(REPO / "west.yml").items():
-            if rev and self.SHA40.match(rev) and name in frozen:
-                self.assertEqual(frozen[name], rev,
+            if name in frozen:
+                self.assertEqual(rev, frozen[name],
                                  f"{name}: west.yml and the frozen manifest "
                                  "disagree; regenerate the frozen file")
 
