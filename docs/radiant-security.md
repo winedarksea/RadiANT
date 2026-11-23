@@ -1207,6 +1207,13 @@ core, `-Os`); the times are that core, 16 calls timed on the 32768 Hz kernel
 counter, and include the KDF, the CMAC over at most 106 bytes and the
 encoding. A node seals once per epoch change, not per cycle.
 
+2026-11-23, the plain-set refusal (security review 2026-11-22): a keyed
+receiver grows by **+34 B** — `radiant_profile_desc_rx_take_auth` +22 and
+`radiant_profile_desc_may_decode_data` +12, both measured as a standalone
+Cortex-M33 `-Os` object against the parent commit. The standard devices and
+every dongle image still link neither symbol (`nm --defined-only`), so the
++20 B row and the dongle's security text gate are unchanged.
+
 ---
 
 ## 6. Threat model
