@@ -258,8 +258,9 @@ min_scenarios: 29
 # 2026-11-23: +16 (security review 2026-11-22 item 2, wip/s22-incline-range):
 # +2 per unit scenario (fec_tx: raw 40001 and 0xFFFE clamp to +200.00 %), +4 in
 # treadmill.pages (machine range: sim clamp, explicit incline and speed refused,
-# 0 always in range).
-min_testcases: 8220
+# 0 always in range); review nits +2 there (incline conversion saturates, an
+# over-wide range narrows to the wire).
+min_testcases: 8222
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -349,8 +350,9 @@ min_cases.radiant.backend.d2: 70
 # nRF rows (filter_wildcard_dev true). 70, the observed count (2026-11-21).
 min_cases.radiant.backend.short_match: 70
 min_cases.hrm_ble.sim_sched: 4
-# 2026-11-23: +4 (security review 2026-11-22 item 2: the machine range).
-min_cases.treadmill.pages: 24
+# 2026-11-23: +4 (security review 2026-11-22 item 2: the machine range), +2
+# (review nits: conversion saturation, over-wide range narrowing).
+min_cases.treadmill.pages: 26
 min_cases.treadmill.hr_rx: 3
 # 2026-11-20: +3 (HAL drift item 5, as radiant.unit).
 # 2026-11-20: +1 (the ETIME retry re-read, as radiant.unit).

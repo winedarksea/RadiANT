@@ -384,6 +384,14 @@ uint8_t treadmill_rsc_cadence_from_strides(uint32_t strides_min_16)
 
 int16_t treadmill_ftms_incline_from_fec(int32_t centi_pct)
 {
+	/* Saturate first, which also keeps INT32_MIN away from the negation
+	 * below. -327680 and +327670 are the inputs that land exactly on the
+	 * int16 ends after rounding. */
+	if (centi_pct < -327680) {
+		centi_pct = -327680;
+	} else if (centi_pct > 327670) {
+		centi_pct = 327670;
+	}
 	/* Round to nearest, away from zero, so a small negative grade keeps
 	 * its sign instead of becoming a positive zero. */
 	if (centi_pct >= 0) {

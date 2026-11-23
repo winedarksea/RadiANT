@@ -457,6 +457,54 @@ ZTEST(treadmill_pages, test_explicit_speed_out_of_range_is_refused)
 		      NULL);
 }
 
+ZTEST(treadmill_pages, test_ftms_incline_conversion_saturates)
+{
+	struct treadmill_state s;
+
+	/* The BLE grade seam converts an int32 provider grade to int16 deci.
+	 * A wrap would turn -400 % into a climb and then clamp it to the
+	 * machine MAXIMUM; saturating keeps it a descent. */
+	zassert_equal(treadmill_ftms_incline_from_fec(-400000), -32768, NULL);
+	zassert_equal(treadmill_ftms_incline_from_fec(INT32_MIN), -32768, NULL);
+	zassert_equal(treadmill_ftms_incline_from_fec(400000), 32767, NULL);
+	zassert_equal(treadmill_ftms_incline_from_fec(INT32_MAX), 32767, NULL);
+	zassert_equal(treadmill_ftms_incline_from_fec(-327680), -32768, NULL);
+	zassert_equal(treadmill_ftms_incline_from_fec(327670), 32767, NULL);
+
+	machine_init(&s);
+	zassert_equal(treadmill_state_request_incline(
+			      &s, treadmill_fec_incline_from_ftms(
+					  treadmill_ftms_incline_from_fec(-400000))),
+		      MACHINE_MIN_CENTI, NULL);
+}
+
+ZTEST(treadmill_pages, test_an_over_wide_range_narrows_to_the_wire)
+{
+	struct treadmill_state s;
+
+	treadmill_state_init(&s);
+	s.target_incline_centi_pct = 9000;
+	s.target_speed_mm_s = 15000u;
+
+	/* Wider than page 17 can report and faster than SDM can say: the
+	 * limits land on the wire span, not past it. */
+	zassert_equal(treadmill_state_set_limits(&s, -20000, 20000, 20000u), 0,
+		      NULL);
+	zassert_equal(s.min_incline_centi_pct, -10000, NULL);
+	zassert_equal(s.max_incline_centi_pct, 10000, NULL);
+	zassert_equal(s.max_speed_mm_s, 15996u, NULL);
+	zassert_equal(treadmill_state_command_incline(&s, 10001, NULL), -ERANGE,
+		      NULL);
+
+	/* Narrowing below the current targets pulls them in. */
+	zassert_equal(treadmill_state_set_limits(&s, MACHINE_MIN_CENTI,
+						 MACHINE_MAX_CENTI,
+						 MACHINE_MAX_MM_S),
+		      0, NULL);
+	zassert_equal(s.target_incline_centi_pct, MACHINE_MAX_CENTI, NULL);
+	zassert_equal(s.target_speed_mm_s, MACHINE_MAX_MM_S, NULL);
+}
+
 ZTEST(treadmill_pages, test_machine_range_always_contains_zero)
 {
 	struct treadmill_state s;

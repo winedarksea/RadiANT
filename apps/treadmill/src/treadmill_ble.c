@@ -1081,7 +1081,9 @@ void treadmill_ble_state_changed(const struct treadmill_state *s)
 			int32_t adopted = 0;
 
 			/* A simulation grade, like FE-C page 51: clamped
-			 * to the machine range, never refused. */
+			 * to the machine range, never refused. The
+			 * conversion saturates, so a huge negative grade
+			 * stays a descent instead of wrapping to a climb. */
 			(void)treadmill_node_sim_incline_deci(
 				treadmill_ftms_incline_from_fec(grade),
 				&adopted);

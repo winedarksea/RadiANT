@@ -197,8 +197,10 @@ int treadmill_state_set_limits(struct treadmill_state *s,
  *   request_*()  SIMULATION. FE-C page 51's grade and the BLE grade seam are
  *                a virtual road, not an order to the deck; the road may be
  *                steeper than the machine. CLAMPS to the machine range and
- *                returns the value adopted, which is what page 71 reports
- *                (PASS: the machine is doing the closest thing it can).
+ *                returns the value adopted, which goes to the actuator.
+ *                Page 71 still echoes the controller's raw request with
+ *                PASS (the machine is doing the closest thing it can);
+ *                page 17 then reports the clamped incline.
  *
  *   command_*()  EXPLICIT. FTMS Set Target Inclination / Speed name a
  *                setpoint, and the client was told the legal span by the
@@ -264,6 +266,8 @@ uint8_t treadmill_rsc_cadence_from_strides(uint32_t strides_min_16);
 /*
  * FE-C's 0.01 % to FTMS's 0.1 %, rounding to nearest and away from zero so a
  * commanded -0.05 % does not come back as 0.0 % with the sign lost.
+ * Saturates at the int16 ends: a wrap would turn a steep descent into a
+ * climb, which a clamp downstream would then send to the machine maximum.
  */
 int16_t treadmill_ftms_incline_from_fec(int32_t centi_pct);
 

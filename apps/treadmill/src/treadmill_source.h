@@ -94,8 +94,10 @@ struct treadmill_source_api {
 	void (*poll)(const struct treadmill_source *src);
 
 	/*
-	 * MOVE THE DECK. `centi_pct` is 0.01 % grade, already clamped to what
-	 * FE-C page 17 can report back (±100.00 %).
+	 * MOVE THE DECK. `centi_pct` is 0.01 % grade, already inside the
+	 * machine range (CONFIG_TREADMILL_MIN/MAX_INCLINE_DECI, enforced in
+	 * treadmill_state.c for every command path), which is itself inside
+	 * what FE-C page 17 can report back (±100.00 %).
 	 *
 	 * Return 0 if the command was accepted (the actuator will get there in
 	 * its own time - this is not a completion), -ENOTSUP if this machine
@@ -112,7 +114,8 @@ struct treadmill_source_api {
 	int (*set_incline)(const struct treadmill_source *src,
 			   int32_t centi_pct);
 
-	/* MOVE THE BELT. `mm_s`, same three-answer contract. */
+	/* MOVE THE BELT. `mm_s`, already at most
+	 * CONFIG_TREADMILL_MAX_SPEED_CENTI_KPH; same three-answer contract. */
 	int (*set_speed)(const struct treadmill_source *src, uint32_t mm_s);
 };
 
