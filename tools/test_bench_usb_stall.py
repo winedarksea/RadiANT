@@ -93,6 +93,26 @@ class Supported(unittest.TestCase):
                 b.suspend_supported("linux", os.path.join(root, "absent")))
 
 
+class CountResets(unittest.TestCase):
+    LOG = (
+        "[   1.0] usb 5-1: new full-speed USB device number 24 using xhci_hcd\n"
+        "[ 200.1] usb 5-1: reset full-speed USB device number 24 using xhci_hcd\n"
+        "[ 210.4] usb 5-1.2: reset full-speed USB device number 7 using xhci_hcd\n"
+        "[ 220.9] usb 15-1: reset high-speed USB device number 3 using xhci_hcd\n"
+        "[ 230.2] usb 5-1: reset full-speed USB device number 24 using xhci_hcd\n"
+        "[ 240.0] usb 5-1: USB disconnect, device number 24\n"
+    )
+
+    def test_counts_only_this_device(self):
+        self.assertEqual(b.count_resets(self.LOG, "5-1"), 2)
+        self.assertEqual(b.count_resets(self.LOG, "5-1.2"), 1)
+        self.assertEqual(b.count_resets(self.LOG, "15-1"), 1)
+
+    def test_enumeration_and_disconnect_are_not_resets(self):
+        self.assertEqual(b.count_resets(self.LOG, "1-1"), 0)
+        self.assertEqual(b.count_resets("", "5-1"), 0)
+
+
 class WaitRuntimeStatus(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

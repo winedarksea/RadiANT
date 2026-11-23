@@ -81,7 +81,16 @@ PM, run as root:
   3. flood requests and count the replies, then read the 0xF6 counters
   4. put power/control and the delay back as they were
 
-Pass is every per-cycle reply plus every flood reply. The reopen skips
+Pass is every per-cycle reply, every flood reply, and no bus reset in the
+kernel log (`usb <dev>: reset`, so this needs dmesg, i.e. root). The last
+one is the check that catches the unfixed firmware on Linux: there the
+replies keep coming, because once the leak has taken the buffer pool the
+device cannot answer the post-resume GET_STATUS, the hub driver falls back
+to a reset-resume, and the reset dequeues every leaked buffer. Measured
+2026-11-23 on a Feather with counters added: the outstanding bulk-OUT
+buffers climbed by one per cycle and a reset cancelled ~30 of them at once.
+A host without that fallback would be left with a device that answers
+nothing. The reopen skips
 SET_CONFIGURATION on purpose: Linux sends a repeat SET_CONFIGURATION for it,
 which resets the host's data toggles but not USBD's (usbd_ch9.c returns early
 on the current value), and the first packet after that can be lost as a
@@ -95,6 +104,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
+import subprocess
 import sys
 import threading
 import time
@@ -361,6 +372,32 @@ def find_without_set_configuration(serial: str | None, wait_s: float):
     return dev
 
 
+def count_resets(kernel_log: str, name: str) -> int:
+    """Count the kernel's "usb <name>: reset ..." lines in dmesg text.
+
+    The hub driver logs one per bus reset it issues, including the
+    reset-resume it falls back to when a resumed device does not answer.
+    That fallback is how the unfixed firmware hides on Linux: once the
+    leaked bulk-OUT buffers have taken the UDC pool, the device cannot
+    answer the control request the host sends after resume, the host resets
+    it, and the reset dequeues every leaked buffer. Each later request then
+    works, so only the reset gives it away. The name must match exactly:
+    "5-1" is not "5-1.2".
+    """
+    pattern = re.compile(r"\busb " + re.escape(name) + r": reset ")
+    return sum(1 for line in kernel_log.splitlines() if pattern.search(line))
+
+
+def read_kernel_log() -> str | None:
+    """dmesg output, or None when it cannot be read (it needs root)."""
+    try:
+        done = subprocess.run(["dmesg"], capture_output=True, text=True,
+                              check=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return done.stdout
+
+
 def wait_runtime_status(path: str, want: str, timeout_s: float):
     """Poll power/runtime_status until it reads `want`. -> (reached, last)."""
     deadline = time.monotonic() + timeout_s
@@ -434,7 +471,14 @@ def run_suspend_cycles(args) -> int:
     power = os.path.join(sysdir, "power")
     print(f"Device {name} ({sysdir}), serial {_serial_of(dev)}")
 
+    # Asked twice if need be: if the last tool to open the board sent
+    # SET_CONFIGURATION, host and device disagree on the OUT data toggle and
+    # the first packet of this session is dropped as a duplicate (see the
+    # module docstring). The second one is in step again.
     before = read_health(dev, FrameReader(dev), "baseline")
+    if before is None:
+        print("  no 0xF6 reply to the first request, asking again")
+        before = read_health(dev, FrameReader(dev), "baseline")
     if before is None:
         sys.exit("no usable 0xF6 reply: build with health.conf, so the "
                  "rx_backpressure counter can be read")
@@ -452,6 +496,12 @@ def run_suspend_cycles(args) -> int:
                "counters_before": before, "cycles": []}
     first_failure = None
     consecutive = 0
+    log = read_kernel_log()
+    if log is None:
+        sys.exit("cannot read the kernel log (dmesg): run as root. The bus "
+                 "resets it records are the only\nhost-visible sign of the "
+                 "leak, so the test cannot judge without it.")
+    resets0 = resets_seen = count_resets(log, name)
     suspended_ms0 = parse_sysfs_int(_sysfs_read(suspended_time_path))
     try:
         _sysfs_write(delay_path, str(args.autosuspend_ms))
@@ -471,11 +521,17 @@ def run_suspend_cycles(args) -> int:
                 first_failure = first_failure or cycle
                 break
             rtt = capabilities_round_trip(dev, args.resume_timeout)
+            now = count_resets(read_kernel_log() or "", name)
+            reset = now > resets_seen
+            resets_seen = max(now, resets_seen)
             results["cycles"].append({"cycle": cycle, "suspended": reached,
-                                      "round_trip_s": rtt})
+                                      "round_trip_s": rtt, "reset": reset})
             tag = "suspended" if reached else f"NOT suspended ({state})"
             shown = f"{rtt * 1000:.1f} ms" if rtt is not None else "NO REPLY"
-            print(f"  cycle {cycle:3d}: {tag}, capabilities {shown}")
+            print(f"  cycle {cycle:3d}: {tag}, capabilities {shown}"
+                  + (", HOST RESET THE DEVICE" if reset else ""))
+            if reset:
+                first_failure = first_failure or cycle
             if rtt is None:
                 first_failure = first_failure or cycle
                 consecutive += 1
@@ -505,7 +561,9 @@ def run_suspend_cycles(args) -> int:
     done = results["cycles"]
     suspended = sum(1 for c in done if c["suspended"])
     answered = sum(1 for c in done if c["round_trip_s"] is not None)
+    resets = resets_seen - resets0
     results.update({
+        "bus_resets": resets,
         "cycles_run": len(done), "cycles_suspended": suspended,
         "cycles_answered": answered, "first_failure": first_failure,
         "suspended_ms": suspended_ms, "flood_written": written,
@@ -524,6 +582,9 @@ def run_suspend_cycles(args) -> int:
          f"{answered}/{args.suspend_cycles}"
          + (f", first failure at cycle {first_failure}"
             if first_failure else "")),
+        ("no bus reset during the cycles (no reset-resume)",
+         resets == 0, f"{resets} reset(s)"
+         + (f", first at cycle {first_failure}" if resets else "")),
         ("every flood request answered",
          written == replies == args.flood, f"{replies}/{args.flood}"),
         ("0xF6 answers after the cycles", after is not None,
