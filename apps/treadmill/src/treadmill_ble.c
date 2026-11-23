@@ -255,15 +255,17 @@ BUILD_ASSERT(TD_RECORD_LEN <= 20u,
 /* ---------------------------------------------------------------------------
  * The ranges this machine advertises, which must agree with what
  * treadmill_source will actually accept - a client reads them to learn the
- * legal span before commanding one.
+ * legal span before commanding one. They are the transport-neutral machine
+ * range (CONFIG_TREADMILL_MIN/MAX_*), the same values treadmill_state.c
+ * bounds every command path with, FE-C included.
  * ---------------------------------------------------------------------------
  */
 #define SPEED_MIN_CENTI_KPH 0u
-#define SPEED_MAX_CENTI_KPH ((uint16_t)CONFIG_TREADMILL_BLE_MAX_SPEED_CENTI_KPH)
+#define SPEED_MAX_CENTI_KPH ((uint16_t)CONFIG_TREADMILL_MAX_SPEED_CENTI_KPH)
 #define SPEED_STEP_CENTI_KPH 10u /* 0.10 km/h */
 
-#define INCLINE_MIN_DECI ((int16_t)CONFIG_TREADMILL_BLE_MIN_INCLINE_DECI)
-#define INCLINE_MAX_DECI ((int16_t)CONFIG_TREADMILL_BLE_MAX_INCLINE_DECI)
+#define INCLINE_MIN_DECI ((int16_t)CONFIG_TREADMILL_MIN_INCLINE_DECI)
+#define INCLINE_MAX_DECI ((int16_t)CONFIG_TREADMILL_MAX_INCLINE_DECI)
 #define INCLINE_STEP_DECI 5u /* 0.5 % */
 
 /* ---------------------------------------------------------------------------
@@ -522,6 +524,11 @@ static uint8_t ftms_result_for(int rc)
 	}
 	if (rc == -ENOTSUP) {
 		return FTMS_RESULT_OP_NOT_SUPPORTED;
+	}
+	if (rc == -ERANGE) {
+		/* The state's machine-range refusal, reached only if the
+		 * handler's own range check is ever bypassed. */
+		return FTMS_RESULT_INVALID_PARAM;
 	}
 	return FTMS_RESULT_OPERATION_FAILED;
 }
@@ -1073,7 +1080,9 @@ void treadmill_ble_state_changed(const struct treadmill_state *s)
 		if (grade != INT32_MIN) {
 			int32_t adopted = 0;
 
-			(void)treadmill_node_set_incline_deci(
+			/* A simulation grade, like FE-C page 51: clamped
+			 * to the machine range, never refused. */
+			(void)treadmill_node_sim_incline_deci(
 				treadmill_ftms_incline_from_fec(grade),
 				&adopted);
 		}

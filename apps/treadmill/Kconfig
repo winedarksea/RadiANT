@@ -207,6 +207,57 @@ config TREADMILL_SOURCE_CUSTOM
 
 endchoice
 
+# ── The machine's range ─────────────────────────────────────────────────────
+#
+# TRANSPORT-NEUTRAL, and that is the fix these exist for. Every command path is
+# bounded by them - FE-C page 51, the FTMS control point and the BLE grade seam
+# alike - in treadmill_state.c, so an FE-C-only build (no BLE at all) is held
+# to the machine's real span rather than to the +-100 % the wire can carry.
+# Any ANT+ transmitter in range can send page 51; it gets this range and no
+# more.
+#
+# The split is by what the command MEANS (treadmill_state.h):
+#   * a simulation grade (page 51, the grade seam) is a virtual road and is
+#     CLAMPED to the range, answering PASS - the deck does the closest it can;
+#   * an explicit FTMS Set Target Inclination / Speed is REFUSED out of range
+#     (Invalid Parameter), target unchanged.
+# With BLE on, the same values are what FTMS's Supported Speed and Supported
+# Inclination Range characteristics advertise.
+#
+# SET THEM TO WHAT treadmill_source CAN ACTUALLY DO. A range wider than the
+# deck gets the machine commanded into a span it then has to fail; the range
+# must contain 0, which Reset and the FE-C "assume flat" sentinel command.
+
+config TREADMILL_MAX_SPEED_CENTI_KPH
+	int "maximum belt speed, 0.01 km/h"
+	range 100 5758
+	default 2000
+	help
+	  The fastest the belt may be commanded. 2000 is 20.00 km/h. Explicit
+	  speed commands above it are refused. Also the Maximum field of FTMS's
+	  Supported Speed Range when BLE is on.
+
+	  The upper bound is 15996 mm/s (57.58 km/h), the most ANT+ SDM can
+	  express; treadmill_state.c clamps there regardless.
+
+config TREADMILL_MIN_INCLINE_DECI
+	int "minimum grade, 0.1 %"
+	range -1000 0
+	default -30
+	help
+	  The lowest the deck may be commanded. -30 is -3.0 %, a typical
+	  commercial decline. A simulation grade below it is clamped to it; an
+	  explicit command below it is refused. Also the Minimum field of
+	  FTMS's Supported Inclination Range when BLE is on.
+
+config TREADMILL_MAX_INCLINE_DECI
+	int "maximum grade, 0.1 %"
+	range 0 1000
+	default 150
+	help
+	  The highest the deck may be commanded. 150 is 15.0 %. Same clamp
+	  and refusal split as the minimum.
+
 # ── The BLE side ────────────────────────────────────────────────────────────
 
 config TREADMILL_BLE
@@ -313,39 +364,6 @@ config TREADMILL_BLE_NOTIFY_INTERVAL_MS
 	  Every notification is radio time contending with two ANT+ masters
 	  through the MPSL gate. 1000 ms is the spec's own typical value and
 	  the one the coexistence gate should be run at.
-
-config TREADMILL_BLE_MAX_SPEED_CENTI_KPH
-	int "maximum belt speed advertised over FTMS, 0.01 km/h"
-	depends on TREADMILL_BLE
-	range 100 65535
-	default 2000
-	help
-	  The Maximum field of FTMS's Supported Speed Range characteristic,
-	  which is what a client reads to learn the legal span before
-	  commanding a speed. 2000 is 20.00 km/h.
-
-	  IT MUST AGREE WITH WHAT treadmill_source WILL ACTUALLY ACCEPT. A
-	  machine that advertises a range wider than its belt can do will be
-	  commanded into it and then have to answer Operation Failed, which a
-	  client reports as a fault rather than as a limit.
-
-config TREADMILL_BLE_MIN_INCLINE_DECI
-	int "minimum grade advertised over FTMS, 0.1 %"
-	depends on TREADMILL_BLE
-	range -1000 0
-	default -30
-	help
-	  The Minimum field of Supported Inclination Range. -30 is -3.0 %, a
-	  typical commercial decline. Same agreement rule as the speed range
-	  above.
-
-config TREADMILL_BLE_MAX_INCLINE_DECI
-	int "maximum grade advertised over FTMS, 0.1 %"
-	depends on TREADMILL_BLE
-	range 0 1000
-	default 150
-	help
-	  The Maximum field of Supported Inclination Range. 150 is 15.0 %.
 
 # ── Command ownership ───────────────────────────────────────────────────────
 #

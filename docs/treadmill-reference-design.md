@@ -357,14 +357,25 @@ failure this project keeps paying for.
    `main.c`'s `fill_common_id()` — model number, hardware revision and the two
    software revisions all land on a head unit's device-information screen.
 4. **Set the ranges to match your machine.**
-   `CONFIG_TREADMILL_BLE_MAX_SPEED_CENTI_KPH`,
-   `CONFIG_TREADMILL_BLE_MIN_INCLINE_DECI` and
-   `CONFIG_TREADMILL_BLE_MAX_INCLINE_DECI` become FTMS's Supported Speed Range
-   and Supported Inclination Range, which is what a client reads to learn the
-   legal span before commanding one. **They must agree with what your source
-   will actually accept**: advertising a range wider than the belt can do means
-   being commanded into it and then answering Operation Failed, which a client
-   reports as a fault rather than as a limit.
+   `CONFIG_TREADMILL_MAX_SPEED_CENTI_KPH`,
+   `CONFIG_TREADMILL_MIN_INCLINE_DECI` and
+   `CONFIG_TREADMILL_MAX_INCLINE_DECI` are the machine's range, and they bound
+   **every** command path, FE-C included: they apply to an FE-C-only build
+   with no BLE, where any ANT+ transmitter in range can send page 51. Without
+   them page 51 would be limited only by the wire (±100.00 %). With BLE on
+   they are also FTMS's Supported Speed Range and Supported Inclination Range,
+   which is what a client reads to learn the legal span before commanding one.
+   What happens out of range depends on what the command means:
+   - a **simulation grade** (FE-C page 51, the BLE grade seam) is a virtual
+     road, so it is **clamped** to the range and page 51 still answers PASS;
+   - an **explicit** FTMS Set Target Inclination or Set Target Speed is
+     **refused** with Invalid Parameter, and the target is left unchanged.
+
+   The range must include 0, because Reset and FE-C's "assume flat" sentinel
+   command it; a `BUILD_ASSERT` checks this. **The values must agree with what
+   your source will actually accept**: a range wider than the belt can do
+   means being commanded into it and then answering Operation Failed, which a
+   client reports as a fault rather than as a limit.
 5. **Name it.** `CONFIG_BT_DEVICE_NAME` in `ble.conf`. The default is
    `"RadiANT Treadmill"` and it is deliberately not anybody's product name —
    see [ADR 0003](decisions/0003-naming-trademark-and-usb-identity.md)'s

@@ -352,12 +352,132 @@ ZTEST(treadmill_pages, test_both_control_paths_land_on_one_target)
 		      -250, NULL);
 	zassert_equal(s.target_incline_centi_pct, -250, NULL);
 
-	/* Clamped to what page 17 can REPORT (+-100.00 %), not to what page 51
-	 * can command (+-200.00 %): a machine that accepted a grade it could
-	 * never report back would answer every page 17 with a number that
-	 * disagrees with the command it just acknowledged. */
+	/* With no machine range set yet, the bound is what page 17 can REPORT
+	 * (+-100.00 %), not what page 51 can command (+-200.00 %). The app
+	 * narrows it at boot - see the machine-range cases below. */
 	zassert_equal(treadmill_state_request_incline(&s, 20000), 10000, NULL);
 	zassert_equal(treadmill_state_request_incline(&s, -20000), -10000, NULL);
+}
+
+/* The Kconfig defaults: -3.0 % .. +15.0 %, 20.00 km/h. */
+#define MACHINE_MIN_CENTI (-300)
+#define MACHINE_MAX_CENTI 1500
+#define MACHINE_MAX_MM_S  5556u
+
+static void machine_init(struct treadmill_state *s)
+{
+	treadmill_state_init(s);
+	zassert_equal(treadmill_state_set_limits(s, MACHINE_MIN_CENTI,
+						 MACHINE_MAX_CENTI,
+						 MACHINE_MAX_MM_S),
+		      0, NULL);
+}
+
+ZTEST(treadmill_pages, test_sim_grade_clamps_to_the_machine_range)
+{
+	struct treadmill_state s;
+
+	machine_init(&s);
+
+	/* FE-C page 51 is a virtual road. +200 % - which any ANT+
+	 * transmitter in range can send - lands on the deck's +15.0 %, not on
+	 * the wire's +100 %. The value returned is what page 71 reports. */
+	zassert_equal(treadmill_state_request_incline(&s, 20000),
+		      MACHINE_MAX_CENTI, NULL);
+	zassert_equal(s.target_incline_centi_pct, MACHINE_MAX_CENTI, NULL);
+	zassert_equal(treadmill_state_request_incline(&s, -20000),
+		      MACHINE_MIN_CENTI, NULL);
+	zassert_equal(s.target_incline_centi_pct, MACHINE_MIN_CENTI, NULL);
+
+	/* One step past each edge clamps too, and inside is untouched. */
+	zassert_equal(treadmill_state_request_incline(&s, MACHINE_MAX_CENTI + 1),
+		      MACHINE_MAX_CENTI, NULL);
+	zassert_equal(treadmill_state_request_incline(&s, 800), 800, NULL);
+}
+
+ZTEST(treadmill_pages, test_explicit_incline_out_of_range_is_refused)
+{
+	struct treadmill_state s;
+	int32_t                adopted = 12345;
+
+	machine_init(&s);
+	zassert_equal(treadmill_state_command_incline(&s, 500, &adopted), 0,
+		      NULL);
+	zassert_equal(adopted, 500, NULL);
+
+	/* An FTMS Set Target Inclination outside the advertised span is a
+	 * refusal, not a clamp: the target stays where it was and the out
+	 * value is not written. */
+	adopted = 12345;
+	zassert_equal(treadmill_state_command_incline(&s, MACHINE_MAX_CENTI + 10,
+						      &adopted),
+		      -ERANGE, NULL);
+	zassert_equal(treadmill_state_command_incline(&s, MACHINE_MIN_CENTI - 10,
+						      &adopted),
+		      -ERANGE, NULL);
+	zassert_equal(treadmill_state_command_incline(&s, 20000, &adopted),
+		      -ERANGE, NULL);
+	zassert_equal(s.target_incline_centi_pct, 500, NULL);
+	zassert_equal(adopted, 12345, NULL);
+
+	/* The edges themselves are legal. */
+	zassert_equal(treadmill_state_command_incline(&s, MACHINE_MAX_CENTI,
+						      NULL),
+		      0, NULL);
+	zassert_equal(s.target_incline_centi_pct, MACHINE_MAX_CENTI, NULL);
+	zassert_equal(treadmill_state_command_incline(&s, MACHINE_MIN_CENTI,
+						      NULL),
+		      0, NULL);
+	zassert_equal(s.target_incline_centi_pct, MACHINE_MIN_CENTI, NULL);
+}
+
+ZTEST(treadmill_pages, test_explicit_speed_out_of_range_is_refused)
+{
+	struct treadmill_state s;
+	uint32_t               adopted = 777u;
+
+	machine_init(&s);
+	zassert_equal(treadmill_state_command_speed(&s, 3000u, &adopted), 0,
+		      NULL);
+	zassert_equal(adopted, 3000u, NULL);
+
+	adopted = 777u;
+	zassert_equal(treadmill_state_command_speed(&s, MACHINE_MAX_MM_S + 1u,
+						    &adopted),
+		      -ERANGE, NULL);
+	zassert_equal(s.target_speed_mm_s, 3000u, NULL);
+	zassert_equal(adopted, 777u, NULL);
+
+	zassert_equal(treadmill_state_command_speed(&s, MACHINE_MAX_MM_S, NULL),
+		      0, NULL);
+	zassert_equal(s.target_speed_mm_s, MACHINE_MAX_MM_S, NULL);
+
+	/* The simulation-style speed request clamps to the same bound. */
+	zassert_equal(treadmill_state_request_speed(&s, 9000u), MACHINE_MAX_MM_S,
+		      NULL);
+}
+
+ZTEST(treadmill_pages, test_machine_range_always_contains_zero)
+{
+	struct treadmill_state s;
+
+	machine_init(&s);
+
+	/* Reset and FE-C's "assume flat" sentinel both command 0. */
+	zassert_equal(treadmill_state_command_incline(&s, 0, NULL), 0, NULL);
+	zassert_equal(treadmill_state_command_speed(&s, 0u, NULL), 0, NULL);
+	zassert_equal(treadmill_state_request_incline(&s, 0), 0, NULL);
+
+	/* A range that would exclude 0 is refused and changes nothing. */
+	zassert_equal(treadmill_state_set_limits(&s, 100, 1500, 5556u), -EINVAL,
+		      NULL);
+	zassert_equal(treadmill_state_set_limits(&s, -300, -100, 5556u), -EINVAL,
+		      NULL);
+	zassert_equal(treadmill_state_set_limits(&s, -300, 1500, 0u), -EINVAL,
+		      NULL);
+	zassert_equal(s.min_incline_centi_pct, MACHINE_MIN_CENTI, NULL);
+	zassert_equal(s.max_incline_centi_pct, MACHINE_MAX_CENTI, NULL);
+	zassert_equal(s.max_speed_mm_s, MACHINE_MAX_MM_S, NULL);
 }
 
 ZTEST(treadmill_pages, test_lap_toggle_flips_on_a_finished_session)
