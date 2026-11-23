@@ -540,7 +540,11 @@ class TheWorkflowsThemselvesAreWellFormed(unittest.TestCase):
         builds = [s for s in self.job_steps(self.RELEASE, "build-core")
                   if self.step_name(s) == "Build"]
         self.assertEqual(len(builds), 1, "build-core has no single Build step")
-        self.assertIn("-DUSE_CCACHE=0", self.step_text(builds[0]))
+        text = self.step_text(builds[0])
+        self.assertIn("-DUSE_CCACHE=0", text)
+        # The -D only reaches the sysbuild cache, not the dongle image; a dry
+        # run found ccache still wrapping the image's compiles without this.
+        self.assertRegex(text, r"(?m)^\s+CCACHE_DISABLE:\s*[\"']?1[\"']?\s*$")
 
     def test_every_build_core_download_is_digest_checked(self):
         """Each download goes through a <X>_URL env value with a <X>_SHA256

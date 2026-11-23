@@ -449,10 +449,18 @@ jobs:
           (cd "${sdk}" && ./setup.sh -h -c)
           echo "ZEPHYR_SDK_INSTALL_DIR=${sdk}" >> "${GITHUB_ENV}"
 
-      # -DUSE_CCACHE=0 below: no cache is restored, but the runner may still
-      # have a ccache on PATH, and Zephyr uses one whenever it finds it.
+      # No ccache, by two means. No cache is restored, but the runner may
+      # still have a ccache on PATH, and Zephyr wraps every compile in it
+      # whenever it finds one. -DUSE_CCACHE=0 alone is NOT enough: it lands in
+      # the sysbuild cache, and Zephyr's ccache.cmake reads the plain variable,
+      # which sysbuild does not hand to the dongle image (a dry run on
+      # 2026-11-23 found `ccache` in build/dongle's rules.ninja with only the
+      # -D; `-Ddongle_USE_CCACHE=0` did not reach it either). CCACHE_DISABLE
+      # makes any ccache that does run call the compiler directly, reading and
+      # writing no cache.
       - name: Build
         env:
+          CCACHE_DISABLE: "1"
           BOARD: ${{ matrix.board }}
           RADIO: ${{ matrix.radio }}
           EXTRA_CONF: ${{ matrix.extra_conf }}
