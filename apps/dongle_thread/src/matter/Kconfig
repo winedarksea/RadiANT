@@ -35,7 +35,7 @@ config BRIDGE_MAX_DYNAMIC_ENDPOINTS_NUMBER
 
 	  THIS NUMBER IS ONE OF THREE THAT MUST AGREE, and the other two are
 	  CHIP_DEVICE_CONFIG_DYNAMIC_ENDPOINT_COUNT (src/matter/chip_project_config.h)
-	  and RADIANT_MATTER_MAX_ENDPOINTS (radiant/src/bridge/radiant_matter.h).
+	  and RADIANT_MATTER_MAX_ENDPOINTS (radiant/include/radiant/radiant_matter.h).
 	  src/matter/bridge_core_asserts.cpp static_asserts the pair that C++ can
 	  see. Trap 15: too small does not fail, it produces an Nth bridged
 	  endpoint with no Descriptor cluster.

@@ -24,7 +24,7 @@
  *
  *   NO CRYPTOGRAPHY and no call to radiant_sec, matching radiant_profile_rd.h's and
  *   radiant_profile_hr.h's claims about themselves. No radiant header, no bridge
- *   header: the sample-bus mapping lives in src/bridge/radiant_env_adapter.h.
+ *   header: the sample-bus mapping lives in include/radiant/radiant_env_adapter.h.
  *
  * ---------------------------------------------------------------------------
  * Traps in the page layout

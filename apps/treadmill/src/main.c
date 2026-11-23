@@ -52,11 +52,11 @@
 
 #include <radiant/radiant_ant.h>
 #include <radiant/radiant_wire.h>
-#include "radiant_node_ident.h"
-#include "radiant_profile_common.h"
-#include "radiant_profile_fec.h"
-#include "radiant_profile_fec_tx.h"
-#include "radiant_profile_sdm.h"
+#include <radiant/radiant_node_ident.h>
+#include <radiant/radiant_profile_common.h>
+#include <radiant/radiant_profile_fec.h>
+#include <radiant/radiant_profile_fec_tx.h>
+#include <radiant/radiant_profile_sdm.h>
 #include "treadmill_source.h"
 #include "treadmill_state.h"
 

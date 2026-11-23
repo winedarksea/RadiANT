@@ -5,7 +5,7 @@
 
 #include <string.h>
 
-#include "radiant_env_adapter.h"
+#include <radiant/radiant_env_adapter.h>
 
 void radiant_env_adapter_init(struct radiant_env_adapter *a)
 {

@@ -34,7 +34,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/settings/settings.h>
 
-#include "radiant_node_nvm.h"
+#include <radiant/radiant_node_nvm.h>
 
 #define SUBTREE "radiant"
 

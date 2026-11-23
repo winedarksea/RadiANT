@@ -12,10 +12,10 @@
 #include <zephyr/toolchain.h>
 #include <zephyr/ztest.h>
 
-#include "radiant_profile_common.h"
-#include "radiant_profile_fec.h"
-#include "radiant_profile_fec_tx.h"
-#include "radiant_profile_sched.h"
+#include <radiant/radiant_profile_common.h>
+#include <radiant/radiant_profile_fec.h>
+#include <radiant/radiant_profile_fec_tx.h>
+#include <radiant/radiant_profile_sched.h>
 
 /* ── Grade and incline ──────────────────────────────────────────────────── */
 

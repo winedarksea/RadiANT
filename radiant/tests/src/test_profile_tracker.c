@@ -8,7 +8,7 @@
 
 #include <string.h>
 
-#include "radiant_profile_tracker.h"
+#include <radiant/radiant_profile_tracker.h>
 
 ZTEST(radiant_profile_tracker, test_location_1_bit_placement)
 {

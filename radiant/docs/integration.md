@@ -154,7 +154,7 @@ void radiant_on_message(const struct radiant_msg *msg)
 }
 ```
 
-`radiant_hr_adapter_decode()` (`radiant/src/bridge/radiant_hr_adapter.h`)
+`radiant_hr_adapter_decode()` (`radiant/include/radiant/radiant_hr_adapter.h`)
 reads the four bytes every ANT+ HR page carries unchanged - event time, beat
 count, computed heart rate - and posts up to three records onto the sample
 bus via `radiant_bridge_post()`. It does not care which HR page arrived,

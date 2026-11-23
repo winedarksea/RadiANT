@@ -148,10 +148,10 @@ zephyr_library_sources_ifdef(CONFIG_RADIANT_SEC_HOST_MESSAGES src/ant_api/radian
 # the link drops whatever nothing calls. apps/dongle_thread uses both through
 # CONFIG_RADIANT_BRIDGE; the transmitting applications (hrm_ble, treadmill,
 # trainer) leave both off and list exactly the profile files they link, and
-# radiant/tests lists its own. The headers are not under include/radiant/, so
-# these paths are added only when asked for.
+# radiant/tests lists its own. Their headers are in include/radiant/ with the
+# rest of the API (<radiant/radiant_profile_hr.h>, <radiant/radiant_bridge.h>);
+# they declare only, so having them on the path costs nothing when off.
 if(CONFIG_RADIANT_PROFILES)
-  zephyr_include_directories(src/profiles)
   zephyr_library_sources(
     src/profiles/radiant_profile_bits.c
     src/profiles/radiant_profile_command.c
@@ -179,7 +179,6 @@ if(CONFIG_RADIANT_PROFILES)
 endif()
 
 if(CONFIG_RADIANT_BRIDGE)
-  zephyr_include_directories(src/bridge)
   zephyr_library_sources(
     src/bridge/radiant_bridge.c
     src/bridge/radiant_hr_adapter.c

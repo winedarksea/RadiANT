@@ -71,10 +71,8 @@ target_sources(app PRIVATE
   ../../radiant/src/profiles/radiant_profile_handoff.c
   ../../radiant/src/profiles/radiant_profile_fec_tx.c
 )
-target_include_directories(app PRIVATE ../../radiant/src/profiles)
 
 target_sources(app PRIVATE
   ../../radiant/src/node/radiant_node_ident.c
   ../../radiant/src/node/radiant_node_nvm_settings.c
 )
-target_include_directories(app PRIVATE ../../radiant/src/node)

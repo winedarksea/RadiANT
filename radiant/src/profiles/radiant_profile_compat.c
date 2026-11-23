@@ -24,8 +24,8 @@
 
 #include <radiant/radiant_sec_compat.h>
 
-#include "radiant_profile_compat.h"
-#include "radiant_profile_sched.h"
+#include <radiant/radiant_profile_compat.h>
+#include <radiant/radiant_profile_sched.h>
 
 /* The window sizes, in the order their 2-bit code numbers them. Enumerated
  * rather than ranged because N is simultaneously the airtime cost, the

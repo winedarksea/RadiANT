@@ -15,7 +15,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "radiant_profile_common.h"
+#include <radiant/radiant_profile_common.h>
 
 int radiant_profile_common_80(const struct radiant_profile_common_id *id, uint8_t *body)
 {

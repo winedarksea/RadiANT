@@ -22,7 +22,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "radiant_profile_env.h"
+#include <radiant/radiant_profile_env.h>
 
 /* ── Sign extension ──────────────────────────────────────────────────────────
  *

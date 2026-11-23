@@ -34,8 +34,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "radiant_profile_fec.h"
-#include "radiant_profile_fec_tx.h"
+#include <radiant/radiant_profile_fec.h>
+#include <radiant/radiant_profile_fec_tx.h>
 
 #ifdef __cplusplus
 extern "C" {

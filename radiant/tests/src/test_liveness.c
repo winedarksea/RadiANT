@@ -39,9 +39,9 @@
 #include <zephyr/toolchain.h>
 #include <zephyr/ztest.h>
 
-#include "radiant_binding.h"
-#include "radiant_bridge.h"
-#include "radiant_liveness.h"
+#include <radiant/radiant_binding.h>
+#include <radiant/radiant_bridge.h>
+#include <radiant/radiant_liveness.h>
 
 #define CAP_MAX 16
 

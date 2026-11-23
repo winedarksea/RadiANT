@@ -28,11 +28,11 @@
 #include <zephyr/toolchain.h>
 #include <zephyr/ztest.h>
 
-#include "radiant_profile_fec.h"
-#include "radiant_profile_power.h"
-#include "radiant_bridge.h"
-#include "radiant_power_adapter.h"
-#include "radiant_rules.h"
+#include <radiant/radiant_profile_fec.h>
+#include <radiant/radiant_profile_power.h>
+#include <radiant/radiant_bridge.h>
+#include <radiant/radiant_power_adapter.h>
+#include <radiant/radiant_rules.h>
 
 #define PWR_CAP_MAX 32
 #define PWR_SOURCE  0u

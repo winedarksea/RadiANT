@@ -254,7 +254,7 @@ Three numbers must be equal:
 |---|---|
 | `CHIP_DEVICE_CONFIG_DYNAMIC_ENDPOINT_COUNT` | `chip_project_config.h`, here |
 | `CONFIG_BRIDGE_MAX_DYNAMIC_ENDPOINTS_NUMBER` | `Kconfig`, here |
-| `RADIANT_MATTER_MAX_ENDPOINTS` | `radiant/src/bridge/radiant_matter.h:179` |
+| `RADIANT_MATTER_MAX_ENDPOINTS` | `radiant/include/radiant/radiant_matter.h:179` |
 
 `radiant_matter.h`'s own comment already says all three must agree and that "the
 glue static_asserts the three together". `bridge_core_asserts.cpp` is that

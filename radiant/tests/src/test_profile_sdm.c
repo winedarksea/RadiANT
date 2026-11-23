@@ -11,9 +11,9 @@
 #include <zephyr/toolchain.h>
 #include <zephyr/ztest.h>
 
-#include "radiant_profile_common.h"
-#include "radiant_profile_sched.h"
-#include "radiant_profile_sdm.h"
+#include <radiant/radiant_profile_common.h>
+#include <radiant/radiant_profile_sched.h>
+#include <radiant/radiant_profile_sdm.h>
 
 ZTEST(radiant_profile_sdm, test_the_channel_parameters_are_the_profiles_and_not_a_choice)
 {

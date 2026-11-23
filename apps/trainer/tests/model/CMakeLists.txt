@@ -28,6 +28,5 @@ target_sources(app PRIVATE
 )
 target_include_directories(app PRIVATE
   ../../src
-  ../../../../radiant/src/profiles
   ../../../../radiant/include
 )

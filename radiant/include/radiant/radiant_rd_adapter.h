@@ -3,7 +3,7 @@
  * radiant_rd_adapter.h - ANT+ Running Dynamics (device type 0x1E) onto the
  * sample bus.
  *
- * Wire layout is src/profiles/radiant_profile_rd.h's, decoded through
+ * Wire layout is include/radiant/radiant_profile_rd.h's, decoded through
  * radiant_profile_rd_decode_a()/_b() rather than re-derived here. Vocabulary mapping
  * follows docs/radiant-bridge.md section 3.1's "one adapter per profile,
  * not one per profile per sink".
@@ -44,8 +44,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "radiant_profile_rd.h"
-#include "radiant_bridge.h"
+#include <radiant/radiant_profile_rd.h>
+#include <radiant/radiant_bridge.h>
 
 #ifdef __cplusplus
 extern "C" {

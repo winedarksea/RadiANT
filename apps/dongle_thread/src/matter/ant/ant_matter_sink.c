@@ -39,9 +39,9 @@
 
 #include <zephyr/kernel.h>
 
-#include "radiant_binding.h"
-#include "radiant_bridge.h"
-#include "radiant_matter.h"
+#include <radiant/radiant_binding.h>
+#include <radiant/radiant_bridge.h>
+#include <radiant/radiant_matter.h>
 
 #include "ant_matter.h"
 

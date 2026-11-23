@@ -5,7 +5,7 @@
 
 #include <string.h>
 
-#include "radiant_owed.h"
+#include <radiant/radiant_owed.h>
 
 void radiant_owed_init(struct radiant_owed *o)
 {

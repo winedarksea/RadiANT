@@ -47,8 +47,8 @@
 #include <radiant/radiant_radio_hal.h>
 #include <radiant/radiant_search.h>
 
-#include "radiant_profile_freq.h"
-#include "radiant_profile_telemetry.h"
+#include <radiant/radiant_profile_freq.h>
+#include <radiant/radiant_profile_telemetry.h>
 
 /*
  * The canonical announcement, shared BYTE FOR BYTE with tools/test_ant_pages.py.

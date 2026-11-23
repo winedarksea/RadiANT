@@ -77,17 +77,17 @@
 #include <radiant/radiant_ant.h>
 #include <radiant/radiant_wire.h>
 
-#include "radiant_binding.h"
-#include "radiant_bridge.h"
-#include "radiant_hr_adapter.h"
+#include <radiant/radiant_binding.h>
+#include <radiant/radiant_bridge.h>
+#include <radiant/radiant_hr_adapter.h>
 
 /* Packages A-C. The module compiles these adapters for every bridge build; the
  * guard keeps the calls, and so the linked decoders, out of images without the
  * symbol - see CMakeLists.txt. It is policy, not a build precondition. */
 #ifdef CONFIG_ANT_DONGLE_PROFILES_EXTRA
-#include "radiant_common_adapter.h"
-#include "radiant_env_adapter.h"
-#include "radiant_power_adapter.h"
+#include <radiant/radiant_common_adapter.h>
+#include <radiant/radiant_env_adapter.h>
+#include <radiant/radiant_power_adapter.h>
 #endif
 
 #include "bridge_app.h"

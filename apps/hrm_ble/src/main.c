@@ -32,8 +32,8 @@
 
 #include <radiant/radiant_ant.h>
 #include <radiant/radiant_wire.h>
-#include "radiant_profile_hr.h"
-#include "radiant_node_ident.h"
+#include <radiant/radiant_profile_hr.h>
+#include <radiant/radiant_node_ident.h>
 #include "hrm_sensor.h"
 
 #if defined(CONFIG_HRM_BLE_HRS)

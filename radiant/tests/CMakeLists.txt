@@ -66,7 +66,7 @@ target_sources(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/fake_radio.c")
 
 # ── The mock NVM ────────────────────────────────────────────────────────────
 #
-# The same arrangement one layer up: fake_nvm.c implements src/node/radiant_node_nvm.h
+# The same arrangement one layer up: fake_nvm.c implements include/radiant/radiant_node_nvm.h
 # against RAM, so src/node/radiant_node_ident.c is compiled unmodified and the two
 # things a real backend cannot be asked to do on demand - a power cycle and a
 # write that fails - are callable from a suite.
@@ -207,8 +207,6 @@ target_sources(app PRIVATE
   # test_command.c exists to keep honest.
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/radiant_profile_command.c"
 )
-target_include_directories(app PRIVATE
-  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles")
 
 # ── radiant/src/bridge ──────────────────────────────────────────────────
 #
@@ -220,7 +218,7 @@ target_include_directories(app PRIVATE
 target_sources(app PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge/radiant_bridge.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge/radiant_hr_adapter.c"
-  # The running-dynamics adapter. It includes src/profiles/radiant_profile_rd.h for the
+  # The running-dynamics adapter. It includes include/radiant/radiant_profile_rd.h for the
   # two page decoders rather than re-deriving the bit splits, which is why the
   # src/profiles include directory above is not optional for this file.
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge/radiant_rd_adapter.c"
@@ -265,8 +263,6 @@ target_sources(app PRIVATE
   # mqtt_sink.c's owed-offline list. Pure; src/test_owed.c.
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge/radiant_owed.c"
 )
-target_include_directories(app PRIVATE
-  "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge")
 # The linker fragment RADIANT_SINK_DEFINE()'s STRUCT_SECTION_ITERABLE needs -
 # see the comment in radiant_bridge_sections.ld for why this is not optional.
 zephyr_linker_sources(SECTIONS "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge/radiant_bridge_sections.ld")
@@ -289,8 +285,6 @@ zephyr_linker_sources(SECTIONS "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge/radian
 target_sources(app PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/node/radiant_node_ident.c"
 )
-target_include_directories(app PRIVATE
-  "${CMAKE_CURRENT_SOURCE_DIR}/../src/node")
 
 # This directory, so a suite writes #include "fake_radio.h" rather than
 # #include "../fake_radio.h". Suites live in src/ and the mock does not, so

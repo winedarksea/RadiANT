@@ -346,7 +346,7 @@ The binding table is the pivot, and it **is specified to be persisted and is
 not yet**:
 
 > **Corrected 2026-08-15.** This sentence read "and it is persisted", and the
-> code has never done that. `radiant/src/bridge/radiant_binding.h` says so in as
+> code has never done that. `radiant/include/radiant/radiant_binding.h` says so in as
 > many words — "RAM-backed for now" — and the code is the truth. The consequence
 > is concrete and it is the reason this correction is a paragraph rather than a
 > word: **every reboot loses all bindings, and re-pairing mints a new `uuid`**,

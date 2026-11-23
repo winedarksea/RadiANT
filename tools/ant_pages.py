@@ -1567,7 +1567,7 @@ def encode_fec_user_config(user_weight_10g: int | None) -> bytes:
 
     Bytes [3..7] are bicycle wheel diameter, bicycle weight and gear ratio in a
     sub-byte packing this project has not transcribed and has no use for; they
-    go out as the not-supplied sentinel. radiant/src/profiles/radiant_profile_fec_tx.h
+    go out as the not-supplied sentinel. radiant/include/radiant/radiant_profile_fec_tx.h
     records the same decision on the C side.
     """
     weight = INVALID_U16 if user_weight_10g is None else _u16(user_weight_10g)
@@ -1971,7 +1971,7 @@ def decode_common_82(payload: bytes) -> dict:
 # transposes the descriptions of 7 and 8 (7 is NAMED the minimum and DESCRIBED
 # as "the maximum recorded temperature", 8 the mirror image) and the names are
 # the self-consistent half. Same call, and same register, as
-# radiant/src/profiles/radiant_profile_common.h's defect note and
+# radiant/include/radiant/radiant_profile_common.h's defect note and
 # docs/device-profiles.md section 3.14's note on Controls page 0x49.
 SUBPAGE_TEMPERATURE = 1
 SUBPAGE_PRESSURE = 2
@@ -2883,7 +2883,7 @@ class TlmField:
 # ---------------------------------------------------------------------------
 # The schedule block - frame 1 byte [3] bits 3..0, plus one frame
 #
-# Mirror of src/profiles/radiant_profile_schedule.h. Three things live in the
+# Mirror of include/radiant/radiant_profile_schedule.h. Three things live in the
 # descriptor because it's a standing pointer a node already transmits: a
 # clock-accuracy ceiling, a published downlink window, and the coding
 # rate / TX power that the long-range PHY phase must not get to name twice.

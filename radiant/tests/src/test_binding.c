@@ -16,7 +16,7 @@
 #include <zephyr/toolchain.h>
 #include <zephyr/ztest.h>
 
-#include "radiant_binding.h"
+#include <radiant/radiant_binding.h>
 
 static void binding_reset(void *unused)
 {

@@ -1,7 +1,7 @@
 /*
  * SPDX-License-Identifier: Apache-2.0
  *
- * Provenance: original clean-room work against src/profiles/radiant_profile_fec.h/.c,
+ * Provenance: original clean-room work against include/radiant/radiant_profile_fec.h/.c,
  * which transcribes D000001231 "ANT+ Device Profile - Fitness Equipment"
  * Rev 5.0. Every vector below is hand-computed from a named table in that
  * document, and the comment on each says which - a vector produced by running
@@ -23,7 +23,7 @@
 #include <zephyr/toolchain.h>
 #include <zephyr/ztest.h>
 
-#include "radiant_profile_fec.h"
+#include <radiant/radiant_profile_fec.h>
 
 /*
  * Table 8-7, a trainer mid-workout:

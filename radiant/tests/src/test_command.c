@@ -42,11 +42,11 @@
 
 #include "../fake_radio.h"
 
-#include "radiant_profile_command.h"
-#include "radiant_profile_handoff.h"
-#include "radiant_profile_sched.h"
-#include "radiant_profile_schedule.h"
-#include "radiant_profile_telemetry.h"
+#include <radiant/radiant_profile_command.h>
+#include <radiant/radiant_profile_handoff.h>
+#include <radiant/radiant_profile_sched.h>
+#include <radiant/radiant_profile_schedule.h>
+#include <radiant/radiant_profile_telemetry.h>
 
 /* ---------------------------------------------------------------------------
  * Fixture

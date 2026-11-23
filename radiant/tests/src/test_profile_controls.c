@@ -9,7 +9,7 @@
 
 #include <string.h>
 
-#include "radiant_profile_controls.h"
+#include <radiant/radiant_profile_controls.h>
 
 static void controls_init_default(struct radiant_profile_controls *ctrl)
 {

@@ -106,7 +106,7 @@ OPT_IN_VALUES = {"no", "yes", "per-node"}
 # ~150 us at 1 M, which is the difference between a slot that fits and one
 # that does not. So the column carries a CODING RATE, in the vocabulary RF-5a
 # defined ahead of time - the same names as `enum radiant_profile_sched_coding` in
-# src/profiles/radiant_profile_schedule.h and `TLM_CODING_*` in tools/ant_pages.py.
+# include/radiant/radiant_profile_schedule.h and `TLM_CODING_*` in tools/ant_pages.py.
 #
 # `yes` IS DELIBERATELY GONE rather than accepted as a synonym: it is the
 # value that cannot be budgeted from, so keeping it would preserve the defect

@@ -40,8 +40,8 @@
 
 #include "fake_radio.h"
 
-#include "radiant_profile_schedule.h"
-#include "radiant_profile_telemetry.h"
+#include <radiant/radiant_profile_schedule.h>
+#include <radiant/radiant_profile_telemetry.h>
 
 /* Every case ends with this: fake_radio_viol_count() == 0, idle-agnostic.
  * Not an after() hook: on this Zephyr a zassert in after() cannot fail the

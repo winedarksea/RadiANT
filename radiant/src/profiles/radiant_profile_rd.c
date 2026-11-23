@@ -21,9 +21,9 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "radiant_profile_common.h"
-#include "radiant_profile_rd.h"
-#include "radiant_profile_sched.h"
+#include <radiant/radiant_profile_common.h>
+#include <radiant/radiant_profile_rd.h>
+#include <radiant/radiant_profile_sched.h>
 
 /* ── The splits ─────────────────────────────────────────────────────────────
  * "lo bits at `lo_off` of byte a, hi bits at bit 0 of byte b" is the shape of

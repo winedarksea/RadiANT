@@ -23,7 +23,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "radiant_profile_command.h"
+#include <radiant/radiant_profile_command.h>
 
 /* ---------------------------------------------------------------------------
  * The control-channel convention

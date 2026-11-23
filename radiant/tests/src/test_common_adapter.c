@@ -10,10 +10,10 @@
 #include <zephyr/toolchain.h>
 #include <zephyr/ztest.h>
 
-#include "radiant_profile_common.h"
-#include "radiant_binding.h"
-#include "radiant_bridge.h"
-#include "radiant_common_adapter.h"
+#include <radiant/radiant_profile_common.h>
+#include <radiant/radiant_binding.h>
+#include <radiant/radiant_bridge.h>
+#include <radiant/radiant_common_adapter.h>
 
 /* ---------------------------------------------------------------------------
  * Capture

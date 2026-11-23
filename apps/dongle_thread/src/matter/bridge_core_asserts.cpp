@@ -11,7 +11,7 @@
  * the language boundary. CHIP_DEVICE_CONFIG_DYNAMIC_ENDPOINT_COUNT comes from
  * src/matter/chip_project_config.h, which CHIP's own headers pull in before
  * anything of RadiANT's exists, so it cannot include radiant_matter.h.
- * RADIANT_MATTER_MAX_ENDPOINTS lives in radiant/src/bridge/radiant_matter.h,
+ * RADIANT_MATTER_MAX_ENDPOINTS lives in radiant/include/radiant/radiant_matter.h,
  * which this repository must not edit from here and which is a C header
  * compiled into C translation units. A third file that includes both is the
  * only place the comparison can be written, and radiant_matter.h:168 already
@@ -46,12 +46,12 @@
 /* radiant_matter.h is a C header. It is included last and unguarded on
  * purpose: if RadiANT's bridge is not in this image there is nothing to agree
  * with, and CMake only compiles this file when CONFIG_RADIANT_BRIDGE is set. */
-#include "radiant_matter.h"
+#include <radiant/radiant_matter.h>
 
 static_assert(CHIP_DEVICE_CONFIG_DYNAMIC_ENDPOINT_COUNT == RADIANT_MATTER_MAX_ENDPOINTS,
 	      "CHIP_DEVICE_CONFIG_DYNAMIC_ENDPOINT_COUNT (src/matter/chip_project_config.h, which "
 	      "defines it as CONFIG_BRIDGE_MAX_DYNAMIC_ENDPOINTS_NUMBER) and RADIANT_MATTER_MAX_ENDPOINTS "
-	      "(radiant/src/bridge/radiant_matter.h) disagree. Trap 15: the CHIP side sizes the "
+	      "(radiant/include/radiant/radiant_matter.h) disagree. Trap 15: the CHIP side sizes the "
 	      "Descriptor cluster's per-endpoint server array as fixed+dynamic, so a CHIP side that is "
 	      "SMALLER gives the Nth bridged endpoint no Descriptor at all - enumerable, no cluster "
 	      "list, no warning, no error. A CHIP side that is LARGER wastes a DataVersion array and a "

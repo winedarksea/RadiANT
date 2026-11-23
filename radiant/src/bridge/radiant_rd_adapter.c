@@ -5,7 +5,7 @@
 
 #include <string.h>
 
-#include "radiant_rd_adapter.h"
+#include <radiant/radiant_rd_adapter.h>
 
 /* Exact wire-scale to SI-decimal (raw, exp) conversions, no rounding:
  * 1/4mm = 250um, 1/4% = 25*10^-2%, 1/32% = 3125*10^-5%. */

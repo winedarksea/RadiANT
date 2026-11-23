@@ -27,8 +27,8 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "radiant_profile_sched.h"
-#include "radiant_profile_telemetry.h"
+#include <radiant/radiant_profile_sched.h>
+#include <radiant/radiant_profile_telemetry.h>
 
 /* The ANT timebase: a channel period is in counts of 1/32768 s. The one
  * number from the link layer this scheduler needs, to convert a heartbeat

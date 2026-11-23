@@ -13,9 +13,9 @@
 
 #include <string.h>
 
-#include "radiant_profile_rd.h"
-#include "radiant_bridge.h"
-#include "radiant_rd_adapter.h"
+#include <radiant/radiant_profile_rd.h>
+#include <radiant/radiant_bridge.h>
+#include <radiant/radiant_rd_adapter.h>
 
 /* Cadence 180.25 strides/min, VO 96.5 mm, GCT 261 ms, stance 35.75 %, 100
  * steps - the same numbers tools/test_ant_pages.py uses. */

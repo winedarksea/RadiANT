@@ -6,9 +6,9 @@
 
 #include <string.h>
 
-#include "radiant_profile_fec.h"
-#include "radiant_profile_power.h"
-#include "radiant_power_adapter.h"
+#include <radiant/radiant_profile_fec.h>
+#include <radiant/radiant_profile_power.h>
+#include <radiant/radiant_power_adapter.h>
 
 void radiant_power_adapter_init(struct radiant_power_adapter *a)
 {

@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Provenance: original clean-room work, written against
- * src/profiles/radiant_profile_handoff.h, radiant/include/radiant/radiant_channel.h,
+ * include/radiant/radiant_profile_handoff.h, radiant/include/radiant/radiant_channel.h,
  * radiant/include/radiant/radiant_search.h and
  * radiant/tests/fake_radio.h, with layout expectations from
  * docs/radiant-telemetry.md section 12. See docs/decisions/0002-clean-room-policy.md.
@@ -34,7 +34,7 @@
 #include <radiant/radiant_radio_hal.h>
 #include <radiant/radiant_search.h>
 
-#include "radiant_profile_handoff.h"
+#include <radiant/radiant_profile_handoff.h>
 
 #define TYPE_SLAVE  0x00u
 #define TYPE_MASTER 0x10u

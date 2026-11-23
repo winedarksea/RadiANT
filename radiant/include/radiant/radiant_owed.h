@@ -29,7 +29,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "radiant_binding.h"
+#include <radiant/radiant_binding.h>
 
 #define RADIANT_OWED_MAX (2u * RADIANT_BINDING_MAX)
 

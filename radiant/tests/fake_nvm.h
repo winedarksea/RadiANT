@@ -3,7 +3,7 @@
  * fake_nvm.h - the control surface for the test image's storage backend.
  *
  * Provenance: docs/decisions/0009-hostless-node-identity.md and
- * src/node/radiant_node_nvm.h, whose interface this implements.
+ * include/radiant/radiant_node_nvm.h, whose interface this implements.
  *
  * fake_nvm.c is to radiant_node_nvm.h what fake_radio.c is to radiant_radio_hal.h:
  * the one implementation of the seam in this image, so suites drive the real

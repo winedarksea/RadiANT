@@ -39,9 +39,9 @@
 
 #include "../fake_radio.h"
 
-#include "radiant_profile_bits.h"
-#include "radiant_profile_sched.h"
-#include "radiant_profile_telemetry.h"
+#include <radiant/radiant_profile_bits.h>
+#include <radiant/radiant_profile_sched.h>
+#include <radiant/radiant_profile_telemetry.h>
 
 /* ---------------------------------------------------------------------------
  * The node under test

@@ -17,10 +17,10 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "radiant_profile_common.h"
-#include "radiant_profile_fec.h"
-#include "radiant_profile_fec_tx.h"
-#include "radiant_profile_sched.h"
+#include <radiant/radiant_profile_common.h>
+#include <radiant/radiant_profile_fec.h>
+#include <radiant/radiant_profile_fec_tx.h>
+#include <radiant/radiant_profile_sched.h>
 
 /* Byte 7's two nibbles, assembled the way radiant_profile_fec.c's decode_fe_state()
  * takes them apart: bits 0-2 of the HIGH nibble are the state and bit 3 of it

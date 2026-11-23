@@ -33,9 +33,9 @@
 
 #include <radiant/radiant_ant.h> /* RADIANT_ANT_HOST_THREAD_PRIORITY */
 
-#include "radiant_binding.h"
-#include "radiant_bridge.h"
-#include "radiant_liveness.h"
+#include <radiant/radiant_binding.h>
+#include <radiant/radiant_bridge.h>
+#include <radiant/radiant_liveness.h>
 
 #include "bridge_app.h"
 

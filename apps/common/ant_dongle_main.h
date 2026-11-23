@@ -44,7 +44,7 @@ int ant_dongle_main_run(void);
  *
  * A weak symbol rather than a Kconfig #if because that is the in-tree idiom
  * for exactly this shape - radiant_matter_attr_write() in
- * radiant/src/bridge/radiant_matter.h is the same hook for the same reason.
+ * radiant/include/radiant/radiant_matter.h is the same hook for the same reason.
  * Note the hazard a weak override carries (a signature typo silently keeps the
  * default): the default logs nothing, so apps/dongle_thread's own boot log
  * naming each load it started is what proves the override took.

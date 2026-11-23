@@ -15,7 +15,7 @@
 
 #include <zephyr/ztest.h>
 
-#include "radiant_self_policy.h"
+#include <radiant/radiant_self_policy.h>
 
 ZTEST_SUITE(self_policy, NULL, NULL, NULL, NULL, NULL);
 

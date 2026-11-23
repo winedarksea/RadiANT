@@ -113,7 +113,7 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/../common/sources.cmake")
 # home for them, and so the storage backend is selected the same way every
 # other backend in this project is.
 #
-# The counters' storage is a seam (radiant/src/node/radiant_node_nvm.h) with no
+# The counters' storage is a seam (radiant/include/radiant/radiant_node_nvm.h) with no
 # default implementation, which is why the backend is a separate condition
 # rather than being folded into the one above: a build that selects the
 # identity and no backend must fail at the link, not fall back to RAM.
@@ -125,7 +125,6 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/../common/sources.cmake")
 # symbol.
 if(CONFIG_RADIANT_NODE_IDENT)
   target_sources(app PRIVATE ../../radiant/src/node/radiant_node_ident.c)
-  target_include_directories(app PRIVATE ../../radiant/src/node)
 endif()
 if(CONFIG_RADIANT_NODE_NVM_SETTINGS)
   target_sources(app PRIVATE ../../radiant/src/node/radiant_node_nvm_settings.c)

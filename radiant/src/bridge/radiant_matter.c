@@ -8,7 +8,7 @@
 #include <zephyr/logging/log.h>
 #include <string.h>
 
-#include "radiant_matter.h"
+#include <radiant/radiant_matter.h>
 
 /* Fixed level, no Kconfig symbol - nothing in src/bridge carries its own
  * configuration. */

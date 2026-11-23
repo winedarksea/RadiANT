@@ -165,7 +165,6 @@ target_sources(app PRIVATE
   ../../radiant/src/profiles/radiant_profile_telemetry.c
   ../../radiant/src/profiles/radiant_profile_handoff.c
 )
-target_include_directories(app PRIVATE ../../radiant/src/profiles)
 
 # ── radiant/src/node ───────────────────────────────────────────────────
 #
@@ -177,7 +176,6 @@ target_sources(app PRIVATE
   ../../radiant/src/node/radiant_node_ident.c
   ../../radiant/src/node/radiant_node_nvm_settings.c
 )
-target_include_directories(app PRIVATE ../../radiant/src/node)
 
 if(CONFIG_HRM_BLE_HRS)
   target_sources(app PRIVATE src/hrm_ble.c)

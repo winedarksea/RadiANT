@@ -62,7 +62,31 @@ TEXT_SUFFIXES = {
 }
 TEXT_NAMES = {"CMakeLists.txt", "Kconfig", "west.yml"}
 
-PHASES = ("wire", "ant", "profiles")
+PHASES = ("wire", "ant", "profiles", "matter", "headers")
+
+# The 19 macros radiant_matter.h exported unprefixed (in v1.2.0 too).
+MATTER_NAMES = (
+    "DEVTYPE_OCCUPANCY_SENSOR", "DEVTYPE_TEMPERATURE_SENSOR",
+    "DEVTYPE_HUMIDITY_SENSOR", "DEVTYPE_PRESSURE_SENSOR",
+    "CLUSTER_TEMP_MEASUREMENT", "CLUSTER_PRESSURE_MEASUREMENT",
+    "CLUSTER_REL_HUMIDITY", "CLUSTER_OCCUPANCY_SENSING", "CLUSTER_POWER_SOURCE",
+    "ATTR_MEASURED_VALUE", "ATTR_OCCUPANCY", "ATTR_BAT_PERCENT_REMAINING",
+    "ATTR_OCCUPANCY_SENSOR_TYPE", "ATTR_OCCUPANCY_SENSOR_BITMAP",
+    "OCCUPANCY_TYPE_PHYSICAL_CONTACT", "OCCUPANCY_BITMAP_PHYSICAL_CONTACT",
+    "ATTR_SCALED_VALUE", "ATTR_SCALE", "PRESSURE_SCALE",
+)
+MATTER_RE = r"\bMATTER_(%s)\b" % "|".join(MATTER_NAMES)
+
+# Headers that lived in radiant/src/{profiles,node,bridge}/ and were reached
+# through those directories on the include path. Since 2026-11-22 they are in
+# include/radiant/ and spelled <radiant/...>, like the rest of the API.
+BRIDGE_HEADERS = (
+    "radiant_binding", "radiant_bridge", "radiant_common_adapter",
+    "radiant_env_adapter", "radiant_hr_adapter", "radiant_liveness",
+    "radiant_matter", "radiant_naming", "radiant_owed", "radiant_power_adapter",
+    "radiant_rd_adapter", "radiant_rules", "radiant_self_policy",
+)
+MOVED_HEADER = r"(?:radiant_(?:profile|node)_\w+|%s)\.h" % "|".join(BRIDGE_HEADERS)
 
 # ---------------------------------------------------------------------------
 # Fixed rewrites, applied in order before the prefix rules. Paths first, so a
@@ -105,7 +129,18 @@ OLD_PATTERNS = {
     # \w+, not \w*: a bare `antr_` in prose about the rename is not a leftover.
     "wire": r"\bANTW_\w+",
     "ant": r"\b(?:antr_\w+|ANTR_\w+)|RADIANT_ANTR_API\b",
+    "matter": MATTER_RE,
+    "headers": r'#include\s*"%s"|\bsrc/(?:profiles|node|bridge)/%s' % (MOVED_HEADER, MOVED_HEADER),
 }
+
+MATTER_FIXED = [(MATTER_RE, r"RADIANT_MATTER_\1")]
+
+# Run after the profiles phase, so an old "profile_hr.h" is already
+# "radiant_profile_hr.h" when it gets here.
+HEADERS_FIXED = [
+    (r'#include\s*"(%s)"' % MOVED_HEADER, r"#include <radiant/\1>"),
+    (r"\bsrc/(?:profiles|node|bridge)/(%s)" % MOVED_HEADER, r"include/radiant/\1"),
+]
 
 IDENT_RE = re.compile(r"\b(?:radiant_)?(?:profile|node)_\w+|\b(?:RADIANT_)?(?:PROFILE|NODE)_\w+")
 
@@ -131,12 +166,16 @@ def profile_map(module: Path) -> tuple[dict[str, str], dict[str, str]]:
     """Identifier map and file-stem map, built from the module's headers."""
     ids: dict[str, str] = {}
     stems: dict[str, str] = {}
+    # Headers are in include/radiant/ since 2026-11-22, src/<sub>/ before.
+    public = module / "include" / "radiant"
     for sub in ("profiles", "node"):
         d = module / "src" / sub
-        if not d.is_dir():
-            continue
         prefix = "profile_" if sub == "profiles" else "node_"
-        for f in sorted(d.iterdir()):
+        files = sorted(d.iterdir()) if d.is_dir() else []
+        if public.is_dir():
+            files += [h for h in sorted(public.glob(f"radiant_{prefix}*.h"))
+                      if h.stem != "radiant_profile_sanity"]  # never had an old name
+        for f in files:
             if f.suffix not in (".c", ".h"):
                 continue
             stem = old_form(f.stem)
@@ -212,6 +251,11 @@ class Rewriter:
             self.fixed += [(re.compile(a), b) for a, b in WIRE_FIXED]
         if "ant" in phases:
             self.fixed += [(re.compile(a), b) for a, b in ANT_FIXED]
+        if "matter" in phases:
+            self.fixed += [(re.compile(a), b) for a, b in MATTER_FIXED]
+        self.post: list[tuple[re.Pattern, str]] = []
+        if "headers" in phases:
+            self.post += [(re.compile(a), b) for a, b in HEADERS_FIXED]
         self.ids: dict[str, str] = {}
         self.stems: dict[str, str] = {}
         if "profiles" in phases:
@@ -238,13 +282,15 @@ class Rewriter:
             text = self.stem_re.sub(lambda m: self.stems[m.group(1)], text)
         if self.id_re:
             text = self.id_re.sub(lambda m: self.ids[m.group(1)], text)
+        for rx, rep in self.post:
+            text = rx.sub(rep, text)
         return text
 
     def old_names(self, text: str) -> set[str]:
         found: set[str] = set()
         for ph in self.phases:
             if ph in OLD_PATTERNS:
-                found |= set(re.findall(OLD_PATTERNS[ph], text))
+                found |= {m.group(0) for m in re.finditer(OLD_PATTERNS[ph], text)}
         if self.id_re:
             found |= {m.group(1) for m in self.id_re.finditer(text)}
         return found

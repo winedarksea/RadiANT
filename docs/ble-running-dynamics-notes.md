@@ -124,7 +124,7 @@ carries at all (speed rides ANT+ page `0x10` from the *display*, in a
 different fixed-point shape: 1/256 m/s there too, so the scale at least
 agrees).
 
-**Every scale factor above already exists in `src/profiles/radiant_profile_rd.h`**,
+**Every scale factor above already exists in `include/radiant/radiant_profile_rd.h`**,
 independently derived from the ANT+ spec. A BLE encoder would reuse
 `struct radiant_profile_rd_metrics` as its source of truth and just re-pack the same
 values into protobuf-shaped varints instead of ANT+'s bit-packed pages — the

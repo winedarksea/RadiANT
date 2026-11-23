@@ -5,7 +5,7 @@
 
 #include <string.h>
 
-#include "radiant_self_policy.h"
+#include <radiant/radiant_self_policy.h>
 
 void radiant_self_key_init(struct radiant_self_key_state *st)
 {

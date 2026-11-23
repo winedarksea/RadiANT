@@ -3,7 +3,7 @@
  * radiant_env_adapter.h - ANT+ Environment (device type 0x19) onto the sample
  * bus.
  *
- * Wire layout is src/profiles/radiant_profile_env.h's, decoded through
+ * Wire layout is include/radiant/radiant_profile_env.h's, decoded through
  * radiant_profile_env_decode_temperature()/_capabilities() rather than re-derived
  * here. Vocabulary mapping follows docs/radiant-bridge.md section 3.1's "one
  * adapter per profile, not one per profile per sink".
@@ -65,8 +65,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "radiant_profile_env.h"
-#include "radiant_bridge.h"
+#include <radiant/radiant_profile_env.h>
+#include <radiant/radiant_bridge.h>
 
 #ifdef __cplusplus
 extern "C" {

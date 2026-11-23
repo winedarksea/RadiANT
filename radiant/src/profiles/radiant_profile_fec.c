@@ -13,7 +13,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "radiant_profile_fec.h"
+#include <radiant/radiant_profile_fec.h>
 
 /*
  * Byte 7's high nibble, split per Table 8-10. Shared by both pages because the

@@ -35,11 +35,11 @@
 #include <radiant/radiant_channel.h>
 
 #include "fake_radio.h"
-#include "radiant_profile_common.h"
-#include "radiant_profile_compat.h"
-#include "radiant_profile_hr.h"
-#include "radiant_profile_private.h"
-#include "radiant_profile_sched.h"
+#include <radiant/radiant_profile_common.h>
+#include <radiant/radiant_profile_compat.h>
+#include <radiant/radiant_profile_hr.h>
+#include <radiant/radiant_profile_private.h>
+#include <radiant/radiant_profile_sched.h>
 
 #if defined(CONFIG_RADIANT_SEC_COMPAT)
 

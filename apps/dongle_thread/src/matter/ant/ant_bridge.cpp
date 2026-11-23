@@ -121,10 +121,10 @@
  * Wrapping them in one here would put <zephyr/sys/iterable_sections.h> - which
  * radiant_bridge.h pulls in - inside C linkage, which is a way to break a C++
  * build that only shows up on an unlucky include order. */
-#include "radiant_binding.h"
-#include "radiant_bridge.h"
-#include "radiant_matter.h"
-#include "radiant_naming.h"
+#include <radiant/radiant_binding.h>
+#include <radiant/radiant_bridge.h>
+#include <radiant/radiant_matter.h>
+#include <radiant/radiant_naming.h>
 
 LOG_MODULE_DECLARE(app, CONFIG_CHIP_APP_LOG_LEVEL);
 

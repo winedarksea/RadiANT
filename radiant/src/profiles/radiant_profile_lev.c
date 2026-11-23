@@ -6,9 +6,9 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "radiant_profile_common.h"
-#include "radiant_profile_lev.h"
-#include "radiant_profile_sched.h"
+#include <radiant/radiant_profile_common.h>
+#include <radiant/radiant_profile_lev.h>
+#include <radiant/radiant_profile_sched.h>
 
 /* A 12-bit field: whole low byte, then the next byte's low nibble with the
  * high nibble reserved as 0xF. */

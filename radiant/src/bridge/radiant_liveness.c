@@ -6,9 +6,9 @@
 #include <stdbool.h>
 #include <string.h>
 
-#include "radiant_binding.h"
-#include "radiant_bridge.h"
-#include "radiant_liveness.h"
+#include <radiant/radiant_binding.h>
+#include <radiant/radiant_bridge.h>
+#include <radiant/radiant_liveness.h>
 
 /*
  * The channel period arrives in ANT's own 32768 Hz counts (see

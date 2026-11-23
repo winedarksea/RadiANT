@@ -63,7 +63,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "radiant_profile_telemetry.h"
+#include <radiant/radiant_profile_telemetry.h>
 
 #ifdef __cplusplus
 extern "C" {

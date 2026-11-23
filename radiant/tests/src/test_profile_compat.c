@@ -33,11 +33,11 @@
 
 #include <radiant/radiant_sec_compat.h>
 
-#include "radiant_profile_common.h"
-#include "radiant_profile_compat.h"
-#include "radiant_profile_hr.h"
-#include "radiant_profile_power.h"
-#include "radiant_profile_sched.h"
+#include <radiant/radiant_profile_common.h>
+#include <radiant/radiant_profile_compat.h>
+#include <radiant/radiant_profile_hr.h>
+#include <radiant/radiant_profile_power.h>
+#include <radiant/radiant_profile_sched.h>
 
 #define TX_CH 0u
 #define RX_CH 1u

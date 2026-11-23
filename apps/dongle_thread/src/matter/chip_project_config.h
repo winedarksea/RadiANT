@@ -37,7 +37,7 @@
  *
  *   CHIP_DEVICE_CONFIG_DYNAMIC_ENDPOINT_COUNT   here
  *   CONFIG_BRIDGE_MAX_DYNAMIC_ENDPOINTS_NUMBER  src/matter/Kconfig
- *   RADIANT_MATTER_MAX_ENDPOINTS                radiant/src/bridge/radiant_matter.h
+ *   RADIANT_MATTER_MAX_ENDPOINTS                radiant/include/radiant/radiant_matter.h
  *
  * The first is DEFINED as the second, so those two cannot drift. The third is
  * a C macro in a module this file must not include from here (this header is

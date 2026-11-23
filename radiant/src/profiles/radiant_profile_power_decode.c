@@ -36,7 +36,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "radiant_profile_power.h"
+#include <radiant/radiant_profile_power.h>
 
 int radiant_profile_power_decode_std(const uint8_t *body, struct radiant_profile_power_std *out)
 {

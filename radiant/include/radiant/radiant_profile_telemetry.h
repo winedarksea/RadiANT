@@ -60,7 +60,7 @@
 
 /* The schedule block: the clock-accuracy nibble of frame 1 and the schedule
  * frame's 48 bits. Its own header carries the argument for every field. */
-#include "radiant_profile_schedule.h"
+#include <radiant/radiant_profile_schedule.h>
 
 #ifdef __cplusplus
 extern "C" {

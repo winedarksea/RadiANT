@@ -47,8 +47,8 @@
  * with or without CONFIG_RADIANT_SEC. */
 #include <radiant/radiant_sec.h>
 
-#include "radiant_profile_bits.h"
-#include "radiant_profile_telemetry.h"
+#include <radiant/radiant_profile_bits.h>
+#include <radiant/radiant_profile_telemetry.h>
 
 /* ---------------------------------------------------------------------------
  * Small shared facts

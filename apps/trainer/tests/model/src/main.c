@@ -21,8 +21,8 @@
 
 #include <zephyr/ztest.h>
 
-#include "radiant_profile_fec.h"
-#include "radiant_profile_fec_tx.h"
+#include <radiant/radiant_profile_fec.h>
+#include <radiant/radiant_profile_fec_tx.h>
 #include "trainer_ackfault.h"
 #include "trainer_model.h"
 

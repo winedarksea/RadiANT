@@ -20,7 +20,7 @@
 #include <radiant/radiant_chanmap.h>
 #include <radiant/radiant_radio_hal.h>
 
-#include "radiant_profile_freq.h"
+#include <radiant/radiant_profile_freq.h>
 
 /* The countdown field is one byte and the unit multiplies it, so K's ceiling is
  * a consequence of the wire rather than a second opinion about it. */

@@ -37,8 +37,8 @@
 #include <errno.h>
 #include <string.h>
 
-#include "radiant_profile_bits.h"
-#include "radiant_profile_handoff.h"
+#include <radiant/radiant_profile_bits.h>
+#include <radiant/radiant_profile_handoff.h>
 
 /* Field-area bit offsets. Named rather than inlined because the Python mirror
  * names the same numbers and a silent disagreement between the two is the one

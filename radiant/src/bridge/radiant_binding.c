@@ -8,7 +8,7 @@
 
 #include <zephyr/kernel.h>
 
-#include "radiant_binding.h"
+#include <radiant/radiant_binding.h>
 
 static struct radiant_binding table[RADIANT_BINDING_MAX];
 

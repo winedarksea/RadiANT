@@ -87,7 +87,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "radiant_profile_compat.h"
+#include <radiant/radiant_profile_compat.h>
 
 #ifdef __cplusplus
 extern "C" {

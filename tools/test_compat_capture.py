@@ -52,6 +52,17 @@ except SystemExit:  # pyusb missing: ant_verify exits rather than raising
 TOOLS = os.path.dirname(os.path.abspath(__file__))
 VECTORS = os.path.join(TOOLS, "vectors")
 SRC_PROFILES = os.path.join(os.path.dirname(TOOLS), "radiant", "src", "profiles")
+# Profile headers sit with the rest of the API since 2026-11-22.
+INC_RADIANT = os.path.join(os.path.dirname(TOOLS), "radiant", "include", "radiant")
+
+
+def profile_path(name):
+    return os.path.join(INC_RADIANT if name.endswith(".h") else SRC_PROFILES, name)
+
+
+def reaches_core_header(include_line):
+    """An #include of a radiant/ header that is not another profile's."""
+    return "radiant/" in include_line and "radiant/radiant_profile_" not in include_line
 
 # Pinned in radiant/tests/src/test_profile_compat.c; must agree or
 # nothing verifies. Also ant_sim's DEFAULT_COMPAT_ROOT, so a C capture and a
@@ -438,7 +449,7 @@ class TestTheBoundary(unittest.TestCase):
 
     def test_no_profile_module_names_radiant_sec_in_code(self):
         for name in self.PROFILE_FILES:
-            path = os.path.join(SRC_PROFILES, name)
+            path = profile_path(name)
             with open(path, encoding="utf-8") as handle:
                 for lineno, line in enumerate(handle, start=1):
                     stripped = line.strip()
@@ -451,28 +462,28 @@ class TestTheBoundary(unittest.TestCase):
 
     def test_no_profile_module_includes_a_radiant_header(self):
         for name in self.PROFILE_FILES:
-            path = os.path.join(SRC_PROFILES, name)
+            path = profile_path(name)
             with open(path, encoding="utf-8") as handle:
                 includes = [line for line in handle
                             if line.lstrip().startswith("#include")]
             for line in includes:
-                self.assertNotIn("radiant/", line,
+                self.assertFalse(reaches_core_header(line),
                                  f"{name} includes {line.strip()}")
 
     def test_profile_compat_is_the_one_file_that_does(self):
         """Or the boundary is a wall with nothing behind it."""
-        with open(os.path.join(SRC_PROFILES, "radiant_profile_compat.c"),
+        with open(profile_path("radiant_profile_compat.c"),
                   encoding="utf-8") as handle:
             text = handle.read()
         self.assertIn("#include <radiant/radiant_sec_compat.h>", text)
         self.assertIn("radiant_sec_compat_tx_attest", text)
 
-        with open(os.path.join(SRC_PROFILES, "radiant_profile_compat.h"),
+        with open(profile_path("radiant_profile_compat.h"),
                   encoding="utf-8") as handle:
             header = handle.read()
         for line in header.splitlines():
             if line.lstrip().startswith("#include"):
-                self.assertNotIn("radiant/", line,
+                self.assertFalse(reaches_core_header(line),
                                  "radiant_profile_compat.h must not export a "
                                  "radiant header to its includers")
 

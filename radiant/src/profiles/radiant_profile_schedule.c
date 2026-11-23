@@ -18,8 +18,8 @@
 
 #include <radiant/radiant_frame.h>
 
-#include "radiant_profile_bits.h"
-#include "radiant_profile_schedule.h"
+#include <radiant/radiant_profile_bits.h>
+#include <radiant/radiant_profile_schedule.h>
 
 /* The whole body is assigned; adding a field means taking bits from the
  * reservation in this sum rather than discovering an overlap on air. */

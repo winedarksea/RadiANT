@@ -8,9 +8,9 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "radiant_profile_common.h"
-#include "radiant_profile_controls.h"
-#include "radiant_profile_sched.h"
+#include <radiant/radiant_profile_common.h>
+#include <radiant/radiant_profile_controls.h>
+#include <radiant/radiant_profile_sched.h>
 
 /* Command numbers 5..31 and 37..32767 are reserved (table 9-8) and refused
  * rather than transmitted. */

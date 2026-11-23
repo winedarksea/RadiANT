@@ -83,9 +83,9 @@
 #include <radiant/radiant_sched.h>
 #include <radiant/radiant_sec.h>
 
-#include "radiant_profile_sched.h"
-#include "radiant_profile_schedule.h"
-#include "radiant_profile_telemetry.h"
+#include <radiant/radiant_profile_sched.h>
+#include <radiant/radiant_profile_schedule.h>
+#include <radiant/radiant_profile_telemetry.h>
 
 #ifdef __cplusplus
 extern "C" {

@@ -20,7 +20,7 @@
 
 #include <zephyr/ztest.h>
 
-#include "radiant_owed.h"
+#include <radiant/radiant_owed.h>
 
 #define A 0xA0A0A0A0A0A0A0A1ull
 #define B 0xB0B0B0B0B0B0B0B2ull

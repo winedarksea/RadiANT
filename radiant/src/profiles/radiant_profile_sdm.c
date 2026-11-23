@@ -14,9 +14,9 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "radiant_profile_common.h"
-#include "radiant_profile_sched.h"
-#include "radiant_profile_sdm.h"
+#include <radiant/radiant_profile_common.h>
+#include <radiant/radiant_profile_sched.h>
+#include <radiant/radiant_profile_sdm.h>
 
 /* Nothing in this file writes an all-ones sentinel. Trap 2 in the header: on
  * this profile an unused field is zero and validity lives in page 22. */

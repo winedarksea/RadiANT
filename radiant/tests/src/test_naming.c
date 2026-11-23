@@ -21,9 +21,9 @@
 #include <zephyr/toolchain.h>
 #include <zephyr/ztest.h>
 
-#include "radiant_bridge.h"
-#include "radiant_naming.h"
-#include "radiant_rules.h"
+#include <radiant/radiant_bridge.h>
+#include <radiant/radiant_naming.h>
+#include <radiant/radiant_rules.h>
 
 /* The device types, spelled here rather than included: this suite tests the
  * formatter's table, and reading the constant out of the same header the table
@@ -33,7 +33,7 @@
 #define DEVTYPE_FEC   0x11u
 #define DEVTYPE_ENV   0x19u
 
-/* Table 8-8 (radiant/src/profiles/radiant_profile_fec.h). */
+/* Table 8-8 (radiant/include/radiant/radiant_profile_fec.h). */
 #define FEC_TREADMILL  19u
 #define FEC_ELLIPTICAL 20u
 #define FEC_ROWER      22u

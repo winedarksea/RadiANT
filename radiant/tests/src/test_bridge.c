@@ -20,10 +20,10 @@
 #include <zephyr/toolchain.h>
 #include <zephyr/ztest.h>
 
-#include "radiant_bridge.h"
-#include "radiant_hr_adapter.h"
-#include "radiant_matter.h"
-#include "radiant_rules.h"
+#include <radiant/radiant_bridge.h>
+#include <radiant/radiant_hr_adapter.h>
+#include <radiant/radiant_matter.h>
+#include <radiant/radiant_rules.h>
 
 /* Registered for the life of the test binary (STRUCT_SECTION_ITERABLE is a
  * link-time array, so a sink cannot be created/destroyed per test);

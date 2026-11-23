@@ -21,8 +21,8 @@
 #include <radiant/radiant_sec.h>
 #include <radiant/radiant_sec_compat.h>
 
-#include "radiant_node_ident.h"
-#include "radiant_node_nvm.h"
+#include <radiant/radiant_node_ident.h>
+#include <radiant/radiant_node_nvm.h>
 
 /* The level symbol exists only where src/node/Kconfig is sourced with
  * RADIANT_NODE_IDENT on; every caller that compiles this file does that, and

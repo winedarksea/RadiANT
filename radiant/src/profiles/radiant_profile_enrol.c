@@ -23,8 +23,8 @@
 
 #include <radiant/radiant_sec.h>
 
-#include "radiant_profile_compat.h"
-#include "radiant_profile_enrol.h"
+#include <radiant/radiant_profile_compat.h>
+#include <radiant/radiant_profile_enrol.h>
 
 #if defined(CONFIG_RADIANT_SEC) && defined(CONFIG_RADIANT_SEC_PAIRING_X25519)
 

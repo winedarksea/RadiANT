@@ -17,9 +17,9 @@
 #include <zephyr/sys/util.h>
 #include <zephyr/toolchain.h>
 
-#include "radiant_bridge.h"
-#include "radiant_naming.h"
-#include "radiant_rules.h"
+#include <radiant/radiant_bridge.h>
+#include <radiant/radiant_naming.h>
+#include <radiant/radiant_rules.h>
 
 /*
  * The two table widths, NUL INCLUDED, and they are `char name[N]` rather than
@@ -88,7 +88,7 @@ static const struct base_row base_names[] = {
 /*
  * FE-C equipment type -> base name. The codes are Table 8-8's, spelled with
  * the PROFILE_FEC_TYPE_* names in the comments rather than by including
- * src/profiles/radiant_profile_fec.h: this file sits above the profile decoders, the
+ * include/radiant/radiant_profile_fec.h: this file sits above the profile decoders, the
  * same line radiant_rules.c draws for FEC_STATE_IN_USE.
  *
  * 0 IS NOT A ROW. Table 8-8 has no type 0, and the subtype is 0 for exactly as

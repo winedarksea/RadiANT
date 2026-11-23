@@ -5,7 +5,7 @@
 
 #include <string.h>
 
-#include "radiant_hr_adapter.h"
+#include <radiant/radiant_hr_adapter.h>
 
 void radiant_hr_adapter_init(struct radiant_hr_adapter *a)
 {

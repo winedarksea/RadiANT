@@ -84,7 +84,6 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/../common/sources.cmake")
 # Off by default here too.
 if(CONFIG_RADIANT_NODE_IDENT)
   target_sources(app PRIVATE ../../radiant/src/node/radiant_node_ident.c)
-  target_include_directories(app PRIVATE ../../radiant/src/node)
 endif()
 if(CONFIG_RADIANT_NODE_NVM_SETTINGS)
   target_sources(app PRIVATE ../../radiant/src/node/radiant_node_nvm_settings.c)

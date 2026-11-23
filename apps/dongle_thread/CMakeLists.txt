@@ -319,7 +319,6 @@ target_sources_ifdef(CONFIG_ANT_DONGLE_MQTT_SINK app PRIVATE
 # authority is still the PC behind it, same as the plain dongle.
 if(CONFIG_RADIANT_NODE_IDENT)
   target_sources(app PRIVATE ../../radiant/src/node/radiant_node_ident.c)
-  target_include_directories(app PRIVATE ../../radiant/src/node)
 endif()
 if(CONFIG_RADIANT_NODE_NVM_SETTINGS)
   target_sources(app PRIVATE ../../radiant/src/node/radiant_node_nvm_settings.c)

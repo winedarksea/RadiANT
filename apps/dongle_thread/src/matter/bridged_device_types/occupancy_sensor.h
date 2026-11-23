@@ -53,7 +53,7 @@
  * attribute nobody writes reads back as whatever this object was constructed
  * with.
  *
- * THE VALUES ARE NOT HARDCODED HERE. radiant/src/bridge/radiant_matter.h
+ * THE VALUES ARE NOT HARDCODED HERE. radiant/include/radiant/radiant_matter.h
  * already states them - RADIANT_MATTER_OCCUPANCY_TYPE_PHYSICAL_CONTACT and
  * RADIANT_MATTER_OCCUPANCY_BITMAP_PHYSICAL_CONTACT - and radiant_matter.c already
  * emits them through its `extra[]` mechanism, where `mul == 0` means

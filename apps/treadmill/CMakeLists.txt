@@ -166,7 +166,6 @@ if(CONFIG_TREADMILL_HR_RX)
   target_sources(app PRIVATE ../../radiant/src/profiles/radiant_profile_hr.c
                              ../../radiant/src/profiles/radiant_profile_compat.c)
 endif()
-target_include_directories(app PRIVATE ../../radiant/src/profiles)
 
 # ── radiant/src/node ────────────────────────────────────────────────────────
 #
@@ -176,4 +175,3 @@ target_sources(app PRIVATE
   ../../radiant/src/node/radiant_node_ident.c
   ../../radiant/src/node/radiant_node_nvm_settings.c
 )
-target_include_directories(app PRIVATE ../../radiant/src/node)

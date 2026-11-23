@@ -6,9 +6,9 @@
 #include <stdbool.h>
 #include <string.h>
 
-#include "radiant_binding.h"
-#include "radiant_bridge.h"
-#include "radiant_rules.h"
+#include <radiant/radiant_binding.h>
+#include <radiant/radiant_bridge.h>
+#include <radiant/radiant_rules.h>
 
 /* Section 6.1's numbers, stated in the section by name. */
 #define ACTIVITY_ASSERT_US ((uint64_t)2 * 1000000u)
@@ -366,7 +366,7 @@ static void eval_zone(uint32_t source, const struct radiant_sample *s)
  * include a profile header to learn: radiant_bridge.h's rule is that the
  * bridge sits strictly above the profile decoders and touches no ANT frame.
  * The one number it needs is the IN_USE code, spelled here with the citation
- * rather than by including src/profiles/radiant_profile_fec.h and dragging the whole
+ * rather than by including include/radiant/radiant_profile_fec.h and dragging the whole
  * page codec into the sample bus.
  *
  * 0 and 5..7 are reserved in Table 8-10 and are passed through by the decoder

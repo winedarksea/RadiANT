@@ -13,9 +13,9 @@
 #include <zephyr/toolchain.h>
 #include <zephyr/ztest.h>
 
-#include "radiant_profile_env.h"
-#include "radiant_bridge.h"
-#include "radiant_env_adapter.h"
+#include <radiant/radiant_profile_env.h>
+#include <radiant/radiant_bridge.h>
+#include <radiant/radiant_env_adapter.h>
 
 /* ── The capture sink ──────────────────────────────────────────────────────
  * Sinks are linker-collected and global to the whole test binary, so this one

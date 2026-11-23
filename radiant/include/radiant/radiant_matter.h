@@ -25,7 +25,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "radiant_bridge.h"
+#include <radiant/radiant_bridge.h>
 
 #ifdef __cplusplus
 extern "C" {

@@ -170,7 +170,7 @@ from "long range": at eight bytes an S=8 frame is ~1.3 ms against ~150 µs at
 On the wire the same vocabulary is three bits in the schedule block — `0`
 uncoded (1 M), `1` LE Coded S=8, `2` LE Coded S=2, `3..7` reserved — see
 `docs/radiant-telemetry.md` section 6, `TLM_CODING_*` in `tools/ant_pages.py`
-and `enum radiant_profile_sched_coding` in `src/profiles/radiant_profile_schedule.h`. Those are
+and `enum radiant_profile_sched_coding` in `include/radiant/radiant_profile_schedule.h`. Those are
 one vocabulary and not three, and `scripts/check_profile_registry.py` enforces
 the column against it.
 

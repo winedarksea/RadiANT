@@ -79,7 +79,7 @@
 #include <stdint.h>
 
 /* For the clock-accuracy ladder, which is not restated here. */
-#include "radiant_profile_handoff.h"
+#include <radiant/radiant_profile_handoff.h>
 
 #ifdef __cplusplus
 extern "C" {

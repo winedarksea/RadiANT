@@ -15,7 +15,7 @@
 #include <errno.h>
 
 #include "hrm_sensor.h"
-#include "radiant_profile_hr.h"
+#include <radiant/radiant_profile_hr.h>
 
 LOG_MODULE_DECLARE(hrm, CONFIG_HRM_LOG_LEVEL);
 

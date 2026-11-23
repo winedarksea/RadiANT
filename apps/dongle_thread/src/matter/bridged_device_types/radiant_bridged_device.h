@@ -59,7 +59,7 @@ namespace RadiantMatter
  * OccupancySensor and PressureSensor are simply not in it, and adding them
  * would be an edit to a file src/matter/README.md promises is unmodified.
  *
- * These must agree with radiant/src/bridge/radiant_matter.h's
+ * These must agree with radiant/include/radiant/radiant_matter.h's
  * MATTER_DEVTYPE_* constants, which is asserted in ant/ant_bridge.cpp rather
  * than here so that this header stays free of RadiANT includes.
  */

@@ -22,7 +22,7 @@
 
 #include <radiant/radiant_ant.h>
 #include <radiant/radiant_wire.h>
-#include "radiant_profile_hr.h"
+#include <radiant/radiant_profile_hr.h>
 #include "treadmill_hr_rx.h"
 #include "treadmill_state.h"
 

@@ -13,7 +13,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/sys/iterable_sections.h>
 
-#include "radiant_bridge.h"
+#include <radiant/radiant_bridge.h>
 
 /* RADIANT_BRIDGE_RING_CAP: radiant_bridge.h. */
 static struct radiant_sample ring[RADIANT_BRIDGE_RING_CAP];

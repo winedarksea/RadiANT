@@ -18,7 +18,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "radiant_profile_bits.h"
+#include <radiant/radiant_profile_bits.h>
 
 /* docs/radiant-telemetry.md section 6. Gaps are deliberate: 1/2/4/6-bit codes
  * serve the boolean/small-enum vocabulary; no 64-bit code because the field

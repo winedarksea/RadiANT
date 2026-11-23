@@ -26,8 +26,8 @@
 
 #include <radiant/radiant_sec_compat.h>
 
-#include "radiant_profile_compat.h"
-#include "radiant_profile_private.h"
+#include <radiant/radiant_profile_compat.h>
+#include <radiant/radiant_profile_private.h>
 
 #if defined(CONFIG_RADIANT_SEC) && defined(CONFIG_RADIANT_SEC_COMPAT)
 

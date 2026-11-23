@@ -30,8 +30,8 @@
 #include <radiant/radiant_sec_compat.h>
 
 #include "fake_nvm.h"
-#include "radiant_node_ident.h"
-#include "radiant_node_nvm.h"
+#include <radiant/radiant_node_ident.h>
+#include <radiant/radiant_node_nvm.h>
 
 #if defined(CONFIG_RADIANT_TEST_FAKE_RNG)
 #include "fake_rng.h"

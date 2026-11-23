@@ -1,9 +1,9 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * fake_nvm.c - src/node/radiant_node_nvm.h against RAM, with a reboot you can call.
+ * fake_nvm.c - include/radiant/radiant_node_nvm.h against RAM, with a reboot you can call.
  *
  * Provenance: docs/decisions/0009-hostless-node-identity.md and
- * src/node/radiant_node_nvm.h.
+ * include/radiant/radiant_node_nvm.h.
  *
  * See fake_nvm.h for why this exists: the properties this phase must assert
  * (a counter that survives a power cycle, a write that fails) belong to the
@@ -20,7 +20,7 @@
 #include <string.h>
 
 #include "fake_nvm.h"
-#include "radiant_node_nvm.h"
+#include <radiant/radiant_node_nvm.h>
 
 #define REC_MAX_LEN 16
 

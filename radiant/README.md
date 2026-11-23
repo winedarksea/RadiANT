@@ -100,9 +100,9 @@ what is not.
 |---|---|---|
 | Link layer and radio backend | `CONFIG_RADIANT` | `<radiant/radiant_channel.h>` and others |
 | `radiant_ant_*` channel API and runtime | `CONFIG_RADIANT_ANT_API` | `<radiant/radiant_ant.h>` |
-| ANT+ device profile pages | `CONFIG_RADIANT_PROFILES` | `"radiant_profile_hr.h"` and others |
-| Sample bus, sinks, profile adapters | `CONFIG_RADIANT_BRIDGE` | `"radiant_bridge.h"` and others |
-| Rule, liveness and Matter-map sinks on the bus | `CONFIG_RADIANT_BRIDGE_RULES`, `_LIVENESS`, `_MATTER_MAP` | `"radiant_rules.h"`, `"radiant_liveness.h"`, `"radiant_matter.h"` |
+| ANT+ device profile pages | `CONFIG_RADIANT_PROFILES` | `<radiant/radiant_profile_hr.h>` and others |
+| Sample bus, sinks, profile adapters | `CONFIG_RADIANT_BRIDGE` | `<radiant/radiant_bridge.h>` and others |
+| Rule, liveness and Matter-map sinks on the bus | `CONFIG_RADIANT_BRIDGE_RULES`, `_LIVENESS`, `_MATTER_MAP` | `<radiant/radiant_rules.h>`, `<radiant/radiant_liveness.h>`, `<radiant/radiant_matter.h>` |
 | Payload authentication and encryption | `CONFIG_RADIANT_SEC` | `<radiant/radiant_sec.h>` |
 
 Code you do not call is dropped at link time, so the profile and bridge switches

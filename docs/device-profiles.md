@@ -148,7 +148,7 @@ this project's code — Core Temperature's is 8192 — and it is stated in secti
 3.8 with its source. The column means "verified here", and widening it to mean
 "read somewhere" would make every other cell in it worth less. `0x14` used to
 sit here for the same reason and no longer does: `RADIANT_PROFILE_LEV_PERIOD` in
-`src/profiles/radiant_profile_lev.h` is now that verified constant.
+`include/radiant/radiant_profile_lev.h` is now that verified constant.
 
 **`0x11` and `0x19` used to carry `—` and no longer do.** Both are now
 transcribed from their primary documents into named constants in
@@ -177,7 +177,7 @@ The table above records each type's **default**. Three of them permit more than
 one rate. The heart-rate and bicycle-power sets live in `tools/ant_pages.py` as
 `HRM_PERIODS` and `BPWR_PERIODS`, cross-checked against
 `docs/profile-registry.md` by `scripts/check_profile_registry.py`; Environment's
-pair lives in `src/profiles/radiant_profile_env.h` and has no Python mirror to be
+pair lives in `include/radiant/radiant_profile_env.h` and has no Python mirror to be
 checked against.
 
 | Type | Rate | Period | Approx. |
@@ -507,7 +507,7 @@ own decimal column says 64–93.
 
 The consequence is that **every bound channel now feeds a second decoder on
 every broadcast**, so one source has two producers. That is why
-`radiant/src/bridge/radiant_bridge.h` reserves a `field_id` block: `0x00`–`0x1F`
+`radiant/include/radiant/radiant_bridge.h` reserves a `field_id` block: `0x00`–`0x1F`
 for the bound profile's own adapter, `0x20`–`0x3F` for common pages (one id per
 subpage, at `RADIANT_FIELD_ID_COMMON_BASE + subpage`), `0x40`–`0xFF`
 unallocated. A sink keys stored history on `(source, field_id)`, so without the

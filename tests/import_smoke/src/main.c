@@ -28,13 +28,13 @@
 #include <radiant/radiant_msg.h>
 #include <radiant/radiant_wire.h>
 
-#include "radiant_bridge.h"
-#include "radiant_hr_adapter.h"
+#include <radiant/radiant_bridge.h>
+#include <radiant/radiant_hr_adapter.h>
 
 LOG_MODULE_REGISTER(import_smoke, LOG_LEVEL_INF);
 
 /* ANT+ Heart Rate, device type 0x78 - see docs/device-profiles.md. Spelled
- * as a literal rather than pulled from src/profiles/radiant_profile_hr.h's
+ * as a literal rather than pulled from include/radiant/radiant_profile_hr.h's
  * RADIANT_PROFILE_HR_DEVICE_TYPE: that header is the TRANSMIT side (encoding pages
  * for a node to send) and has no business in a receive-side demo. */
 #define DEMO_HR_DEVICE_TYPE 0x78u

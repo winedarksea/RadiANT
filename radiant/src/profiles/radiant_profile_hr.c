@@ -25,10 +25,10 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "radiant_profile_common.h"
-#include "radiant_profile_compat.h"
-#include "radiant_profile_hr.h"
-#include "radiant_profile_sched.h"
+#include <radiant/radiant_profile_common.h>
+#include <radiant/radiant_profile_compat.h>
+#include <radiant/radiant_profile_hr.h>
+#include <radiant/radiant_profile_sched.h>
 
 /* The background rotation, in the order a strap walks it. */
 static const uint8_t hr_background[RADIANT_PROFILE_HR_BACKGROUND_PAGES] = {

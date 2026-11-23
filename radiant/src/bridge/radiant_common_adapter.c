@@ -5,8 +5,8 @@
 
 #include <string.h>
 
-#include "radiant_profile_common.h"
-#include "radiant_common_adapter.h"
+#include <radiant/radiant_profile_common.h>
+#include <radiant/radiant_common_adapter.h>
 
 /* ---------------------------------------------------------------------------
  * The conversion constants. Exact ones first, so the two lossy ones below
