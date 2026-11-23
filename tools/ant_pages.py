@@ -3135,6 +3135,11 @@ class TlmDescriptor:
     # this came from carried a descriptor authentication frame that verified.
     # Only decode_tlm_descriptor(..., auth=...) sets it.
     authenticated: bool = dataclasses.field(default=False, compare=False)
+    # Receiver-side only, never encoded and never compared: True when this
+    # came through decode_tlm_descriptor(..., auth=...), whatever the verdict.
+    # The receiver holds the key, so a set it could not verify - a wholly
+    # plain one included - may not decode data. The C `keyed` field.
+    keyed: bool = dataclasses.field(default=False, compare=False)
 
     @property
     def field_area_bits(self) -> int:
@@ -3148,7 +3153,9 @@ class TlmDescriptor:
 
         False when reserved transform bit 5 or 4 is set (nothing implements
         them). With X_CONF or X_AUTH, True only when `authenticated` - the
-        schema's authentication frame verified. With no transform, True.
+        schema's authentication frame verified. With no transform, True -
+        unless `keyed`: a receiver holding the key decodes only what verified,
+        so a plain set it took is refused.
 
         True is about the SCHEMA: the data bytes must still have come through
         the secured receive path, decrypted and carrying a verdict, and gating
@@ -3159,6 +3166,8 @@ class TlmDescriptor:
         if self.flags & (TLM_FLAG_RSVD_5 | TLM_FLAG_RSVD_4):
             return False
         if self.flags & TLM_FLAG_TRANSFORM_MASK:
+            return self.authenticated
+        if self.keyed:
             return self.authenticated
         return True
 
@@ -3495,8 +3504,14 @@ def decode_tlm_descriptor(frames, auth: TlmDescAuth | None = None,
     With `auth`, returns (descriptor, epoch): for a set announcing X_CONF or
     X_AUTH the epoch is recovered with tlm_desc_auth_find_epoch() and
     descriptor.authenticated says whether it verified (epoch None if not).
-    A plain set returns (descriptor, None) with authenticated False. A failed
-    verification is not raised - the schema is still the node's identity.
+    Passing `auth` is holding the key: the descriptor comes back `keyed`, and
+    a set with neither X_CONF nor X_AUTH (wholly plain, or reserved bits
+    only) is REFUSED like a failed verification - (descriptor, None),
+    authenticated False, may_decode_data False - since a peer without the key
+    could otherwise lay a plain schema with the genuine schema id over
+    genuine, correctly MAC'd data pages (radiant_profile_desc_rx_take_auth()
+    returns -EBADMSG for it). A plain node is decoded without `auth`. A
+    refusal is not raised - the schema is still the node's identity.
     Without `auth`, returns the descriptor alone, as it always has.
     """
     frames = [bytes(f[:RADIANT_TLM_FRAME_LEN]) for f in frames]
@@ -3591,7 +3606,9 @@ def decode_tlm_descriptor(frames, auth: TlmDescAuth | None = None,
     _tlm_validate(d, decoding=True)
     if auth is None:
         return d
+    d.keyed = True
     if not d.flags & (TLM_FLAG_X_CONF | TLM_FLAG_X_AUTH):
+        # Nothing the key can verify: refused, identity kept.
         return d, None
     epoch = tlm_desc_auth_find_epoch(frames, auth, from_epoch, span)
     d.authenticated = epoch is not None

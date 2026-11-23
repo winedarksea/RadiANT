@@ -1932,6 +1932,70 @@ class TestTelemetryDescriptorAuth(unittest.TestCase):
         self.assertTrue(back.may_decode_data)
         self.assertEqual(back.epoch, 0, "the decoded epoch is what frame 1 "
                          "said; the recovered one is returned")
+        self.assertTrue(back.keyed)
+
+    def test_a_keyed_receiver_refuses_a_plain_set(self):
+        # Security review 2026-11-22, the C test of the same name: a plain set
+        # with the genuine schema id, under the key, used to come back
+        # decodable and read a genuine sealed page through its own schema.
+        sealed_page = bytes([0x01, 0x00, 0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC])
+        frames = ap.encode_tlm_descriptor(cgm_descriptor(flags=0))
+        self.assertEqual(frames[0][3], 0x01)
+        back, epoch = ap.decode_tlm_descriptor(
+            frames, desc_auth(epoch=0), from_epoch=DESC_AUTH_EPOCH - 5)
+        self.assertIsNone(epoch)
+        self.assertEqual(back.schema_id, 0x01)
+        self.assertTrue(back.keyed)
+        self.assertFalse(back.authenticated)
+        self.assertFalse(back.may_decode_data)
+        with self.assertRaises(ValueError):
+            ap.decode_tlm_data(back, sealed_page)
+        # Through the assembler, the same.
+        rx = ap.TlmDescriptorRx()
+        for f in frames:
+            rx.feed(f)
+        back, epoch = rx.take(desc_auth(epoch=0),
+                              from_epoch=DESC_AUTH_EPOCH - 5)
+        self.assertIsNone(epoch)
+        self.assertFalse(back.may_decode_data)
+        # The keyless take is the plain node's path, and stays open.
+        back = rx.take()
+        self.assertFalse(back.keyed)
+        self.assertTrue(back.may_decode_data)
+        self.assertEqual(len(ap.decode_tlm_data(back, sealed_page)["values"]),
+                         4)
+
+    def test_a_plain_set_after_a_sealed_one_is_refused(self):
+        rx = ap.TlmDescriptorRx()
+        for f in self.frames(self.VECTOR_HIDDEN):
+            rx.feed(f)
+        back, epoch = rx.take(desc_auth(epoch=0),
+                              from_epoch=DESC_AUTH_EPOCH - 5)
+        self.assertTrue(back.may_decode_data)
+        # Same schema id, transform bits gone: the count changes, the
+        # assembler restarts, and the keyed take refuses what it assembles.
+        for f in ap.encode_tlm_descriptor(cgm_descriptor(flags=0)):
+            rx.feed(f)
+        back, epoch = rx.take(desc_auth(epoch=0),
+                              from_epoch=DESC_AUTH_EPOCH - 5)
+        self.assertIsNone(epoch)
+        self.assertEqual(back.flags, 0)
+        self.assertFalse(back.may_decode_data)
+
+    def test_a_keyed_receiver_refuses_a_reserved_bit_only_set(self):
+        frames = self.frames(self.VECTOR_HIDDEN)
+        f0 = bytearray(frames[0])
+        f0[7] = (f0[7] & ~ap.TLM_FLAG_X_AUTH) | ap.TLM_FLAG_RSVD_5
+        f1 = bytearray(frames[1])
+        f1[3] &= 0x3F                     # no X_AUTH, so no MAC window
+        frames[0], frames[1] = bytes(f0), bytes(f1)
+        ap.decode_tlm_descriptor(frames)  # well formed, keyless
+        back, epoch = ap.decode_tlm_descriptor(
+            frames, desc_auth(epoch=0), from_epoch=DESC_AUTH_EPOCH - 5)
+        self.assertIsNone(epoch)
+        self.assertTrue(back.keyed)
+        self.assertFalse(back.authenticated)
+        self.assertFalse(back.may_decode_data)
 
     def test_every_altered_body_byte_fails(self):
         # Frame 1 (heartbeat, W, the clock nibble, the epoch) and every field
