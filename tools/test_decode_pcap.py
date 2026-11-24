@@ -371,6 +371,33 @@ class SlotLossTests(unittest.TestCase):
         self.assertIn('warning: ch=1 inferred period 8070 differs from '
                       'CHANNEL_PERIOD 8192 by more than 1 %', header)
 
+    def test_bunched_capture_timestamps_warn(self):
+        # captures/zwift-20261123-184006.pcap at 118.269 s: under host load
+        # USBPcap stamped 14 messages that arrived over 0.5 s with one time.
+        pk, tm = self.frames(range(20), 2000)
+        stamp = tm[5]
+        tm = tm[:5] + [stamp + k * 0.00005 for k in range(8)] + tm[13:]
+        # A message without RX ticks in the run counts, but adds no span.
+        pk.insert(9, response(1, aw.MESG_CHANNEL_ID_ID, 0))
+        tm.insert(9, tm[8])
+        header, lines = self.decode(pk, tm)
+        warn = [l for l in header.splitlines() if 'share one capture timestamp' in l]
+        self.assertEqual(warn, [
+            f'warning: {stamp - 1.0:.3f}s bus=1 device=7: 9 messages share one '
+            'capture timestamp but span 427 ms of receive time (capture '
+            'lagged; trust RX ticks, not this timeline)'])
+        # Loss comes from the RX ticks, so it is untouched.
+        self.assertIn('ch=1: slots=20 heard=20 loss=0.0 %', header)
+
+    def test_spread_capture_timestamps_do_not_warn(self):
+        pk, tm = self.frames(range(20), 8192)
+        header, _ = self.decode(pk, tm)
+        self.assertNotIn('share one capture timestamp', header)
+        # Several frames from a scan channel in one URB burst are normal.
+        packets = [rx(0, 1000 + n * 30, device_number=n + 1) for n in range(8)]
+        header, _ = self.decode(packets, [1 + n * 0.0001 for n in range(8)])
+        self.assertNotIn('share one capture timestamp', header)
+
     def test_scan_channel_has_no_slot_loss(self):
         packets = [rx(0, 1000 + n * 4000, device_number=n % 3 + 1) for n in range(10)]
         header, _ = self.decode(packets, [1 + n * 0.12 for n in range(10)])

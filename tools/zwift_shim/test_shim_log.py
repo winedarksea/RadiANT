@@ -12,6 +12,11 @@ port (RADIANT_ANT_COM names the pipe, which the shim opens as it would a
 COM port), writes key-carrying frames at log level 2 and checks that the log
 holds none of the key bytes while the pipe received every byte unchanged.
 
+ShimOverlappedTest checks, on a named pipe, that an SI_Write is not held
+behind a pending SI_Read (the 2026-11-23 TI/Zwift stall) and that a read
+nobody answers ends at the shim's backstop as a timeout. ShimHardwareTest
+repeats the first on a dongle when RADIANT_SHIM_TEST_COM=COMn is set.
+
 Build the DLLs first:  scripts/zwift_ant_shim.ps1 -BuildOnly
 Run:  C:/ncs/toolchains/dcbdc366a1/opt/bin/python.exe tools/zwift_shim/test_shim_log.py
 """
@@ -110,6 +115,159 @@ def child_write():
            and n.value):
         got += chunk.raw[:n.value]
     sys.stdout.write(got.hex())
+
+
+def make_pipe(k32):
+    """The server end of the named pipe RADIANT_ANT_COM names (blocking)."""
+    k32.CreateNamedPipeW.restype = ctypes.wintypes.HANDLE
+    k32.CreateNamedPipeW.argtypes = [
+        ctypes.wintypes.LPCWSTR, ctypes.wintypes.DWORD, ctypes.wintypes.DWORD,
+        ctypes.wintypes.DWORD, ctypes.wintypes.DWORD, ctypes.wintypes.DWORD,
+        ctypes.wintypes.DWORD, ctypes.c_void_p]
+    k32.ReadFile.argtypes = [
+        ctypes.wintypes.HANDLE, ctypes.c_void_p, ctypes.wintypes.DWORD,
+        ctypes.POINTER(ctypes.wintypes.DWORD), ctypes.c_void_p]
+    k32.WriteFile.argtypes = k32.ReadFile.argtypes
+    pipe = k32.CreateNamedPipeW('\\\\.\\' + os.environ['RADIANT_ANT_COM'],
+                                3, 0, 1, 65536, 65536, 0, None)
+    if pipe is None or pipe == ctypes.wintypes.HANDLE(-1).value:
+        raise OSError(ctypes.get_last_error(), 'CreateNamedPipeW')
+    return pipe
+
+
+def child_write_vs_read():
+    """Run in the subprocess: a thread waits in SI_Read(1) on a silent pipe;
+    100 ms later the main thread calls SI_Write. Before the shim used
+    overlapped I/O, the write queued behind the read on the one synchronous
+    handle, and on a pipe (which has no read timeout) waited forever. Prints
+    JSON: the write's duration, the bytes the pipe got, the byte the reader
+    got."""
+    import json
+    import time
+    k32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    pipe = make_pipe(k32)
+    xp = ctypes.WinDLL(XP_DLL)
+    h = ctypes.c_void_p()
+    if xp.SI_Open(0, ctypes.byref(h)) != 0:
+        raise RuntimeError('SI_Open failed')
+    xp.SI_SetTimeouts(1000, 1000)
+
+    got = {}
+
+    def reader():
+        b = ctypes.create_string_buffer(1)
+        n = ctypes.c_ulong()
+        rc = xp.SI_Read(h, b, 1, ctypes.byref(n), None)
+        got['rc'], got['byte'] = rc, b.raw[:n.value].hex()
+
+    t = threading.Thread(target=reader)
+    t.start()
+    time.sleep(0.1)
+    put = ctypes.c_ulong()
+    buf = ctypes.create_string_buffer(OPEN, len(OPEN))
+    w0 = time.perf_counter()
+    rc = xp.SI_Write(h, buf, len(OPEN), ctypes.byref(put), None)
+    write_ms = (time.perf_counter() - w0) * 1000
+    if rc != 0 or put.value != len(OPEN):
+        raise RuntimeError('SI_Write failed')
+
+    one = ctypes.create_string_buffer(b'\x5a', 1)
+    n = ctypes.wintypes.DWORD()
+    k32.WriteFile(pipe, one, 1, ctypes.byref(n), None)
+    t.join()
+
+    wire = b''
+    chunk = ctypes.create_string_buffer(len(OPEN))
+    while len(wire) < len(OPEN):
+        if not k32.ReadFile(pipe, chunk, len(OPEN) - len(wire),
+                            ctypes.byref(n), None) or not n.value:
+            break
+        wire += chunk.raw[:n.value]
+    xp.SI_Close(h)
+    sys.stdout.write(json.dumps({'write_ms': write_ms, 'wire': wire.hex(),
+                                 'read_rc': got['rc'],
+                                 'read_byte': got['byte']}))
+
+
+def child_silent_read():
+    """Run in the subprocess: SI_Read(1) on a silent pipe with a 200 ms read
+    timeout. A pipe has no COMMTIMEOUTS, so only the shim's own backstop can
+    end the read. Prints JSON: rc, bytes, duration."""
+    import json
+    import time
+    k32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    pipe = make_pipe(k32)
+    xp = ctypes.WinDLL(XP_DLL)
+    h = ctypes.c_void_p()
+    if xp.SI_Open(0, ctypes.byref(h)) != 0:
+        raise RuntimeError('SI_Open failed')
+    xp.SI_SetTimeouts(200, 200)
+    b = ctypes.create_string_buffer(1)
+    n = ctypes.c_ulong(99)
+    r0 = time.perf_counter()
+    rc = xp.SI_Read(h, b, 1, ctypes.byref(n), None)
+    read_ms = (time.perf_counter() - r0) * 1000
+    xp.SI_Close(h)
+    k32.CloseHandle(ctypes.wintypes.HANDLE(pipe))
+    sys.stdout.write(json.dumps({'rc': rc, 'n': n.value, 'read_ms': read_ms}))
+
+
+def child_hw_capabilities():
+    """Run in the subprocess, on the real port RADIANT_ANT_COM names: a
+    thread keeps SI_Read(1) pending the way ANT_DLL does; after 2 s idle the
+    main thread sends REQUEST(capabilities). Prints JSON: the write's
+    duration and how long after it the CAPABILITIES reply was complete."""
+    import json
+    import time
+    xp = ctypes.WinDLL(XP_DLL)
+    h = ctypes.c_void_p()
+    if xp.SI_Open(0, ctypes.byref(h)) != 0:
+        raise RuntimeError('SI_Open failed')
+    xp.SI_SetTimeouts(1000, 1000)
+    xp.SI_FlushBuffers(h, 1, 1)
+    rx = []                 # (perf_counter, byte)
+    stop = threading.Event()
+
+    def reader():
+        b = ctypes.create_string_buffer(1)
+        n = ctypes.c_ulong()
+        while not stop.is_set():
+            if xp.SI_Read(h, b, 1, ctypes.byref(n), None) != 0:
+                return
+            if n.value:
+                rx.append((time.perf_counter(), b.raw[0]))
+
+    t = threading.Thread(target=reader, daemon=True)
+    t.start()
+    time.sleep(2.0)
+    req = frame(0x4D, [0x00, 0x54])
+    put = ctypes.c_ulong()
+    buf = ctypes.create_string_buffer(req, len(req))
+    w0 = time.perf_counter()
+    rc = xp.SI_Write(h, buf, len(req), ctypes.byref(put), None)
+    write_ms = (time.perf_counter() - w0) * 1000
+    time.sleep(1.0)
+    stop.set()
+    t.join(3.0)
+    xp.SI_Close(h)
+
+    # The first whole CAPABILITIES (0x54) frame, timed by its last byte.
+    reply_ms = None
+    got = [b for _t, b in rx]
+    i = 0
+    while i + 3 < len(got):
+        if got[i] != 0xA4:
+            i += 1
+            continue
+        end = i + got[i + 1] + 4
+        if end > len(got):
+            break
+        if got[i + 2] == 0x54:
+            reply_ms = (rx[end - 1][0] - w0) * 1000
+            break
+        i = end
+    sys.stdout.write(json.dumps({'write_rc': rc, 'write_ms': write_ms,
+                                 'reply_ms': reply_ms}))
 
 
 def child():
@@ -246,10 +404,87 @@ class ShimWriteDumpTest(unittest.TestCase):
             ' id=0x7F: ' + ' '.join('%02X' % b for b in crypto_id)),
             dumps[12])
 
+
+def run_child(flag, port, timeout, level='1'):
+    """Run this file with `flag` against `port`; (parsed stdout, log lines)."""
+    import json
+    with tempfile.TemporaryDirectory() as tmp:
+        log = os.path.join(tmp, 'shim.log')
+        env = dict(os.environ, RADIANT_SHIM_LOG=log, RADIANT_ANT_COM=port,
+                   RADIANT_SHIM_LOG_LEVEL=level)
+        r = subprocess.run([sys.executable, os.path.abspath(__file__), flag],
+                           env=env, check=True, timeout=timeout,
+                           capture_output=True, text=True)
+        with open(log, 'rb') as f:
+            lines = f.read().decode('ascii').split('\r\n')[:-1]
+    return json.loads(r.stdout), lines
+
+
+@unittest.skipUnless(sys.platform == 'win32', 'Windows DLLs')
+@unittest.skipUnless(os.path.exists(XP_DLL),
+                     'shim not built: run scripts/zwift_ant_shim.ps1 -BuildOnly')
+class ShimOverlappedTest(unittest.TestCase):
+    """2026-11-23 TI/Zwift session: with a synchronous handle every SI_Write
+    waited for ANT_DLL's pending SI_Read, up to the 1000 ms read timeout."""
+
+    def pipe(self, tag):
+        return 'pipe\\radiant_shim_%s_%d' % (tag, os.getpid())
+
+    def test_write_not_blocked_by_pending_read(self):
+        try:
+            out, lines = run_child('--child-write-vs-read', self.pipe('wvr'),
+                                   timeout=15)
+        except subprocess.TimeoutExpired:
+            self.fail('SI_Write never returned while an SI_Read was pending')
+        self.assertLess(out['write_ms'], 50.0, out)
+        self.assertEqual(bytes.fromhex(out['wire']), OPEN)
+        self.assertEqual((out['read_rc'], out['read_byte']), (0, '5a'), out)
+        self.assertFalse([l for l in lines
+                          if 'SI_Read err' in l or 'SI_Write err' in l], lines)
+
+    def test_silent_read_ends_at_the_backstop_as_a_timeout(self):
+        try:
+            out, lines = run_child('--child-silent-read', self.pipe('sr'),
+                                   timeout=15)
+        except subprocess.TimeoutExpired:
+            self.fail('SI_Read on a silent pipe never returned')
+        self.assertEqual((out['rc'], out['n']), (0, 0), out)
+        # Backstop = read timeout (200) + 500 ms.
+        self.assertGreater(out['read_ms'], 600.0, out)
+        self.assertLess(out['read_ms'], 2000.0, out)
+        self.assertFalse([l for l in lines if 'SI_Read err' in l], lines)
+        self.assertEqual(len([l for l in lines
+                              if 'SI_Read 0/1 x1 over' in l
+                              and l.endswith('(timeouts)')]), 1, lines)
+
+
+@unittest.skipUnless(sys.platform == 'win32', 'Windows DLLs')
+@unittest.skipUnless(os.path.exists(XP_DLL),
+                     'shim not built: run scripts/zwift_ant_shim.ps1 -BuildOnly')
+@unittest.skipUnless(os.environ.get('RADIANT_SHIM_TEST_COM'),
+                     'set RADIANT_SHIM_TEST_COM=COMn to run on a dongle')
+class ShimHardwareTest(unittest.TestCase):
+    """ANT_DLL's pattern on a real dongle, without Zwift."""
+
+    def test_request_while_read_pending(self):
+        out, _ = run_child('--child-hw-capabilities',
+                           os.environ['RADIANT_SHIM_TEST_COM'], timeout=30)
+        self.assertEqual(out['write_rc'], 0, out)
+        self.assertLess(out['write_ms'], 20.0, out)
+        self.assertIsNotNone(out['reply_ms'], 'no CAPABILITIES reply')
+        self.assertLess(out['reply_ms'], 50.0, out)
+
+
 if __name__ == '__main__':
     if sys.argv[1:] == ['--child']:
         child()
     elif sys.argv[1:] == ['--child-write']:
         child_write()
+    elif sys.argv[1:] == ['--child-write-vs-read']:
+        child_write_vs_read()
+    elif sys.argv[1:] == ['--child-silent-read']:
+        child_silent_read()
+    elif sys.argv[1:] == ['--child-hw-capabilities']:
+        child_hw_capabilities()
     else:
         unittest.main()
