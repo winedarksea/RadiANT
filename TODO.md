@@ -230,12 +230,22 @@ noticeably degrade primary functionality, such as receiving a heart rate strap.
   passes a NULL label). Whoever adds editable labels must first add a bounded
   JSON string encoder in `compose_discovery()` (`mqtt_sink.c`) and a round-trip
   test through a JSON parser.
-- [ ] **Bind the Zwift shim to the intended serial device** (deferred; sec review
+- [x] **Bind the Zwift shim to the intended serial device** (deferred; sec review
   2026-11-21). With no explicit port, the shim takes the first CP210x registry
   entry and falls back to COM15. It then forwards host writes there, key-setting
   messages included. Remove the COM15 fallback, remember a user-selected device
   instance or serial number, and report no device when the selection is absent
   or ambiguous (`tools/zwift_shim/shim_util.c`, `dsi_siusbxp.c`).
+  *Done 2026-11-24 (wip/s24-zwift-shim):* no registry guess and no COM15
+  fallback. `shim_select_port()` (new `shim_port.c`) takes `RADIANT_ANT_COM`
+  (COM1..COM999 only) or `RADIANT_ANT_DEVICE` (a USB serial number or device
+  instance id of the port or a device above it, resolved against present
+  ports with cfgmgr32 each enumeration); none, unusable, ambiguous (an
+  XDS110's serial names both its ports) or the two disagreeing reports no
+  device, with the reason and the candidates logged once per change.
+  Installer `-Device` and `-ListDevices`; `-Port` and the user's pinned
+  `RADIANT_ANT_COM=COM11` work unchanged (bench PASS on the TI, also by
+  instance id). Tests: `ShimSelectTest`.
 
 # Matter bridge
 
@@ -661,7 +671,7 @@ group.
   skips tracking channels. Recovery is a power cycle, and on the Matter image
   the endpoints persist. Fix: a proximity threshold for discovery, and a
   deliberate "evict even if tracking" gesture such as a long press.
-- [ ] **Zwift shim installer cannot replace an older shim, and the installed
+- [x] **Zwift shim installer cannot replace an older shim, and the installed
   one predates key masking.** `scripts/zwift_ant_shim.ps1` (~:143) treats "same
   file length" as "ours" and refuses anything else, and `-Uninstall` (~:81)
   deletes by name with no check. On this machine the DLL in the Zwift directory
@@ -672,7 +682,15 @@ group.
   an exported symbol), identify "ours" by it for install and uninstall, then
   rebuild and reinstall. Do this before the "Zwift shim key redaction end to
   end" owner step.
-- [ ] **Zwift shim: the level-2 read dump is not masked.** `SI_Read`
+  *Done 2026-11-24 (wip/s24-zwift-shim):* both DLLs carry a VERSIONINFO
+  resource (`shim_version.rc`/`.h`, ProductName "RadiANT Zwift ANT shim",
+  2026.11.24.1, also in the log banner); the installer calls a file ours by
+  that resource, or by the exact SHA-256 of the installed 903718a pair, for
+  install (both checked before either is copied) and `-Uninstall` (foreign
+  files kept and reported). `test_shim_log.py` refuses to run when a source
+  is newer than `out/` or a DLL lacks the resource; `RADIANT_SHIM_OUT` points
+  it elsewhere. Rebuild-and-reinstall is the owner's step (not installed).
+- [x] **Zwift shim: the level-2 read dump is not masked.** `SI_Read`
   (`dsi_siusbxp.c` ~:318) logs raw hex, so a device that echoes (a console on
   another CP210x, which is what the unbound-port item allows) puts a
   key-setting write into the log. Also check 0x76 (128-bit network key) and
@@ -680,24 +698,49 @@ group.
   `key_keep()` nor the firmware's `key_msg_keep()` lists them. Fix: run the
   frame walk and mask over reads as well; add a read-side case to
   `test_shim_log.py`.
-- [ ] **Zwift shim installer runs `python.exe` from a directory other local
+  *Done 2026-11-24 (wip/s24-zwift-shim):* ANT_DLL reads ONE byte per
+  `SI_Read` (60432 of them on 11-23), so reads are reassembled per reading
+  thread and the read that completes a frame logs it, masked like a write;
+  a frame that fails its checksum drops its whole claimed length unseen, so
+  key bytes cannot be re-read as a lucky frame. Rev 5.1 sec 9.5.2.25 (0x76,
+  [net, key 16]) and 9.5.2.36 (0x83, [op, NVM index, key 16 on a store]) carry
+  keys: added to `key_keep()`, firmware `key_msg_keep()` and
+  `protocol/ant_wire.yaml` (unbridged; excluded from the conformance run).
+  Tests: `ShimReadDumpTest`, `bridge_trace{,_sec}`.
+- [x] **Zwift shim installer runs `python.exe` from a directory other local
   users can write.** `zwift_ant_shim.ps1` (~:168) hard-codes
   `C:\ncs\toolchains\dcbdc366a1\opt\bin\python.exe`; `C:\ncs` grants
   Authenticated Users modify here. Fix: take the interpreter from a parameter
   or `$env:RADIANT_PYTHON`, or print the verify command instead of running it.
-- [ ] **Zwift shim: the global port handle is unsynchronised.** `g_port`
+  *Done 2026-11-24 (wip/s24-zwift-shim):* `-Python` (default
+  `$env:RADIANT_PYTHON`), run with `-I`; with neither the verify command is
+  printed. No PATH lookup either.
+- [x] **Zwift shim: the global port handle is unsynchronised.** `g_port`
   (`dsi_siusbxp.c`) is read and written by every export with no lock, and
   ANT_DLL reads and writes on different threads. A close between the test and
   `WriteFile` can send a write to a reused handle; a second `SI_Open` that
   fails overwrites the first caller's valid handle and leaks it. Fix: one
   SRWLOCK (shared for I/O, exclusive for open and close), and open into a
   local before publishing.
-- [ ] **The checksum-error log line bypasses the key redaction rule.**
+  *Done 2026-11-24 (wip/s24-zwift-shim):* `g_port_lock`: every export that
+  uses the handle holds it shared across the whole call, I/O included
+  (shared holders never block each other, so a pending read still does not
+  hold up a write); open configures a local handle and publishes it under
+  the exclusive lock; close cancels pending I/O first, then unpublishes
+  under the exclusive lock and closes. DllMain no longer resolves the port
+  and closes on FreeLibrary only via a try-lock. Red on the 903718a build:
+  8 racing `SI_Open`s on a one-instance pipe clobbered the winner's handle
+  from round 1 (`ShimLockTest`).
+- [x] **The checksum-error log line bypasses the key redaction rule.**
   `ant_serial_bridge.c` (~:1912) logs `got` and `exp` for every failed frame
   in any build with logging. For a key message `exp` is the XOR of the key
   bytes with the known header, which the trace code withholds for that reason.
   Fix: log the message id only, or nothing when `key_msg_keep()` says the
   frame may carry a key. Add the case to `test_bridge_trace_sec.c`.
+  *Done 2026-11-24 (wip/s24-zwift-shim):* the line is now `Checksum err: id
+  0x%02X len %u`, never a checksum, for every frame (a frame that lost its
+  id byte names no key, so the id test alone could not decide). Routed
+  through `ANT_BRIDGE_CSUM_WRN` so `bridge_trace{,_sec}` capture it.
 - [ ] **Release: any job in the tag run can replace a `release-*` artifact**
   (widens the known residual under Owner steps). Artifacts are matched by name
   and checked only against the sidecar inside the same artifact, and 35 of the
@@ -795,12 +838,18 @@ group.
   that accepts and then stops reading costs the drain thread a 3 s blocked
   send every few seconds. Fix: clear only after a minimum session time or N
   successful publishes.
-- [ ] **Zwift shim build and inputs.** Add `/guard:cf /sdl /W4` and a version
+- [x] **Zwift shim build and inputs.** Add `/guard:cf /sdl /W4` and a version
   resource (the marker above). Validate the port name from the registry and
   `RADIANT_ANT_COM` as `COM[0-9]{1,3}` (`shim_util.c` ~:189, :208); a 60+
   character name aborts Zwift through `sprintf_s`. Clamp a zero read timeout
   in `SI_SetTimeouts`. State in `SECURITY.md` that the shim is always built
   locally and is not a release artifact.
+  *Done 2026-11-24 (wip/s24-zwift-shim):* `/W4 /WX /O2 /sdl /guard:cf`,
+  linked `/guard:cf /DYNAMICBASE /NXCOMPAT` (dumpbin: CF instrumented), no
+  `_CRT_SECURE_NO_WARNINGS`; port names `COM[0-9]{1,3}` from every source,
+  invalid values not echoed; `SI_SetTimeouts` clamps a zero read timeout to
+  1 ms; `SECURITY.md` "The Zwift shim" section. A `SHIM_TEST_PIPES` build in
+  `out/test/` (never installed) keeps the named-pipe tests.
 - [ ] **udev rule.** The driver-unbind line in `host/linux/70-radiant-ant.rules`
   matches vendor 0fcf with no product filter, wider than the three access
   lines; add the product ids and `ENV{ID_MM_DEVICE_IGNORE}="1"`.
