@@ -1798,6 +1798,173 @@ ZTEST(radiant_sec, test_a_verified_window_never_verifies_twice_under_the_drop_po
 }
 
 /*
+ * Guessing at air rate (security review 2026-11-22, Low). A keyed background
+ * scan hears every CRC-valid frame on its RF channel, not one per slot, and a
+ * closed window can be reopened and judged again. So an injector could chain
+ * W=2 windows, each one a 16-bit guess at the tag of the one before, at the
+ * frame rate of the air: ~131,000 frames instead of the 2^16 window periods
+ * (9.1 hours at 4 Hz) of docs/radiant-security.md 7.5. Failed judgements are
+ * now budgeted per channel to one per W periods of receive time (after one
+ * spare), so a guess costs a window period on every kind of channel.
+ *
+ * The tests hold the key, so "the right guess" is the sender's own bytes:
+ * what matters is that it is refused when it comes too soon after wrong ones,
+ * and judged once the budget has refilled.
+ */
+#define GUESS_W 2u
+
+static void guess_setup(uint32_t epoch, uint32_t slots)
+{
+	uint32_t i;
+
+	key_both();
+	configure_both(RADIANT_SEC_SW_AUTH, GUESS_W);
+	epoch_both(epoch);
+	for (i = 0u; i < slots; i++) {
+		tx_hop(i, rec[i]);
+	}
+}
+
+/* One wrong guess at window 0's tag, then window 0 again (a reopen), all at
+ * `t`. The guess is window 2 with its tag byte for counter 2 changed. */
+static void wrong_guess_reopen(uint64_t t, uint8_t g)
+{
+	uint8_t bad[8];
+
+	memcpy(bad, rec[2], sizeof(bad));
+	bad[7] ^= (uint8_t)(g | 1u);
+	ingest_at(bad, t);
+	ingest_at(rec[3], t);
+	ingest_at(rec[0], t);
+	ingest_at(rec[1], t);
+}
+
+ZTEST(radiant_sec, test_a_reopened_window_cannot_be_guessed_at_air_rate)
+{
+	const uint64_t gap = (uint64_t)GUESS_W * period_us();
+	uint64_t       t;
+	uint8_t        g;
+
+	guess_setup(71u, 4u);
+	t = slot_t(3u);
+
+	/* Window 0, then 32 wrong guesses at its tag, each followed by window 0
+	 * again, inside one instant: what an injector on a scan can do. */
+	ingest_at(rec[0], t);
+	ingest_at(rec[1], t);
+	for (g = 0u; g < 32u; g++) {
+		wrong_guess_reopen(t, g);
+	}
+
+	/* The right guess, at the same instant: refused unjudged. Before the
+	 * budget it verified - 33 judgements of one window in no time. */
+	ingest_at(rec[2], t);
+	ingest_at(rec[3], t);
+	zassert_equal(0u, rx_stats().windows_verified,
+		      "a guess judged with the budget spent");
+
+	/* Two window periods on, the budget has refilled: one guess, judged. */
+	ingest_at(rec[0], t + 2u * gap);
+	ingest_at(rec[1], t + 2u * gap);
+	ingest_at(rec[2], t + 2u * gap);
+	ingest_at(rec[3], t + 2u * gap);
+	zassert_equal(1u, rx_stats().windows_verified);
+	zassert_true(window_was_verified(0u));
+}
+
+ZTEST(radiant_sec, test_a_chain_of_windows_cannot_be_guessed_at_air_rate)
+{
+	const uint32_t n = 24u;   /* windows; the last carries the right tag */
+	uint64_t       t;
+	uint32_t       i;
+
+	/* Windows 0, 2, .. 2n-2, all heard at one instant, every tag byte but
+	 * the last window's changed: each window is a wrong guess at the one
+	 * before. The last window's tag is right for window 2n-4. */
+	guess_setup(73u, 2u * n);
+	t = slot_t(2u * n - 1u);
+	for (i = 0u; i < 2u * n; i++) {
+		if (i < 2u * n - 2u) {
+			rec[i][7] ^= 0x5Au;
+		}
+		ingest_at(rec[i], t);
+	}
+	zassert_equal(0u, verified_count(), "%u windows judged in no time",
+		      n - 1u);
+
+	/* The same chain paced at one window per W periods is judged window by
+	 * window: the budget never binds at a sender's own rate. */
+	sec_before(NULL);
+	guess_setup(79u, 2u * n);
+	for (i = 0u; i < 2u * n; i++) {
+		if (i < 2u * n - 2u) {
+			rec[i][7] ^= 0x5Au;
+		}
+		ingest_at(rec[i], slot_t(i));
+	}
+	zassert_equal(1u, verified_count());
+	zassert_true(window_was_verified((uint16_t)(2u * n - 4u)));
+}
+
+/*
+ * The budget must cost a genuine stream nothing, on a link as lossy as this
+ * bench's (5-8 %) and worse, whole windows lost included: a window lost
+ * entirely makes the next close judge the window before it against the wrong
+ * tag bytes, a failed judgement charged to the budget like a guess. Window k
+ * verifies exactly when every packet of k and of k+1 arrived, budget or not.
+ */
+static void lossy_case(uint8_t w, uint32_t loss_pct)
+{
+	static bool    lost[4000u];
+	const uint32_t slots = ARRAY_SIZE(lost);
+	uint32_t       seed = 0x2545F491u ^ (w * 977u) ^ loss_pct;
+	uint32_t       expect = 0u;
+	uint32_t       k;
+	uint32_t       i;
+
+	sec_before(NULL);
+	key_both();
+	configure_both(RADIANT_SEC_SW_AUTH, w);
+	epoch_both(83u + w);
+
+	for (i = 0u; i < slots; i++) {
+		seed = seed * 1103515245u + 12345u;
+		/* And every 37th window lost whole. */
+		lost[i] = ((seed >> 16) % 100u) < loss_pct ||
+			  (i / w) % 37u == 5u;
+	}
+	for (i = 0u; i < slots; i++) {
+		uint8_t air[8];
+		/* A little arrival jitter, either side of the slot. */
+		int32_t jit = (int32_t)((i * 7919u) % 401u) - 200;
+
+		tx_hop(i, air);
+		if (!lost[i]) {
+			ingest_at(air, (uint64_t)((int64_t)slot_t(i) + jit));
+		}
+	}
+	for (k = 0u; k + 2u * w <= slots; k += w) {
+		bool whole = true;
+
+		for (i = k; i < k + 2u * w; i++) {
+			whole = whole && !lost[i];
+		}
+		expect += whole ? 1u : 0u;
+		zassert_equal(whole, window_was_verified((uint16_t)k),
+			      "W=%u %u%%: window %u", w, loss_pct, k);
+	}
+	zassert_true(expect > 0u);
+}
+
+ZTEST(radiant_sec, test_a_lossy_link_still_verifies_under_the_guess_budget)
+{
+	lossy_case(2u, 8u);
+	lossy_case(2u, 20u);
+	lossy_case(4u, 8u);
+	lossy_case(8u, 5u);
+}
+
+/*
  * The other side of the fix: the clock must still follow a real sender. A
  * 0.5 % rate error (ten times a bad crystal) over 30000 packets is 150
  * periods - past the 128-period slack, so a receiver that stopped tracking

@@ -492,7 +492,29 @@ under `X_AUTH` it is of little use:
   device's page in the secured range (the same device number, with a different
   device or transmission type, which the scan's wildcard admits) is absorbed
   into the sender's windows and breaks or closes them. That is a denial of
-  service, not a forgery: nothing it sends verifies.
+  service, not a forgery: what it sends verifies no more often than any
+  keyless injection, one 2^-8W chance per judgement, and judgements are
+  rationed (next item).
+- A scan hears every frame on its RF channel, not one per slot, and a closed
+  window can be reopened and judged again. Unchecked, an injector offered a
+  new guess at a window's tag with every window it sent: a chain of 2-frame
+  windows, each a 16-bit guess at the one before, cost about 2^16 x 2 =
+  131,000 frames, minutes at air rate, against the 9.1 hours of section 7.5
+  (security review 2026-11-22). So every keyed channel, scan or tracked,
+  budgets its failed judgements: at most one per W channel periods of receive
+  time, after one spare. That is the rate one frame per slot imposes on a
+  tracked channel anyway, so the budget never binds there, and section 7.5's
+  bound holds on a scan too. Only a comparison that ran and failed is
+  charged; a genuine stream fails one only when a whole window is lost, at
+  most once per 2W periods, so it never meets the budget. (The budget's
+  clock is the low 32 bits of the microsecond clock; every judgement keeps
+  it fresh, so only the first judgement after a silence of a whole 71.6
+  minutes, or the first since the key was installed, can find a stale value
+  that reads as spent, and that costs one window.) While an injector
+  keeps the budget spent, a window closes `unverified` without its tag being
+  compared, genuine windows included (counted in `0xF4` [14..15] like any
+  other): a denial of service, and no more than the same injector already
+  had by breaking the windows with its own frames.
 - The key outlives a close, and a closed channel may be given a wildcard
   device number before it reopens. A keyed scan with a wildcard device number
   takes every device's secured-range pages into that one key and window
@@ -1520,11 +1542,18 @@ a W-for-1 denial of service.
 **Forgery bound.** At the default W=2 the tag is **16 bits**, which is the same
 size the deferred reliable-command page's inline tag is called brute-forceable
 at. Per window, an attacker's chance of a *verified* forgery is about 2^-16.
-Injection gets one attempt per window, and a W=2 window at 4 Hz lasts 0.5 s, so
-the expected time to one verified forged data window is 2^16 x 0.5 s, roughly
-**9.1 hours** (about 4.5 hours at 8 Hz). An earlier version said 2.3 hours,
-which counted one attempt per packet at 8 Hz. At W=4 the chance is 2^-32, and at
-W=8 it is 2^-64.
+Injection gets one attempt per window period: a failed judgement spends W
+channel periods of the receiver's guess budget (section 3.2), which allows at
+most one failure per W periods after one spare, on every kind of channel. A
+W=2 window at 4 Hz lasts 0.5 s, so the expected time to one verified forged
+data window is 2^16 x 0.5 s, roughly **9.1 hours** (about 4.5 hours at 8 Hz),
+less one window for the spare. An earlier version said 2.3 hours, which
+counted one attempt per packet at 8 Hz. And until the budget existed the 9.1
+hours held only where the receiver heard one frame per slot: a keyed
+background scan hears every frame on the air and judged a reopened or chained
+window as often as an injector sent one, about 131,000 frames per expected
+forgery at W=2 (security review 2026-11-22). At W=4 the chance is 2^-32, and
+at W=8 it is 2^-64.
 
 This is accepted under the casual-snooping bar, **for sensor data and not for
 commands** — and it is said out loud rather than left to be inferred from "a

@@ -2482,7 +2482,27 @@ jobs:
           # the linker drops it. All of it is cold host-command code; the
           # per-packet path gains one counted branch. Raised by the measured
           # value plus a 32 B margin, as in 2026-11-20.
-          check "security text" "$(( on_text - off_text ))" 8068
+          # TEXT CEILING 7856 -> 7916 FOR A SECURITY FIX (review 2026-11-22,
+          # Low: a keyed scan judged reopened and chained windows at air
+          # rate, so a W=2 tag fell to ~131,000 injected frames instead of
+          # docs/radiant-security.md 7.5's 9.1 hours). Measured with this
+          # recipe at NCS v3.4.0: 7828 / 6975 at 92239e9 (28 B left), 7884 /
+          # 6975 after (+56 / +0) on wip/s24-scan-xauth:
+          #     56  rx_close_window   the failed-judgement budget: a 32-bit
+          #                           band compare, the charge on a failure
+          #                           and the refresh on a pass
+          #      2  radiant_sec_pump  the closing t_sync passed in (rx_process
+          #                           is inlined there)
+          # (symbols +58, section +56, alignment). Per-packet path, once per
+          # window close; the field sits in an alignment hole, so no RAM. A
+          # 64-bit budget clock was +88 / +64 and was not kept. Raised by the
+          # measured value plus a 32 B margin, as the 7856 raise was.
+          # Both on master (merge of wip/s24-sec-host-api and wip/s24-scan-xauth,
+          # 2026-11-24; this recipe, NCS v3.4.0, measured on the merged tree):
+          # 8060 / 6979. The +208 and +56 above sum to 8092; the merged tree is
+          # 32 B under that (layout and alignment; not traced per symbol, and
+          # the search-race merge also moved code). Ceiling 8060 + 32 = 8092.
+          check "security text" "$(( on_text - off_text ))" 8092
           check "security bss"  "$(( on_bss  - off_bss  ))" 7168
 
           # X25519 and the pairing logic, on top of the above and under their

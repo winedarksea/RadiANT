@@ -576,12 +576,15 @@ group.
   4768/5120 B (+112 since 4656), compat linked 188/288 B. Not traced; the
   next security change should measure before and after.
   2026-11-24 (wip/s24-sec-host-api): the review 2026-11-22 host-API fixes
-  measured 7828 -> 8036 B text (+208, breakdown in release.yml), ceiling
-  raised to 8068 (32 B left); bss 6979/7168; compat object unchanged.
+  measured 7828 -> 8036 B text (+208, breakdown in release.yml); bss
+  6979/7168; compat object unchanged. 2026-11-24 (wip/s24-scan-xauth): 7884 B
+  alone after the scan guess budget (+56 in `rx_close_window()`, +2 in
+  `radiant_sec_pump()`). Both merged to master: 8060 B measured, ceiling
+  raised 7856 -> 8092 (32 B left).
 
 ## Low
 
-- [ ] **Keyed scan channel: X_AUTH tags can be guessed at air rate.** A scan
+- [x] **Keyed scan channel: X_AUTH tags can be guessed at air rate.** A scan
   offers every CRC-valid frame to `radiant_sec_rx_ingest()`
   (`radiant_search.c` ~:1028, `radiant_ant.c` ~:1506), `rx_floor` is 0
   until something verifies, and a closed window can be reopened and judged
@@ -592,6 +595,28 @@ group.
   (~:484) says nothing sent to a keyed scan verifies. The frame rate of a scan
   was not measured. Fix: refuse X_AUTH with W=2 on a scan (or force W>=4), or
   budget failed windows per period; correct 3.2 and 7.5.
+  *Done 2026-11-24 (wip/s24-scan-xauth):* a per-channel budget of failed
+  judgements in `rx_close_window()`: a comparison that ran and failed moves
+  `rx_judge_tat` W channel periods on from max(itself, the closing packet's
+  t_sync), a pass moves it to that max (keeps the 32-bit value fresh), and no
+  comparison runs while it is more than W periods ahead (one spare); a refused
+  window is `unverified`. That is the one-guess-per-W-periods
+  rate a tracked channel's one frame per slot already imposes, so 7.5's 9.1 h
+  now holds on every channel kind and the rule needs no scan-mode knowledge in
+  radiant_sec. Refusing W=2 on a scan was rejected: radiant_sec does not know a
+  channel is a scan, and W>=4 at air rate is still far below its documented
+  bound. A tracked channel (rx_floor 0 or not) was never exposed: it hears one
+  frame per slot, so the budget never binds there; the reopen itself still
+  works after a verify, above the floor, so rx_floor was not the enabler. A
+  genuine stream only fails a comparison when a whole window is lost (at most
+  once per 2W periods), so it never meets the budget: test at 5-20 % loss
+  with whole-window losses and +/-200 us jitter, W=2/4/8, verifies exactly
+  the windows it did before. Reachable on the dongle only in a `security.conf`
+  build (not a released image): 0x42 with extended assignment 0x01, then
+  0xF1/0xF2/0xF3. 3.2 and 7.5 corrected; no host tool models the window
+  judgement (`tools/ant_verify.py` judges telemetry auth frames, not this).
+  Scan frame rate still not measured: with the budget the bound no longer
+  depends on it.
 - [ ] **Private-mode receiver accepts a replayed SWITCH/RETURN announcement for
   the rest of the Tier I interval** (library). `rx_take()`
   (`radiant_profile_private.c` ~:768) has no floor on the last verified announcement,
