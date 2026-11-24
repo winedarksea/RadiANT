@@ -1012,8 +1012,16 @@ group.
   marks the slot heard. A foreign packet in the middle of our own burst
   could be taken as ours. WAIT_NEXT's broadcast fallback does get the check.
   (2) The search seen-table and acquisition paths were not changed. They
-  already filter the type. (3) On-air check pending (plan Phase 4: TI
-  receiver, two HR #12345 sources with different upper nibbles).
+  already filter the type. (3) Two channels on ONE dongle tracking two
+  sensors that differ only in transmission type have byte-identical RX
+  filters; a merged window routes by filter index, so the leader now drops
+  the other's frames and the other channel misses those periods (it used to
+  take them wrongly; not worse, not fixed).
+  On-air PASS 2026-11-24 (`archive/benchmarks/2026-11-24-ttype-onair/`): TI
+  wildcard HR receiver, Pro Micro HR #12345 type 5 as the genuine sensor, L15
+  `ant_sim` HR #12345 type 0x15 at -600 ppm as the impostor, 480 s each. Ship
+  430562b posted 8 impostor frames (2 s of following it); ship d94d07e posted
+  0 of 2049. A +3000 ppm drift jumps the ~150 us guard and shows nothing.
 - [ ] **Acquisition and re-anchor accept any control byte.** `handle_ok()` and
   `api_search_acquired()` anchor on slave replies, ACKs and non-opener burst
   packets, and the tracked path sets `slot_heard` before discarding ACK types.
