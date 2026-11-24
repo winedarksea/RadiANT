@@ -130,6 +130,17 @@ bool radiant_node_ident_is_provisioned(void);
  * a store boot refuses (EIO) and that a second wipe finishes. It can never
  * leave a K_dev whose epoch reservation is gone.
  *
+ * DELETED IS NOT ERASED (review 2026-11-24). On the settings-over-NVS backend
+ * a delete appends a deletion entry; the old K_dev bytes stay in flash until
+ * NVS garbage collection erases their sector, which may be never on a quiet
+ * store. So after a wipe the old key is unreadable through any API but
+ * recoverable from a flash dump. Overwriting it first does not help: NVS is
+ * append-only, so a zero write is another entry beside the old one. Where a
+ * dump after a reset is in the threat model (Tier 1's "I am selling this"),
+ * the product must also erase the storage partition, which takes every other
+ * setting with it (Bluetooth bonds, Matter fabrics); that is the product's
+ * call, so this function does not do it.
+ *
  * The counters restart at zero, which is safe only under a key this node has
  * never had (ADR 0009: counters reset only with a new K_dev). Self-
  * provisioning draws one; a factory flow that provisions its own key after a

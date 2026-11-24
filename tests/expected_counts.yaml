@@ -276,7 +276,11 @@ min_scenarios: 29
 # 2026-11-24: +18 (security review 2026-11-22 Low, wip/s24-scan-xauth): +3 per unit
 # scenario (radiant_sec: a reopened window and a chain cannot be guessed at
 # air rate, a lossy link still verifies under the guess budget).
-min_testcases: 8403
+# 2026-11-24: every floor raised to the count observed on master 430562b
+# (Bluefin twister, 29 scenarios, 9303 cases, all passed). Many earlier
+# commits added tests without raising their floors (review 2026-11-24 found
+# 9e4ff0b and 47fe08c; the gap was wider than those two).
+min_testcases: 9303
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -319,9 +323,12 @@ min_testcases: 8403
 # 2026-11-24: +3 per unit scenario (radiant_sec: try_devnum queue purge, failed
 # rekey import keeps the old root, a refused wrap is counted).
 # 2026-11-24: +3 per unit scenario (radiant_sec: the scan guess budget).
-min_cases.radiant.unit: 1163
-min_cases.radiant.unit.sec_modes: 1163
-min_cases.radiant.unit.no_pairing: 1099
+# 2026-11-24: raised to the observed count on 430562b (was 1163).
+min_cases.radiant.unit: 1289
+# 2026-11-24: raised to the observed count on 430562b (was 1163).
+min_cases.radiant.unit.sec_modes: 1289
+# 2026-11-24: raised to the observed count on 430562b (was 1099).
+min_cases.radiant.unit.no_pairing: 1212
 # radiant.unit.pairing_no_rng: 1218, the observed count on sec/item8-pair-rng
 # (2026-11-20), including test_pair_begin_without_an_rng_uses_the_kdf_scalar.
 # +4 (HAL drift item 5 settled, as radiant.unit).
@@ -331,31 +338,39 @@ min_cases.radiant.unit.no_pairing: 1099
 # 2026-11-24: +16 (node_ident lost records, record table and wipe, as radiant.unit).
 # 2026-11-24: +3 (radiant_sec, as radiant.unit).
 # 2026-11-24: +3 (radiant_sec: the scan guess budget, as radiant.unit).
-min_cases.radiant.unit.pairing_no_rng: 1266
-min_cases.radiant.api: 91
-min_cases.radiant.api.sec: 95
+# 2026-11-24: raised to the observed count on 430562b (was 1266).
+min_cases.radiant.unit.pairing_no_rng: 1276
+# 2026-11-24: raised to the observed count on 430562b (was 91).
+min_cases.radiant.api: 120
+# 2026-11-24: raised to the observed count on 430562b (was 95).
+min_cases.radiant.api.sec: 130
 # +1 with the identical-0xF1 retry case (review 2026-11-17 item 4).
 # +4 with the 0xF2 rekey take-back and its three guards (review 2026-11-20 item C).
 # +1 with the unassign-ends-the-pairing-exchange case (review 2026-11-21).
 # +3 with 0xF3 before 0x43, a 0x43 change under an epoch and a keyed master's
 # 0x51 renumber (review 2026-11-22).
-min_cases.radiant.api.sec_host: 118
+# 2026-11-24: raised to the observed count on 430562b (was 118).
+min_cases.radiant.api.sec_host: 205
 # radiant.api.crc_repair: 112, the observed count on fix/crc-repair-deliver
 # (2026-11-18), including the two delivery cases.
-min_cases.radiant.api.crc_repair: 118
+# 2026-11-24: raised to the observed count on 430562b (was 118).
+min_cases.radiant.api.crc_repair: 124
 # radiant.api.crc_bits: 121, the observed count on diag/g1-h3-min
 # (2026-11-19), including test_diag_crc_bits_count_direction_and_syndrome_bit.
-min_cases.radiant.api.crc_bits: 127
+# 2026-11-24: raised to the observed count on 430562b (was 127).
+min_cases.radiant.api.crc_bits: 133
 # radiant.api.diag (ADR 0023): the api suite with the 0xF7 counters on.
 # 104 (2026-11-16, Bluefin twister on fix/diag-page9-done-cb): the observed
 # count, including the page-12 api case.
-min_cases.radiant.api.diag: 109
+# 2026-11-24: raised to the observed count on 430562b (was 109).
+min_cases.radiant.api.diag: 128
 # 32 since C5-1 (inline BLOCKED backs off the class that was refused). 38 with
 # the extension skip (ADR 0021). 76 with pass B6's XTAL_GUARANTEED case.
 # 86 with the grant generation's 10 (observed 104).
 # 87 with EXTEND_FAILED leaving a staged request pending (observed 105).
 # +1 (item 7): the MPSL gate's lead and window ceiling against caps_presets.h.
-min_cases.radiant.gate: 88
+# 2026-11-24: raised to the observed count on 430562b (was 88).
+min_cases.radiant.gate: 106
 # radiant.backend (ADR 0021): the backend completion path against register models.
 # 10 with the option-off preempted-arm cases (observed 45), 11 with the
 # staged-path sweep, 12 with the stale-denial-then-START case.
@@ -369,7 +384,8 @@ min_cases.radiant.gate: 88
 # edges, RX terminal t_sync/noise).
 # 33 with the review's search-window edge case.
 # +2 (item 7): the direct and MPSL caps rows of caps_presets.h.
-min_cases.radiant.backend: 35
+# 2026-11-24: raised to the observed count on 430562b (was 35).
+min_cases.radiant.backend: 70
 # radiant.backend.d2: the same suite with CONFIG_RADIANT_GATE_MPSL_D2 (the
 # staged branches run d2_settle_now()). 54, the observed count (2026-11-20).
 # 55 with the review's case (as radiant.backend).
@@ -402,7 +418,8 @@ min_cases.treadmill.hr_rx: 3
 # 2026-11-23: +3 (FE-C equipment-type debounce, as radiant.unit).
 # 2026-11-24: +16 (node_ident lost records, record table and wipe, as radiant.unit).
 # 2026-11-24: +3 (radiant_sec: the scan guess budget, as radiant.unit).
-min_cases.radiant.unit.ack_faults: 1170
+# 2026-11-24: raised to the observed count on 430562b (was 1170).
+min_cases.radiant.unit.ack_faults: 1298
 # radiant.unit.diag: the unit suites with CONFIG_RADIANT_DIAG_COUNTERS.
 # 1127 (2026-11-16, Bluefin twister on fix/diag-page9-done-cb): the observed
 # count, including the four page-9/page-12 scheduler cases.
@@ -422,7 +439,8 @@ min_cases.radiant.unit.ack_faults: 1170
 # 2026-11-23: +3 (FE-C equipment-type debounce, as radiant.unit).
 # 2026-11-24: +16 (node_ident lost records, record table and wipe, as radiant.unit).
 # 2026-11-24: +3 (radiant_sec: the scan guess budget, as radiant.unit).
-min_cases.radiant.unit.diag: 1241
+# 2026-11-24: raised to the observed count on 430562b (was 1241).
+min_cases.radiant.unit.diag: 1300
 min_cases.trainer.model: 14
 # radiant.lp_clock (power plan pass B2): the low-power timebase arithmetic,
 # 31 unit cases and seven 100 000-cycle drift simulations (three of them
@@ -457,7 +475,8 @@ min_cases.radiant.gate.lp: 116
 # 2026-11-20: 59 with +9 item 5 cases (RX terminal t_close x5, window edges, lifecycle, EINVAL format, window ceiling).
 # +1 (item 7): caps parity (src_caps/).
 # +1 (item 6): transmit power rounds to the nearest table entry (test_arm.c).
-min_cases.radiant.backend_cc26xx: 61
+# 2026-11-24: raised to the observed count on 430562b (was 61).
+min_cases.radiant.backend_cc26xx: 62
 # radiant.backend_cc26xx.coex: the same under CONFIG_RADIANT_BACKEND_CC26XX_COEX,
 # plus 5 cases on radiant_radio_cc26xx_arb.c's submit/execute hooks and the
 # diag-counter status_err case (44).
@@ -465,7 +484,8 @@ min_cases.radiant.backend_cc26xx: 61
 # 2026-11-20: 65 with +9 item 5 cases (as the plain scenario).
 # +1 (item 7): caps parity (src_caps/), coex row.
 # +1 (item 6): transmit power rounds to the nearest table entry, coex row.
-min_cases.radiant.backend_cc26xx.coex: 67
+# 2026-11-24: raised to the observed count on 430562b (was 67).
+min_cases.radiant.backend_cc26xx.coex: 68
 # dongle_thread.matter_storage (security review 2026-11-20 item 2): the Matter
 # bridge's stored-record decoder - destination and record bounds on each
 # length-prefixed string, the SIZE_MAX wrap, upstream's user-data bounds.

@@ -219,7 +219,12 @@ second wipe finishes it, and the next boot is a first boot with a new identity.
   trigger rule now refuses as a lost key). The wipe deletes every identity
   record, `K_dev` first; the next boot finds an empty store and provisions a
   new key with fresh counters. The API exists; no application wires a
-  trigger to it yet.
+  trigger to it yet. **Deleted is not erased** (review 2026-11-24): on NVS a
+  delete appends a deletion entry, and the old `K_dev` stays in flash until
+  garbage collection erases its sector. Overwriting first does not help,
+  because NVS is append-only. A reset that must survive a flash dump also
+  erases the storage partition, and with it every other setting, which is
+  the product's decision, not the library's.
 - **Dongles are unaffected.** Their epoch and pairing scalar come from the host
   (`0xF3`/`0xF5`) and they do not enable `RADIANT_NODE_IDENT`.
 

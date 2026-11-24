@@ -952,7 +952,11 @@ user just asked for a new identity, so the loss is expected rather than
 mysterious. This is the tier that covers "I am selling this" and "I am going
 somewhere I would rather not be logged". On a hostless node the mechanism is
 `radiant_node_ident_wipe()` followed by a reboot, which self-provisions a new
-`K_dev` (ADR 0020); a product wires its own trigger to it.
+`K_dev` (ADR 0020); a product wires its own trigger to it. The wipe deletes
+the records but does not erase them: on NVS the old `K_dev` stays in flash
+until garbage collection reclaims its sector, so a flash dump after a wipe
+can still recover it. For "I am selling this", the product must also erase
+the storage partition, which takes Bluetooth bonds and Matter fabrics too.
 
 ### Tier 2 — re-roll at every power-up. Opt-in, off by default, RadiANT device types only
 

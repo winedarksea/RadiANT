@@ -732,6 +732,16 @@ group.
   fault (the marker and a counter both lost) still reads as an older image's
   store; the NVS backend can also roll a record back to an older value when
   its newest ATE is corrupt, which this does not detect (not a new exposure).
+- [ ] **`radiant_node_ident_wipe()` deletes K_dev but does not erase it**
+  (review 2026-11-24; owner call). On NVS a delete appends a deletion entry,
+  so the old key stays in flash until garbage collection erases its sector,
+  and a flash dump after a Tier 1 "I am selling this" reset recovers it.
+  Overwriting with zeros first does not help: NVS is append-only. The fix is
+  to erase the storage partition (`nvs_clear()` on the settings backend's
+  file system, or `flash_area_erase()`), which also drops Bluetooth bonds and
+  Matter fabrics. Decide whether the product's factory reset does that.
+  Nothing calls the wipe yet, so nothing is exposed today. The header, ADR
+  0020 and radiant-security.md Tier 1 now say "deleted, not erased".
 - [x] **A search record goes live before its filter is written.**
   `begin_common()` (`radiant_search.c` ~:582) sets `active` first and `want`
   last, in thread context with no critical section, and `handle_ok()` (~:1043)
