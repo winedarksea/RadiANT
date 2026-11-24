@@ -10,8 +10,8 @@
 #ifndef SHIM_VERSION_H
 #define SHIM_VERSION_H
 
-#define SHIM_VERSION_BIN  2026,11,24,1
-#define SHIM_VERSION_STR  "2026.11.24.1"
+#define SHIM_VERSION_BIN  2026,11,24,2
+#define SHIM_VERSION_STR  "2026.11.24.2"
 #define SHIM_PRODUCT_NAME "RadiANT Zwift ANT shim"
 
 #endif /* SHIM_VERSION_H */
