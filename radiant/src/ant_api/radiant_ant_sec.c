@@ -218,10 +218,10 @@ BUILD_ASSERT(RADIANT_CHANNEL_COUNT <= 32u,
 
 uint32_t radiant_ant_sec_period_mask;
 
-int radiant_ant_sec_rebind(uint8_t ch, uint16_t v, int32_t types)
+uint8_t radiant_ant_sec_rebind(uint8_t ch, uint16_t v, int32_t types)
 {
-	int  rc = RADIANT_WIRE_CHANNEL_IN_WRONG_STATE;
-	bool period = types < 0;
+	uint8_t rc = RADIANT_WIRE_CHANNEL_IN_WRONG_STATE;
+	bool    period = types < 0;
 
 	k_mutex_lock(&api_lock, K_FOREVER);
 	/* is_master() bounds ch; binds_other() and the setters bound it too. */

@@ -304,22 +304,27 @@ min_testcases: 8263
 # reserved-bit-only sets).
 # 2026-11-23: +2 per unit scenario (fec_tx: page 51 raw grade above 40000 clamps).
 # 2026-11-23: +3 per unit scenario (radiant_power_adapter: FE-C equipment-type debounce).
-min_cases.radiant.unit: 1141
-min_cases.radiant.unit.sec_modes: 1141
-min_cases.radiant.unit.no_pairing: 1077
+# 2026-11-24: +3 per unit scenario (radiant_sec: try_devnum queue purge, failed
+# rekey import keeps the old root, a refused wrap is counted).
+min_cases.radiant.unit: 1144
+min_cases.radiant.unit.sec_modes: 1144
+min_cases.radiant.unit.no_pairing: 1080
 # radiant.unit.pairing_no_rng: 1218, the observed count on sec/item8-pair-rng
 # (2026-11-20), including test_pair_begin_without_an_rng_uses_the_kdf_scalar.
 # +4 (HAL drift item 5 settled, as radiant.unit).
 # 2026-11-23: +3 (profiles: a keyed receiver refuses plain and reserved-bit-only sets).
 # 2026-11-23: +2 (fec_tx grade clamp, as radiant.unit).
 # 2026-11-23: +3 (FE-C equipment-type debounce, as radiant.unit).
-min_cases.radiant.unit.pairing_no_rng: 1244
+# 2026-11-24: +3 (radiant_sec, as radiant.unit).
+min_cases.radiant.unit.pairing_no_rng: 1247
 min_cases.radiant.api: 91
 min_cases.radiant.api.sec: 95
 # +1 with the identical-0xF1 retry case (review 2026-11-17 item 4).
 # +4 with the 0xF2 rekey take-back and its three guards (review 2026-11-20 item C).
 # +1 with the unassign-ends-the-pairing-exchange case (review 2026-11-21).
-min_cases.radiant.api.sec_host: 115
+# +3 with 0xF3 before 0x43, a 0x43 change under an epoch and a keyed master's
+# 0x51 renumber (review 2026-11-22).
+min_cases.radiant.api.sec_host: 118
 # radiant.api.crc_repair: 112, the observed count on fix/crc-repair-deliver
 # (2026-11-18), including the two delivery cases.
 min_cases.radiant.api.crc_repair: 118
@@ -380,7 +385,7 @@ min_cases.treadmill.hr_rx: 3
 # 2026-11-23: +3 (profiles: a keyed receiver refuses plain and reserved-bit-only sets).
 # 2026-11-23: +2 (fec_tx grade clamp, as radiant.unit).
 # 2026-11-23: +3 (FE-C equipment-type debounce, as radiant.unit).
-min_cases.radiant.unit.ack_faults: 1148
+min_cases.radiant.unit.ack_faults: 1151
 # radiant.unit.diag: the unit suites with CONFIG_RADIANT_DIAG_COUNTERS.
 # 1127 (2026-11-16, Bluefin twister on fix/diag-page9-done-cb): the observed
 # count, including the four page-9/page-12 scheduler cases.
@@ -398,7 +403,7 @@ min_cases.radiant.unit.ack_faults: 1148
 # 2026-11-23: +3 (profiles: a keyed receiver refuses plain and reserved-bit-only sets).
 # 2026-11-23: +2 (fec_tx grade clamp, as radiant.unit).
 # 2026-11-23: +3 (FE-C equipment-type debounce, as radiant.unit).
-min_cases.radiant.unit.diag: 1219
+min_cases.radiant.unit.diag: 1222
 min_cases.trainer.model: 14
 # radiant.lp_clock (power plan pass B2): the low-power timebase arithmetic,
 # 31 unit cases and seven 100 000-cycle drift simulations (three of them

@@ -56,12 +56,13 @@ int radiant_ant_sec_key_replace(uint8_t ch, const uint8_t *root, size_t bits,
 
 /* 0x51 (types = device type | transmission type << 8, v the device number)
  * and 0x43 (types < 0, v the period; three arguments so both wrappers are
- * tail calls) with the security bindings applied: a keyed
+ * tail calls; uint8_t is radiant_ant_err_t, which this header cannot name)
+ * with the security bindings applied: a keyed
  * master's device number and an epoch's period are refused as
  * RADIANT_WIRE_CHANNEL_IN_WRONG_STATE when changed, and an accepted 0x43
  * marks the channel in radiant_ant_sec_period_mask (review 2026-11-22).
  * Takes api_lock. */
-int radiant_ant_sec_rebind(uint8_t ch, uint16_t v, int32_t types);
+uint8_t radiant_ant_sec_rebind(uint8_t ch, uint16_t v, int32_t types);
 
 /* Bit n: the host set channel n's period with 0x43 since its last assign,
  * which 0xF3 requires. The assign clears it. Under api_lock. */
