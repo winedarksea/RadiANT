@@ -65,13 +65,49 @@ host and the endpoint never backs up. A reduced variant built on that trickle
 once reported PASS against both a fixed image and firmware that predates the
 fix entirely, i.e. it was measuring nothing. Real radio traffic at a channel
 period is what actually fills the endpoint faster than the host retires it.
+
+--suspend-cycles N is a second, separate test (Linux only; it prints SKIP and
+exits 0 anywhere else). It covers the USB_NEXT suspend leak: on the new stack
+a bus suspend leaves the queued bulk-OUT buffer with the controller, and
+firmware that forgot it queued one more on every resume, until the shared
+UDC pool ran dry and no reply could be sent. The host side is sysfs runtime
+PM, run as root:
+
+    sudo python3 tools/bench_usb_stall.py --suspend-cycles 40
+
+  1. set power/control=auto and a short power/autosuspend_delay_ms
+  2. per cycle: close the device, wait for power/runtime_status=suspended,
+     reopen (which resumes it) and time one `request capabilities`
+  3. flood requests and count the replies, then read the 0xF6 counters
+  4. put power/control and the delay back as they were
+
+Pass is every per-cycle reply, every flood reply, and no bus reset in the
+kernel log (`usb <dev>: reset`, so this needs dmesg, i.e. root). The last
+one is the check that catches the unfixed firmware on Linux: there the
+replies keep coming, because once the leak has taken the buffer pool the
+device cannot answer the post-resume GET_STATUS, the hub driver falls back
+to a reset-resume, and the reset dequeues every leaked buffer. Measured
+2026-11-23 on a Feather with counters added: the outstanding bulk-OUT
+buffers climbed by one per cycle and a reset cancelled ~30 of them at once.
+A host without that fallback would be left with a device that answers
+nothing. The reopen skips
+SET_CONFIGURATION on purpose: Linux sends a repeat SET_CONFIGURATION for it,
+which resets the host's data toggles but not USBD's (usbd_ch9.c returns early
+on the current value), and the first packet after that can be lost as a
+duplicate - a different defect, which would show up here as a fake failure.
+No radio traffic is needed. rx_backpressure is reported, not judged: it counts
+both a legitimate NAK and a dropped packet.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
+import subprocess
 import sys
+import threading
 import time
 
 try:
@@ -90,7 +126,11 @@ from ant_health import decode as decode_health  # noqa: E402
 from ant_health import request as request_health  # noqa: E402
 from ant_probe import (  # noqa: E402
     EP_OUT,
+    PIDS,
+    VID,
     FrameReader,
+    _backends,
+    _serial_of,
     close_device,
     frame,
     open_device,
@@ -213,6 +253,374 @@ def read_health(dev, reader, label: str) -> dict | None:
     return got
 
 
+# -- --suspend-cycles: the USB_NEXT suspend/resume leak ------------------------
+
+SYSFS_USB_DEVICES = "/sys/bus/usb/devices"
+
+# Documentation/ABI/testing/sysfs-devices-power. "unsupported" means runtime
+# PM is disabled for the device, so it can never suspend and the test would
+# measure nothing.
+RUNTIME_STATES = ("active", "suspended", "suspending", "resuming", "error",
+                  "unsupported")
+POWER_CONTROL_VALUES = ("auto", "on")
+
+# Consecutive per-cycle failures after which the loop stops: by then the
+# answer is in, and a wedged board does not need 30 more cycles of proof.
+MAX_CONSECUTIVE_FAILURES = 3
+
+NEED_ROOT = ("cannot read the kernel log (dmesg): run as root. The bus resets "
+             "it records are the only\nhost-visible sign of the leak, so the "
+             "test cannot judge without it.")
+
+
+def suspend_cycles_arg(text: str) -> int:
+    """argparse type for --suspend-cycles: a whole number, at least 1."""
+    try:
+        value = int(text, 10)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"not a whole number: {text!r}") from None
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"must be at least 1, got {value}")
+    return value
+
+
+def sysfs_usb_name(bus: int, port_numbers) -> str:
+    """The kernel's name for a device: bus 5 ports (1,) is '5-1', (1, 4) '5-1.4'.
+
+    `port_numbers` is pyusb's Device.port_numbers. None or empty is a root hub,
+    which is never the dongle.
+    """
+    if not port_numbers:
+        raise ValueError("no port path: not a device behind a hub port")
+    return f"{int(bus)}-" + ".".join(str(int(p)) for p in port_numbers)
+
+
+def parse_runtime_status(text: str) -> str:
+    """power/runtime_status contents -> one of RUNTIME_STATES, else ValueError."""
+    state = text.strip()
+    if state not in RUNTIME_STATES:
+        raise ValueError(f"unknown power/runtime_status {state!r}")
+    return state
+
+
+def parse_power_control(text: str) -> str:
+    """power/control contents -> 'auto' or 'on', else ValueError."""
+    value = text.strip()
+    if value not in POWER_CONTROL_VALUES:
+        raise ValueError(f"unknown power/control {value!r}")
+    return value
+
+
+def parse_sysfs_int(text: str) -> int:
+    """A sysfs integer attribute (autosuspend_delay_ms, runtime_*_time)."""
+    return int(text.strip(), 10)
+
+
+def suspend_supported(platform: str, sysfs_root: str = SYSFS_USB_DEVICES
+                      ) -> str | None:
+    """None if --suspend-cycles can run here, else the reason it cannot."""
+    if not platform.startswith("linux"):
+        return f"needs Linux sysfs runtime PM (this is {platform})"
+    if not os.path.isdir(sysfs_root):
+        return f"{sysfs_root} does not exist"
+    return None
+
+
+def _sysfs_read(path: str) -> str:
+    with open(path, encoding="ascii") as handle:
+        return handle.read()
+
+
+def _sysfs_write(path: str, value: str) -> None:
+    with open(path, "w", encoding="ascii") as handle:
+        handle.write(value)
+
+
+def find_without_set_configuration(serial: str | None, wait_s: float):
+    """Find and take the dongle, WITHOUT the SET_CONFIGURATION open_device() sends.
+
+    Linux turns a SET_CONFIGURATION for the current value into
+    usb_reset_configuration(), which resets the host's endpoint data toggles.
+    USBD ignores a repeat of its current configuration (usbd_ch9.c), so the
+    device keeps its toggles and the first packet after the reopen can be
+    taken as a retransmission and dropped. That is a separate defect; this
+    test must not trip over it. The kernel configured the device when it
+    enumerated, so there is nothing to set.
+
+    Reading the serial opens the device, which is what resumes it.
+    """
+    backend = (_backends() or [None])[0]
+    deadline = time.monotonic() + wait_s
+    while True:
+        found = [d for pid in PIDS
+                 for d in usb.core.find(idVendor=VID, idProduct=pid,
+                                        find_all=True, backend=backend)]
+        if serial is not None:
+            found = [d for d in found
+                     if (_serial_of(d) or "").endswith(serial)]
+        if len(found) > 1:
+            sys.exit(f"{len(found)} ANT devices are attached; pick one with "
+                     "--serial")
+        if found or time.monotonic() >= deadline:
+            break
+        time.sleep(0.1)
+    if not found:
+        return None
+    dev = found[0]
+    try:
+        if dev.is_kernel_driver_active(0):
+            dev.detach_kernel_driver(0)
+    except (NotImplementedError, usb.core.USBError):
+        pass
+    return dev
+
+
+def count_resets(kernel_log: str, name: str) -> int:
+    """Count the kernel's "usb <name>: reset ..." lines in dmesg text.
+
+    The hub driver logs one per bus reset it issues, including the
+    reset-resume it falls back to when a resumed device does not answer.
+    That fallback is how the unfixed firmware hides on Linux: once the
+    leaked bulk-OUT buffers have taken the UDC pool, the device cannot
+    answer the control request the host sends after resume, the host resets
+    it, and the reset dequeues every leaked buffer. Each later request then
+    works, so only the reset gives it away. The name must match exactly:
+    "5-1" is not "5-1.2".
+    """
+    pattern = re.compile(r"\busb " + re.escape(name) + r": reset ")
+    return sum(1 for line in kernel_log.splitlines() if pattern.search(line))
+
+
+def read_kernel_log() -> str | None:
+    """dmesg output, or None when it cannot be read (it needs root)."""
+    try:
+        done = subprocess.run(["dmesg"], capture_output=True, text=True,
+                              check=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return done.stdout
+
+
+def wait_runtime_status(path: str, want: str, timeout_s: float):
+    """Poll power/runtime_status until it reads `want`. -> (reached, last)."""
+    deadline = time.monotonic() + timeout_s
+    while True:
+        state = parse_runtime_status(_sysfs_read(path))
+        if state == want:
+            return True, state
+        if time.monotonic() >= deadline:
+            return False, state
+        time.sleep(0.02)
+
+
+def capabilities_round_trip(dev, timeout_s: float) -> float | None:
+    """One request capabilities on a fresh reader. Seconds, or None."""
+    reader = FrameReader(dev)
+    try:
+        dev.write(EP_OUT, CAPABILITIES_REQUEST, timeout=int(timeout_s * 1000))
+    except usb.core.USBError as exc:
+        print(f"    write failed: {exc}")
+        return None
+    return await_capabilities(reader, timeout_s)
+
+
+def flood_capabilities(dev, count: int, timeout_s: float) -> tuple[int, int]:
+    """Write `count` requests back to back while a thread reads the replies.
+
+    Returns (written, replies). Reading concurrently matters: replies the host
+    does not collect back up into the firmware's TX queue and are dropped
+    there, which would read as a receive-side loss.
+    """
+    reader = FrameReader(dev)
+    replies = [0]
+    stop = threading.Event()
+
+    def collect():
+        deadline = time.monotonic() + timeout_s
+        while replies[0] < count and not stop.is_set():
+            result = reader.next_frame(min(deadline, time.monotonic() + 0.5))
+            if result is not None and result[0] == MESG_CAPABILITIES_ID:
+                replies[0] += 1
+            elif result is None and time.monotonic() >= deadline:
+                return
+
+    thread = threading.Thread(target=collect, daemon=True)
+    thread.start()
+    written = 0
+    for _ in range(count):
+        try:
+            dev.write(EP_OUT, CAPABILITIES_REQUEST, timeout=5000)
+        except usb.core.USBError as exc:
+            print(f"    flood write {written + 1} failed: {exc}")
+            break
+        written += 1
+    thread.join(timeout_s + 2.0)
+    stop.set()
+    thread.join(2.0)
+    return written, replies[0]
+
+
+def run_suspend_cycles(args) -> int:
+    reason = suspend_supported(sys.platform)
+    if reason is not None:
+        print(f"SKIP: --suspend-cycles {reason}")
+        return 0
+    # Root for the sysfs power writes and for dmesg. Checked up front, so a
+    # plain-user run stops here rather than halfway, with runtime PM changed.
+    if os.geteuid() != 0:
+        sys.exit(NEED_ROOT)
+
+    dev = find_without_set_configuration(args.serial, 5.0)
+    if dev is None:
+        sys.exit("No ANT device found")
+    name = sysfs_usb_name(dev.bus, dev.port_numbers)
+    sysdir = os.path.join(SYSFS_USB_DEVICES, name)
+    power = os.path.join(sysdir, "power")
+    print(f"Device {name} ({sysdir}), serial {_serial_of(dev)}")
+
+    # Asked twice if need be: if the last tool to open the board sent
+    # SET_CONFIGURATION, host and device disagree on the OUT data toggle and
+    # the first packet of this session is dropped as a duplicate (see the
+    # module docstring). The second one is in step again.
+    before = read_health(dev, FrameReader(dev), "baseline")
+    if before is None:
+        print("  no 0xF6 reply to the first request, asking again")
+        before = read_health(dev, FrameReader(dev), "baseline")
+    if before is None:
+        sys.exit("no usable 0xF6 reply: build with health.conf, so the "
+                 "rx_backpressure counter can be read")
+    print(f"  baseline rx_backpressure={before['rx_backpressure']} "
+          f"tx_drops={before['tx_drops']} tx_timeout={before['tx_timeout']}")
+
+    control_path = os.path.join(power, "control")
+    delay_path = os.path.join(power, "autosuspend_delay_ms")
+    status_path = os.path.join(power, "runtime_status")
+    suspended_time_path = os.path.join(power, "runtime_suspended_time")
+    old_control = parse_power_control(_sysfs_read(control_path))
+    old_delay = parse_sysfs_int(_sysfs_read(delay_path))
+
+    results = {"device": name, "cycles_requested": args.suspend_cycles,
+               "counters_before": before, "cycles": []}
+    first_failure = None
+    consecutive = 0
+    log = read_kernel_log()
+    if log is None:
+        sys.exit(NEED_ROOT)
+    # A count, not a diff of the text: if the kernel ring buffer wraps
+    # during the run, old reset lines can fall out as new ones come in and
+    # the count can stay level - a false negative. A 40-cycle run logs a few
+    # lines per reset at most, so on a quiet host it does not, but a host
+    # spamming its kernel log could hide a reset.
+    resets0 = resets_seen = count_resets(log, name)
+    suspended_ms0 = parse_sysfs_int(_sysfs_read(suspended_time_path))
+    try:
+        _sysfs_write(delay_path, str(args.autosuspend_ms))
+        _sysfs_write(control_path, "auto")
+        print(f"Runtime PM: control auto (was {old_control}), delay "
+              f"{args.autosuspend_ms} ms (was {old_delay})")
+
+        for cycle in range(1, args.suspend_cycles + 1):
+            close_device(dev)
+            reached, state = wait_runtime_status(status_path, "suspended",
+                                                 args.suspend_timeout)
+            dev = find_without_set_configuration(args.serial, 5.0)
+            if dev is None:
+                print(f"  cycle {cycle}: device gone after suspend")
+                results["cycles"].append({"cycle": cycle, "suspended": reached,
+                                          "round_trip_s": None})
+                first_failure = first_failure or cycle
+                break
+            rtt = capabilities_round_trip(dev, args.resume_timeout)
+            now = count_resets(read_kernel_log() or "", name)
+            reset = now > resets_seen
+            resets_seen = max(now, resets_seen)
+            results["cycles"].append({"cycle": cycle, "suspended": reached,
+                                      "round_trip_s": rtt, "reset": reset})
+            tag = "suspended" if reached else f"NOT suspended ({state})"
+            shown = f"{rtt * 1000:.1f} ms" if rtt is not None else "NO REPLY"
+            print(f"  cycle {cycle:3d}: {tag}, capabilities {shown}"
+                  + (", HOST RESET THE DEVICE" if reset else ""))
+            if reset:
+                first_failure = first_failure or cycle
+            if rtt is None:
+                first_failure = first_failure or cycle
+                consecutive += 1
+                if consecutive >= MAX_CONSECUTIVE_FAILURES:
+                    print(f"  {consecutive} failures in a row, stopping")
+                    break
+            else:
+                consecutive = 0
+
+        written, replies, after = 0, 0, None
+        if dev is not None:
+            print(f"\nFlood: {args.flood} requests")
+            written, replies = flood_capabilities(dev, args.flood, 10.0)
+            print(f"  wrote {written}, {replies} replies")
+            after = read_health(dev, FrameReader(dev), "after")
+        # Once more after the flood and the final 0xF6 read: a reset the
+        # host issued during those counts too.
+        resets_seen = max(resets_seen,
+                          count_resets(read_kernel_log() or "", name))
+    finally:
+        try:
+            _sysfs_write(control_path, old_control)
+            _sysfs_write(delay_path, str(old_delay))
+        except OSError as exc:
+            print(f"  could not restore runtime PM settings: {exc}")
+        if dev is not None:
+            close_device(dev)
+
+    suspended_ms = parse_sysfs_int(_sysfs_read(suspended_time_path)) \
+        - suspended_ms0
+    done = results["cycles"]
+    suspended = sum(1 for c in done if c["suspended"])
+    answered = sum(1 for c in done if c["round_trip_s"] is not None)
+    resets = resets_seen - resets0
+    results.update({
+        "bus_resets": resets,
+        "cycles_run": len(done), "cycles_suspended": suspended,
+        "cycles_answered": answered, "first_failure": first_failure,
+        "suspended_ms": suspended_ms, "flood_written": written,
+        "flood_replies": replies, "counters_after": after,
+    })
+    if after is not None:
+        for field in ("rx_backpressure", "tx_drops", "tx_timeout"):
+            results[f"{field}_delta"] = after[field] - before[field]
+
+    checks = [
+        ("every cycle really suspended",
+         suspended == len(done) == args.suspend_cycles,
+         f"{suspended}/{args.suspend_cycles} ({suspended_ms} ms suspended)"),
+        ("every per-cycle request answered",
+         answered == args.suspend_cycles,
+         f"{answered}/{args.suspend_cycles}"
+         + (f", first failure at cycle {first_failure}"
+            if first_failure else "")),
+        ("no bus reset during the cycles (no reset-resume)",
+         resets == 0, f"{resets} reset(s)"
+         + (f", first at cycle {first_failure}" if resets else "")),
+        ("every flood request answered",
+         written == replies == args.flood, f"{replies}/{args.flood}"),
+        ("0xF6 answers after the cycles", after is not None,
+         f"rx_backpressure {results['rx_backpressure_delta']:+d} "
+         f"tx_drops {results['tx_drops_delta']:+d} "
+         f"tx_timeout {results['tx_timeout_delta']:+d}"
+         if after is not None else "no reply"),
+    ]
+    print()
+    passed = True
+    for label, ok, detail in checks:
+        print(f"  [{'PASS' if ok else 'FAIL'}] {label}: {detail}")
+        passed = passed and ok
+    results["passed"] = passed
+    if args.json:
+        with open(args.json, "w") as handle:
+            json.dump(results, handle, indent=2)
+        print(f"\nwrote {args.json}")
+    return 0 if passed else 1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--read-seconds", type=float, default=5.0,
@@ -242,7 +650,26 @@ def main() -> int:
     parser.add_argument("--serial",
                         help="match a device whose serial ends with this")
     parser.add_argument("--json", help="write the result here")
+    suspend = parser.add_argument_group(
+        "suspend test (Linux, root; replaces the stall test)")
+    suspend.add_argument(
+        "--suspend-cycles", type=suspend_cycles_arg, metavar="N",
+        help="run N runtime-PM suspend/resume cycles instead of the stall "
+             "test (40 covers the ~30-cycle leak on unfixed USB_NEXT "
+             "firmware). Prints SKIP and exits 0 off Linux")
+    suspend.add_argument("--autosuspend-ms", type=int, default=100,
+                         help="power/autosuspend_delay_ms during the test "
+                              "(default: 100)")
+    suspend.add_argument("--suspend-timeout", type=float, default=5.0,
+                         help="how long to wait for runtime_status="
+                              "suspended per cycle (default: 5)")
+    suspend.add_argument("--flood", type=int, default=64,
+                         help="requests sent back to back after the cycles "
+                              "(default: 64)")
     args = parser.parse_args()
+
+    if args.suspend_cycles is not None:
+        return run_suspend_cycles(args)
 
     # No --port here, deliberately. A UART build has no bulk-IN endpoint to
     # stop polling, so the condition this measures cannot exist on one, and
