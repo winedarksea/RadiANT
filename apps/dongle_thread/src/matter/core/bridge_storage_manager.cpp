@@ -399,8 +399,38 @@ bool BridgeStorageManager::StoreEndpointHighWater(uint16_t next)
 
 	RadiantMatter::EndpointHighWater::Encode(next, buffer);
 
-	return Nrf::GetPersistentStorage().NonSecureStore(&mEndpointHighWater, buffer, sizeof(buffer)) ==
-	       PSErrorCode::Success;
+	if (Nrf::GetPersistentStorage().NonSecureStore(&mEndpointHighWater, buffer, sizeof(buffer)) !=
+	    PSErrorCode::Success) {
+		return false;
+	}
+	/* RadiANT (security review 2026-11-22): the marker only ever follows a
+	 * mark that is in storage. */
+	if (RadiantMatter::EndpointHighWater::NeedsMarker(true, mEndpointHighWaterMarked)) {
+		StoreEndpointHighWaterMarker();
+	}
+	return true;
+}
+
+bool BridgeStorageManager::EndpointHighWaterMarkerPresent()
+{
+	uint8_t marker = 0;
+	size_t readSize = 0;
+
+	/* Present-but-unloadable counts as present: the key is there, so the
+	 * mark was stored once. */
+	return Nrf::GetPersistentStorage().NonSecureLoad(&mEndpointHighWaterMarker, &marker, sizeof(marker),
+							 readSize) == PSErrorCode::Success ||
+	       Nrf::GetPersistentStorage().NonSecureHasEntry(&mEndpointHighWaterMarker) == PSErrorCode::Success;
+}
+
+void BridgeStorageManager::StoreEndpointHighWaterMarker()
+{
+	const uint8_t marker = 1;
+
+	if (Nrf::GetPersistentStorage().NonSecureStore(&mEndpointHighWaterMarker, &marker, sizeof(marker)) ==
+	    PSErrorCode::Success) {
+		mEndpointHighWaterMarked = true;
+	}
 }
 
 RadiantMatter::EndpointHighWater::MarkLoad BridgeStorageManager::LoadEndpointHighWater(uint16_t &next)
@@ -413,12 +443,28 @@ RadiantMatter::EndpointHighWater::MarkLoad BridgeStorageManager::LoadEndpointHig
 								      readSize) == PSErrorCode::Success;
 	/* RadiANT (security review 2026-11-21): NonSecureLoad() fails alike for
 	 * a missing key, a read error, an oversized value and the backend's
-	 * empty-value marker. HasEntry() finds the key without reading it, so
-	 * only a key that is not there at all counts as a legacy store. */
+	 * empty-value marker, so a failed load asks HasEntry() whether the key
+	 * is there. That separates a key that is present but unreadable from a
+	 * missing one, and nothing more: HasEntry() iterates the same backend,
+	 * and Zephyr's NVS settings loader deletes an entry it cannot read
+	 * without reporting it, so a fault that HIDES the key reads as missing
+	 * here too (security review 2026-11-22). The format marker below is what
+	 * tells that loss from a store written before the key. */
 	const bool present =
 		loaded || Nrf::GetPersistentStorage().NonSecureHasEntry(&mEndpointHighWater) == PSErrorCode::Success;
 
-	return RadiantMatter::EndpointHighWater::Classify(loaded, buffer, readSize, present, next);
+	mEndpointHighWaterMarked = EndpointHighWaterMarkerPresent();
+
+	const RadiantMatter::EndpointHighWater::MarkLoad load =
+		RadiantMatter::EndpointHighWater::Classify(loaded, buffer, readSize, present, mEndpointHighWaterMarked, next);
+
+	/* A store from before the marker, whose mark loads: mark it now, so the
+	 * next loss is caught rather than taken for a legacy store. */
+	if (RadiantMatter::EndpointHighWater::NeedsMarker(load == RadiantMatter::EndpointHighWater::MarkLoad::Valid,
+							   mEndpointHighWaterMarked)) {
+		StoreEndpointHighWaterMarker();
+	}
+	return load;
 }
 
 #ifdef CONFIG_BRIDGE_MIGRATE_PRE_2_7_0

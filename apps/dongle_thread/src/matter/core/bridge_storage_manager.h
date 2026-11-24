@@ -33,6 +33,8 @@ namespace Nrf
  *		/ver/ <uint8_t>
  *		/brd_ep_hw/ <uint16_t>   (RadiANT: the next dynamic endpoint id, see
  *		                         bridge_storage_codec.h EndpointHighWater)
+ *		/brd_ep_mk/ <uint8_t>    (RadiANT: 1, the mark's format marker, see
+ *		                         bridge_storage_codec.h MarkLoad)
  */
 class BridgeStorageManager {
 public:
@@ -46,6 +48,11 @@ public:
 	/* RadiANT: security review 2026-11-20 item B. "br/brd_ep_hw" is 12 of the
 	 * 18 bytes CONFIG_NCS_SAMPLE_MATTER_STORAGE_MAX_KEY_LEN allows. */
 	constexpr static auto kEndpointHighWaterPrefix = "brd_ep_hw";
+	/* RadiANT: security review 2026-11-22. The high-water mark's format
+	 * marker (bridge_storage_codec.h, MarkLoad): written once the mark is in
+	 * storage, so that a mark that later vanishes reads as lost, not legacy.
+	 * "br/brd_ep_mk" is 12 bytes, like the mark's key. */
+	constexpr static auto kEndpointHighWaterMarkerPrefix = "brd_ep_mk";
 
 #ifdef CONFIG_BRIDGE_MIGRATE_PRE_2_7_0
 	constexpr static auto kBridgedDeviceEndpointIdPrefix = "eid";
@@ -90,7 +97,9 @@ public:
 		  mBridgedDevicesIndexes(kBridgedDevicesIndexesPrefix, strlen(kBridgedDevicesIndexesPrefix), &mBridge),
 		  mBridgedDevice(kBridgedDevicePrefix, strlen(kBridgedDevicePrefix), &mBridge),
 		  mVersion(kVersionPrefix, strlen(kVersionPrefix), &mBridge),
-		  mEndpointHighWater(kEndpointHighWaterPrefix, strlen(kEndpointHighWaterPrefix), &mBridge)
+		  mEndpointHighWater(kEndpointHighWaterPrefix, strlen(kEndpointHighWaterPrefix), &mBridge),
+		  mEndpointHighWaterMarker(kEndpointHighWaterMarkerPrefix, strlen(kEndpointHighWaterMarkerPrefix),
+					   &mBridge)
 #ifdef CONFIG_BRIDGE_MIGRATE_PRE_2_7_0
 		  ,
 		  mBridgedDeviceEndpointId(kBridgedDeviceEndpointIdPrefix, strlen(kBridgedDeviceEndpointIdPrefix),
@@ -204,6 +213,9 @@ public:
 	 *
 	 * Security review 2026-11-20 item B: persisted so that a reboot never hands out
 	 * an id a removed or unrestorable device once had (Matter forbids the reuse).
+	 * Security review 2026-11-22: then writes the format marker if the store has
+	 * none yet (best effort: a failed marker write is retried with the next store
+	 * or load, and does not fail this call).
 	 *
 	 * @param next one past the highest endpoint id ever assigned
 	 * @return true if key has been written successfully
@@ -216,11 +228,15 @@ public:
 	 *
 	 * Security review 2026-11-21: a missing key and an unreadable one are
 	 * different answers. Only Absent may fall back to max(restored) + 1.
+	 * Security review 2026-11-22: "missing" is believed only on a store with no
+	 * format marker; a Valid load on an unmarked store writes the marker.
 	 *
 	 * @param next filled in for Valid only
 	 * @return Valid the key holds a valid value
-	 * @return Absent the key does not exist (a store from before it)
-	 * @return Unreadable the key exists but did not load, or is malformed
+	 * @return Absent the key does not exist and neither does the marker (a store
+	 *         from before both)
+	 * @return Unreadable the key exists but did not load, or is malformed, or is
+	 *         missing beside the marker (lost)
 	 */
 	RadiantMatter::EndpointHighWater::MarkLoad LoadEndpointHighWater(uint16_t &next);
 
@@ -356,6 +372,13 @@ private:
 	Nrf::PersistentStorageNode mBridgedDevice;
 	Nrf::PersistentStorageNode mVersion;
 	Nrf::PersistentStorageNode mEndpointHighWater; /* RadiANT */
+	Nrf::PersistentStorageNode mEndpointHighWaterMarker; /* RadiANT */
+	bool mEndpointHighWaterMarked = false; /* RadiANT: the marker is known stored */
+
+	/* RadiANT: the marker exists (it loads, or HasEntry() finds it). */
+	bool EndpointHighWaterMarkerPresent();
+	/* RadiANT: write the marker; sets mEndpointHighWaterMarked on success. */
+	void StoreEndpointHighWaterMarker();
 
 #ifdef CONFIG_BRIDGE_MIGRATE_PRE_2_7_0
 	/* The below fields are deprecated and used only for the migration purposes between the older scheme versions.

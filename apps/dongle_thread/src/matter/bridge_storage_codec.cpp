@@ -132,12 +132,18 @@ bool NeedsMark(uint16_t id, uint16_t next, uint16_t persistedNext)
 	return id >= persistedNext && next > id;
 }
 
-MarkLoad Classify(bool loaded, const uint8_t *buf, size_t size, bool present, uint16_t &next)
+MarkLoad Classify(bool loaded, const uint8_t *buf, size_t size, bool present, bool marked, uint16_t &next)
 {
 	if (loaded) {
 		return Decode(buf, size, next) ? MarkLoad::Valid : MarkLoad::Unreadable;
 	}
-	return present ? MarkLoad::Unreadable : MarkLoad::Absent;
+	/* Missing beside the marker: written once, then lost (2026-11-22). */
+	return (present || marked) ? MarkLoad::Unreadable : MarkLoad::Absent;
+}
+
+bool NeedsMarker(bool markStored, bool marked)
+{
+	return markStored && !marked;
 }
 
 uint16_t Adopt(Mark &mark, uint16_t first, MarkLoad load, uint16_t storedNext, uint16_t current)
