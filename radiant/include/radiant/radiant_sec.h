@@ -883,15 +883,19 @@ void radiant_sec_epoch_wanted(uint8_t ch, uint32_t epoch);
  *     channel is PENDING - keyed but not armed, failing closed (secured-range
  *     TX withheld with RADIANT_SEC_EUNARMED, RX dropped) - until the next
  *     radiant_sec_set_epoch(). The epoch high-water mark resets with it (any
- *     epoch is accepted next: new keys mean no nonce under them was ever
- *     used), the ceiling is cleared (a new root owes the old authority
+ *     epoch is accepted next - which is NOT proof the keys are unused: root
+ *     A, B, then A again is back on A's keys with the gate open, and only
+ *     the epoch authority's persisted floor stops a reused epoch; see
+ *     docs/radiant-security.md 3.5), the ceiling is cleared (a new root owes the old authority
  *     nothing), and packets still queued for the pump under the old root are
  *     dropped. Switches, W and page range stay; the on-air device number
  *     restarts at base_devnum (as on a fresh context), ending any Tier 2
  *     trial (radiant_sec_try_devnum()). The same-root no-op keeps it.
  *     radiant_sec_key_replacing() is called before the old root goes.
  *
- * A failed import leaves the existing context exactly as it was.
+ * A failed import leaves the existing context exactly as it was: the new
+ * root is imported into a temporary before the old one is destroyed (review
+ * 2026-11-22; before that, a failure after the destroy released the context).
  */
 int  radiant_sec_set_key(uint8_t ch, const uint8_t *root, size_t bits,
 			 uint16_t base_devnum);
@@ -1054,6 +1058,15 @@ int  radiant_sec_set_devnum(uint8_t ch, uint16_t devnum);
  * candidate that never verifies is just abandoned.
  */
 int  radiant_sec_try_devnum(uint8_t ch, uint16_t devnum);
+
+/*
+ * For the port's 0x51 and 0x43 refusals (review 2026-11-22): does `ch`'s
+ * context bind a value other than `v`? With `period` false, the provisioning
+ * device number its keys were derived for (any context); with `period` true,
+ * the period its epoch's slot counter runs at (only while it has an epoch).
+ * False when `ch` has no context. Under the port's lock; cold.
+ */
+bool radiant_sec_binds_other(uint8_t ch, uint16_t v, bool period);
 
 /*
  * The port's channel close and open: drop the receive window state, the

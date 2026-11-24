@@ -572,6 +572,7 @@ int radiant_sec_set_key(uint8_t ch, const uint8_t *root, size_t bits,
 	uint8_t         i;
 	int             rc;
 	bool            fresh = false;
+	struct radiant_sec_key k;
 
 	sec_map_init();
 	if (ch >= RADIANT_CHANNEL_COUNT || root == NULL) {
@@ -615,14 +616,16 @@ int radiant_sec_set_key(uint8_t ch, const uint8_t *root, size_t bits,
 		if (same && base_devnum == c->base_devnum) {
 			return RADIANT_SEC_OK;
 		}
-		/* A real rekey: the port takes back what it built under the
-		 * old root while that root still stands (review 2026-11-20
-		 * item C). */
-		radiant_sec_key_replacing(ch);
-		radiant_sec_key_destroy(&c->k_root);
 	}
 
-	rc = radiant_sec_key_import(&c->k_root, root, bits);
+	/* Into a temporary, before the old root is touched (review 2026-11-22
+	 * hardening): a rekey whose import failed after the destroy released
+	 * the context, and an unkeyed master sends its secured range in the
+	 * clear - after a 0xF2 that only returned an error. Now a failed import
+	 * leaves the old root, its epoch and its windows exactly as they were.
+	 * Only an opaque backend can fail here (a full key store); the portable
+	 * one fails an import only where radiant_sec_key_same() already did. */
+	rc = radiant_sec_key_import(&k, root, bits);
 	if (rc != RADIANT_SEC_OK) {
 		if (fresh) {
 			/* Undo the allocation: a keyless slot left behind
@@ -631,14 +634,21 @@ int radiant_sec_set_key(uint8_t ch, const uint8_t *root, size_t bits,
 			 * D1-6(b)). */
 			memset(c, 0, sizeof(*c));
 			sec_of[ch] = 0xFFu;
-		} else {
-			/* The old root is gone and the new one did not take
-			 * (it imported a moment ago in radiant_sec_key_same()):
-			 * no root at all, so no context. */
-			radiant_sec_channel_release(ch);
 		}
 		return rc;
 	}
+	if (!fresh) {
+		/* A real rekey: the port takes back what it built under the
+		 * old root while that root still stands (review 2026-11-20
+		 * item C). */
+		radiant_sec_key_replacing(ch);
+		radiant_sec_key_destroy(&c->k_root);
+	}
+	/* Moved, not copied: the handle (a hardware slot on an opaque backend)
+	 * now belongs to the context, so the temporary is wiped, never
+	 * destroyed. */
+	c->k_root = k;
+	radiant_sec_wipe(&k, sizeof(k));
 	/* The on-air number restarts at the provisioning one with every root
 	 * that is installed, and only then: the same-root no-op above returns
 	 * first, so a Tier 2 receiver's trial number (radiant_sec_try_devnum())
@@ -651,8 +661,14 @@ int radiant_sec_set_key(uint8_t ch, const uint8_t *root, size_t bits,
 	c->ceil_inv = 0;
 
 	/* A new root closes the epoch gate: the channel is PENDING (keyed, not
-	 * armed) and fails closed until set_epoch. Any epoch is accepted next,
-	 * which is safe because no nonce under the new keys was ever used. */
+	 * armed) and fails closed until set_epoch, which then accepts any epoch.
+	 * That is NOT "no nonce under these keys was ever used": root A, then B,
+	 * then A again (or number X, Y, X) is back on A's keys with the gate
+	 * open, and an epoch A already used is accepted. So are SYSTEM_RESET and
+	 * an unassign, which drop the context. The firmware's gate holds only
+	 * while a channel keeps its root and number; past that, nonce freshness
+	 * is the epoch authority's persisted floor (docs/radiant-security.md
+	 * 3.5, review 2026-11-22). */
 	c->epoch_set = false;
 	radiant_sec_key_destroy(&c->k_enc);
 	radiant_sec_key_destroy(&c->k_auth);
@@ -781,7 +797,7 @@ int radiant_sec_set_epoch(uint8_t ch, uint32_t epoch, uint64_t us_into_epoch,
 	}
 	/* Monotone - the whole of D3's enforceable half; the rest is a
 	 * normative obligation on the epoch authority since nothing here
-	 * survives a reset to check it. */
+	 * survives a reset, an unassign or a different root to check it. */
 	if (c->epoch_set && epoch <= c->epoch) {
 		return RADIANT_SEC_EINVAL;
 	}
@@ -938,8 +954,24 @@ int radiant_sec_try_devnum(uint8_t ch, uint16_t devnum)
 	c->rx_tag_have = 0u;
 	c->rx_broken = false;
 	c->last_verdict = RADIANT_SEC_VERDICT_CLEAR;
+	/* And pages still queued for the pump, as for a new epoch: heard under
+	 * the previous candidate, they would be read with this one's nonce and,
+	 * under X_CONF alone, delivered as garbage (review 2026-11-22). */
+	q_purge(ch);
 
 	return RADIANT_SEC_OK;
+}
+
+__attribute__((cold)) bool radiant_sec_binds_other(uint8_t ch, uint16_t v,
+						   bool period)
+{
+	RADIANT_SEC_ASSERT_LOCKED();
+	const struct sec_ctx *c = ctx_of(ch);
+
+	if (c == NULL || (period && !c->epoch_set)) {
+		return false;
+	}
+	return (period ? c->period_counts : c->base_devnum) != v;
 }
 
 /* Drop every queued packet for `ch`, keeping the order of the rest. */
@@ -1621,7 +1653,11 @@ static void rx_process(struct sec_pkt *pkt)
 
 	if (epoch_delta != 0u) {
 		if (advance_epoch(c, epoch_delta) != RADIANT_SEC_OK) {
-			return;
+			/* A wrap past the headroom or the authority's ceiling:
+			 * time says this page is from an epoch the channel may
+			 * not take, so it is counted as time-inconsistent
+			 * (sec review 2026-11-17 item 3), not dropped silently. */
+			goto drop_time;
 		}
 		rx_discard(c);
 		c->rx_floor = 0u;
@@ -1653,6 +1689,7 @@ static void rx_process(struct sec_pkt *pkt)
 	 * 7.6). */
 	if ((expected > counter && (uint32_t)(expected - counter) > 128u) ||
 	    counter < c->rx_floor) {
+drop_time:
 		stat_bump(&c->stats.dropped_replay);
 		return;
 	}

@@ -623,8 +623,13 @@ before the `0xF3` stays silent on its secured pages until it arrives. Later
 - **A different root** (or the same root under a different channel device
   number, which changes every derived key) **makes the channel pending** until
   the next `0xF3`, drops anything still queued under the old root, and resets
-  the epoch gate, so that `0xF3` may carry any epoch. That is safe because no
-  nonce under the new keys has been used.
+  the epoch gate, so that `0xF3` may carry any epoch. That is **not** the same
+  as "no nonce under the new keys has been used": root A, then B, then A again
+  (or number X, then Y, then X) is back on A's keys with the gate open, and
+  `0xF3` accepts an epoch A already used. Only the epoch authority's persisted
+  floor (below) closes that. The new root is imported before the old one is
+  destroyed, so a rekey whose import fails (an opaque backend's full key store)
+  changes nothing and leaves the channel on its old root (review 2026-11-22).
 - **Compat** (`radiant_sec_compat_set_key()`) follows both rules. The on-air
   device number restarts at the provisioning one with every root actually
   installed (a same-root re-send keeps a moved one), and an install that fails
@@ -694,8 +699,14 @@ this; a check would cost security text for no protection against an attacker.
 **A host must give every live channel a distinct root or a distinct base
 device number.**
 
-That rejection is only enforceable within a power cycle, because keys and state
-are wiped on reset. The obligation therefore sits with the **epoch authority** —
+That rejection is enforceable only while a channel keeps its root and its base
+device number. A SYSTEM_RESET wipes the keys and state, an unassign releases the
+context, and a `0xF2` with a different root or number reopens the gate (see the
+bullets above), so A -> B -> A accepts an epoch already used under A, inside one
+power cycle as well as across one. The firmware keeps no record across those
+three events (a RAM table of key check value, number and highest epoch was
+considered in review 2026-11-22 and not built). The obligation therefore sits
+with the **epoch authority** —
 the host, or the node application — and is normative: *persist the last epoch
 **used** and issue only epochs strictly greater than it.* "Used" is not
 "issued": a counter wrap (below) moves the channel to the next epoch with no
@@ -1913,11 +1924,25 @@ normal and accepted: the anchor then lies before its boot (section 3.1).
   KDF and `0xF2` does not carry it — a device number the host had to repeat
   correctly would be a second place for it to be wrong. Keying first would
   derive every sub-key under device number 0, which fails as a link that
-  verifies nothing rather than as an error.
+  verifies nothing rather than as an error. Once keyed, a **master** refuses a
+  `0x51` that changes its device number (the same number with a new device or
+  transmission type is accepted, since neither is in the KDF or the nonce):
+  it would go on the air under the new number with keys derived for the old,
+  and the host could believe (root, old number) free for another channel.
+  Unassign to re-number. A receiver's `0x51` is not refused: re-wildcarding a
+  keyed receiver keeps its key on purpose (review 2026-11-22).
 - **The channel period must be set before the epoch.** The period is what turns
   `us_into_epoch` into a slot index. A host-supplied period that disagreed
   with the channel's would desynchronise the counter in a way that looks exactly
-  like clock drift, so `0xF3` does not carry one either.
+  like clock drift, so `0xF3` does not carry one either. `0xF3` is refused
+  until the host has sent `0x43` on the channel's current assignment, before or
+  after the key: the period always has a value (the assign default), so only the
+  `0x43` says the host chose it. Once an epoch is set, a `0x43` that changes the
+  period is refused too, since the slot counter keeps the rate `0xF3` read; the
+  same period again is accepted. A `0xF2` with a different root (which ends the
+  epoch) or an unassign lifts it. Until review 2026-11-22 neither half was
+  enforced: an unset period bound the default, and a later `0x43` left the
+  counter running at the old rate.
 - **A master's transfer must finish before its key or policy changes.** `0xF2`,
   and a `0xF1` that changes the switches, W or the page range, are refused on a
   master with host acknowledged data or a burst in flight, or one answering a

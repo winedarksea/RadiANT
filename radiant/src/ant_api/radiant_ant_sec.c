@@ -189,13 +189,56 @@ static radiant_ant_err_t sec_epoch_set_locked(uint8_t channel, uint8_t flags,
 
 	/* The channel period, read rather than sent: a host-supplied value
 	 * that disagreed would desynchronise the counter in a way that looks
-	 * like clock drift. */
-	if (radiant_channel_period_get(channel, &period) != RADIANT_CH_OK) {
+	 * like clock drift. And set by the host first (0x43), not the assign
+	 * default it never chose (review 2026-11-22); once this binds it, a
+	 * 0x43 that would change it is refused (radiant_ant_sec_rebind()). */
+	if ((radiant_ant_sec_period_mask & BIT(channel)) == 0u ||
+	    radiant_channel_period_get(channel, &period) != RADIANT_CH_OK) {
 		return (radiant_ant_err_t)RADIANT_WIRE_CHANNEL_IN_WRONG_STATE;
 	}
 
 	return sec_err(radiant_sec_set_epoch(channel, epoch, us_into_epoch,
 					     period));
+}
+
+/*
+ * What 0xF2 and 0xF3 bound, a 0x51 or 0x43 may not move (review 2026-11-22).
+ * A keyed master's device number is in its KDF (base_devnum) and its nonce:
+ * a new one put it on the air under that number with keys for the old, and
+ * the host could believe (root, old number) free for another channel. A
+ * receiver re-wildcarding keeps its key and is not refused. An epoch's slot
+ * counter runs at the period 0xF3 read: a new one left the counter at the
+ * old rate. Both CHANNEL_IN_WRONG_STATE; the same value again is no change.
+ * An unassign, or a 0xF2 with a different root (which also ends the epoch),
+ * lifts them. The check and the write share one hold of api_lock. Here
+ * rather than in radiant_ant.c, which is built at -O2.
+ */
+BUILD_ASSERT(RADIANT_CHANNEL_COUNT <= 32u,
+	     "radiant_ant_sec_period_mask holds one bit per channel");
+
+uint32_t radiant_ant_sec_period_mask;
+
+uint8_t radiant_ant_sec_rebind(uint8_t ch, uint16_t v, int32_t types)
+{
+	uint8_t rc = RADIANT_WIRE_CHANNEL_IN_WRONG_STATE;
+	bool    period = types < 0;
+
+	k_mutex_lock(&api_lock, K_FOREVER);
+	/* is_master() bounds ch; binds_other() and the setters bound it too. */
+	if (!((period || radiant_channel_is_master(ch)) &&
+	      radiant_sec_binds_other(ch, v, period))) {
+		if (period) {
+			rc = radiant_channel_period_set(ch, v);
+			if (rc == RADIANT_CH_OK) {
+				radiant_ant_sec_period_mask |= BIT(ch);
+			}
+		} else {
+			rc = radiant_channel_id_set(ch, v, (uint8_t)types,
+						    (uint8_t)(types >> 8));
+		}
+	}
+	k_mutex_unlock(&api_lock);
+	return rc;
 }
 
 radiant_ant_err_t radiant_ant_sec_config(uint8_t channel, uint8_t switches, uint8_t w,

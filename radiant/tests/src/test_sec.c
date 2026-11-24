@@ -971,6 +971,67 @@ ZTEST(radiant_sec, test_a_refused_epoch_or_identical_policy_keeps_the_queue)
 	zassert_mem_equal(&log_pkt[0].pay[2], &conf_plain[2], 6u);
 }
 
+/*
+ * Review 2026-11-22 (latent): try_devnum changes the on-air number, which is
+ * in the nonce, and threw the windows and holds away but not the pump queue.
+ * A page queued from the previous candidate was decrypted under the new
+ * number and, under X_CONF alone, reached the host as garbage.
+ */
+ZTEST(radiant_sec, test_a_new_devnum_candidate_drops_ciphertext_still_queued)
+{
+	queue_one_conf_page();
+	zassert_ok(radiant_sec_try_devnum(RX_CH, (uint16_t)(TEST_DEVNUM + 1u)));
+	radiant_sec_pump();
+	zassert_equal(0u, log_n_pkt, "%u packets", log_n_pkt);
+}
+
+/*
+ * Review 2026-11-22 hardening: a rekey whose import failed after the old root
+ * was destroyed released the context, and an unkeyed master transmits its
+ * secured range in the clear - after a 0xF2 that only returned an error. The
+ * new root is now imported before the old one goes, so a failed import
+ * changes nothing. The portable backend cannot fail a valid import; the
+ * seam in radiant_sec_aes.c stands in for an opaque backend's full store.
+ */
+extern uint8_t radiant_sec_test_import_fail_in;
+
+ZTEST(radiant_sec, test_a_failed_rekey_import_keeps_the_old_root)
+{
+	static const uint8_t other_root[16] = { 0x5Au, 1u, 2u, 3u, 4u, 5u,
+						6u, 7u, 8u, 9u, 10u, 11u,
+						12u, 13u, 14u, 15u };
+	struct radiant_sec_state state;
+	uint32_t                 i;
+
+	key_both();
+	configure_both(RADIANT_SEC_SW_CONF | RADIANT_SEC_SW_AUTH, 4u);
+	epoch_both(41u);
+
+	/* set_key's same-root compare imports once and passes; the import
+	 * that installs the new root is the one that fails. */
+	radiant_sec_test_import_fail_in = 2u;
+	zassert_not_equal(RADIANT_SEC_OK,
+			  radiant_sec_set_key(TX_CH, other_root, 128,
+					      TEST_DEVNUM));
+	zassert_equal(0u, radiant_sec_test_import_fail_in,
+		      "setup: the failing import was not reached");
+	radiant_sec_test_import_fail_in = 0u;
+
+	zassert_true(radiant_sec_channel_is_secured(TX_CH),
+		     "a failed rekey left the master unkeyed: its secured "
+		     "range would go out in the clear");
+	radiant_sec_get_state(TX_CH, &state);
+	zassert_true(state.secured, "the old root's epoch did not survive");
+	zassert_equal(41u, state.epoch);
+
+	/* Still the old root: the receiver keyed with it verifies. */
+	for (i = 0u; i < 8u; i++) {
+		hop(i, false, -1);
+	}
+	zassert_true(verdicts_for(0u, RADIANT_SEC_VERDICT_VERIFIED) >= 1u,
+		     "the master no longer transmits under the old root");
+}
+
 /* D1-4: the constant-time compare is still an equality. Constant time itself
  * is not unit-testable; the sec suites staying green is the real guard. */
 ZTEST(radiant_sec, test_ct_equal_is_equality)
@@ -1495,6 +1556,33 @@ ZTEST(radiant_sec, test_held_packets_do_not_survive_an_epoch_advance_at_the_wrap
 	zassert_equal(1u, verdicts_for(0u, RADIANT_SEC_VERDICT_VERIFIED));
 	/* Windows 0 and 4 released; window 8 still waits for its verdict. */
 	zassert_equal(8u, log_n_pkt, "%u packets", log_n_pkt);
+}
+
+/*
+ * Sec review 2026-11-17 item 3 (low): a packet whose time crosses a wrap the
+ * receiver cannot advance into (past a ceiling here; past the headroom
+ * likewise) was dropped by rx_process() with nothing counted, so the host saw
+ * a quiet link. It is counted in dropped_replay, the "time-inconsistent" half
+ * of that counter (0xF4 [18..19]).
+ */
+ZTEST(radiant_sec, test_a_wrap_the_receiver_cannot_take_is_counted)
+{
+	const uint8_t            pay[8] = { TEST_PAGE, 0x00u, 1u, 2u,
+					    3u,        4u,    5u, 6u };
+	struct radiant_sec_stats st;
+
+	key_both();
+	configure_both(RADIANT_SEC_SW_AUTH, 4u);
+	epoch_both(47u);
+	zassert_ok(radiant_sec_set_epoch_ceiling(RX_CH, 47u));
+
+	ingest_at(pay, slot_t(65536u));
+
+	radiant_sec_get_stats(RX_CH, &st);
+	zassert_equal(0u, st.epoch_advances, "setup: the ceiling let it wrap");
+	zassert_equal(1u, st.dropped_replay,
+		      "a packet dropped at a refused wrap was not counted");
+	zassert_equal(0u, log_n_pkt);
 }
 
 /* ── The clock against a keyless injector ───────────────────────────────── */

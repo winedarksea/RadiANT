@@ -2455,7 +2455,34 @@ jobs:
           # (review 2026-11-21; this recipe, NCS v3.4.0, measured on
           # wip/sec-queue-pair): two q_purge() calls in cold host-command
           # code, no per-packet change. Ceiling unchanged, 32 B left.
-          check "security text" "$(( on_text - off_text ))" 7856
+          # 7828 / 6975 on master 92239e9 (this recipe, NCS v3.4.0; 28 B left).
+          # TEXT CEILING 7856 -> 8068 FOR SECURITY FIXES (review 2026-11-22
+          # Low + hardening items, sec review 2026-11-17 item 3; owner
+          # precedent 2026-11-17: ceiling raises for security fixes OK).
+          # Measured with this recipe at NCS v3.4.0 on wip/s24-sec-host-api:
+          # 7828 / 6975 at 92239e9, 8036 / 6979 after (+208 / +4):
+          #    108  radiant_ant_sec_rebind     0x51 / 0x43 under api_lock:
+          #                                    a keyed master's number and an
+          #                                    epoch's period refused, 0x43
+          #                                    marks the period-set mask
+          #     34  radiant_sec_binds_other    the binding query it asks
+          #     16  radiant_ant_channel_assign the assign clears the mask
+          #     12  radiant_ant_sec_epoch_set  0xF3 refused before a 0x43
+          #     12  k_mutex_lock (constprop)   a third caller
+          #     10  radiant_sec_set_key        import into a temporary before
+          #                                    the old root goes (+28, its
+          #                                    wipe helper -18 now inlined)
+          #      8  radiant_ant_channel_id_set, _period_set (tail calls)
+          #      4  radiant_sec_pump           a refused wrap is counted
+          #      8  radiant_sec_key_same, radiant_sec_tx_transform (layout)
+          #    -24  radiant_ant_sec_config, _key_set, _status_get (layout)
+          # (the symbols sum to 188 B; the section moves 208 B, alignment).
+          # Bss +4 is the period-set mask. radiant_sec_try_devnum()'s new
+          # queue purge costs nothing here: no production code calls it, so
+          # the linker drops it. All of it is cold host-command code; the
+          # per-packet path gains one counted branch. Raised by the measured
+          # value plus a 32 B margin, as in 2026-11-20.
+          check "security text" "$(( on_text - off_text ))" 8068
           check "security bss"  "$(( on_bss  - off_bss  ))" 7168
 
           # X25519 and the pairing logic, on top of the above and under their

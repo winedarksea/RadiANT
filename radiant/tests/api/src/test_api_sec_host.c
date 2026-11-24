@@ -10,7 +10,11 @@
  * period before its epoch (period turns a phase into a packet index).
  * Neither fails loudly if skipped - keys under device 0 verify against
  * nothing, a counter from the wrong period drifts like clock error - so
- * both are refused with RADIANT_WIRE_CHANNEL_IN_WRONG_STATE.
+ * both are refused with RADIANT_WIRE_CHANNEL_IN_WRONG_STATE. The period rule
+ * means a 0x43 the host sent on this assignment, not the assign default; until
+ * review 2026-11-22 this header claimed that refusal and the code did not
+ * make it. What they bound stays put after: a keyed master refuses a new
+ * device number, and a channel with an epoch a new period.
  *
  * Compiled only into the radiant.api.sec_host scenario, the only one
  * that links the adapter.
@@ -277,6 +281,140 @@ ZTEST(api, test_sec_host_a_late_joiner_counts_from_the_epoch_not_from_boot)
 	zassert_equal((uint16_t)200000u, rd16(&st[10]));
 	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      radiant_ant_sec_epoch_set(HOST_CH, 0u, 21u, 0u));
+	host_done();
+
+	api_assert_no_viol();
+}
+
+/*
+ * Review 2026-11-22: "period before epoch" was documented as a refusal and
+ * not enforced. 0xF3 read the channel period, which always has a value (the
+ * assign default), so an epoch bound whatever period the channel happened to
+ * have. Now 0xF3 is refused until the host has sent 0x43 on this assignment.
+ */
+ZTEST(api, test_sec_host_an_epoch_needs_the_period_set_first)
+{
+	host_assign(true, false);
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_sec_key_set(HOST_CH, 128u, host_key));
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_sec_config(HOST_CH, RADIANT_SEC_SW_AUTH, 2u, 0x01u,
+				      0x0Fu));
+
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_CHANNEL_IN_WRONG_STATE,
+		      radiant_ant_sec_epoch_set(HOST_CH, 0u, 10u, 0u),
+		      "0xF3 bound an epoch to a period the host never set");
+
+	/* The period after the key is as good as before it. */
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_channel_period_set(HOST_CH,
+					      RADIANT_CHANNEL_PERIOD_ANT_PLUS));
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_sec_epoch_set(HOST_CH, 0u, 10u, 0u));
+	host_done();
+
+	/* A new assignment forgets the 0x43, as it forgets the period. */
+	host_assign(true, false);
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_sec_key_set(HOST_CH, 128u, host_key));
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_CHANNEL_IN_WRONG_STATE,
+		      radiant_ant_sec_epoch_set(HOST_CH, 0u, 10u, 0u));
+	host_done();
+
+	api_assert_no_viol();
+}
+
+/*
+ * Review 2026-11-22: 0xF3 caches the period it binds, and the slot counter
+ * runs at that rate. A later 0x43 used to change the channel and leave the
+ * counter at the old rate (a master re-sent or skipped counters, a receiver
+ * drifted). Now a 0x43 that changes the period is refused while the channel
+ * has an epoch; the same period again is not a change. A new root takes the
+ * epoch away, and with it the refusal.
+ */
+ZTEST(api, test_sec_host_a_period_change_is_refused_under_an_epoch)
+{
+	static const uint8_t other_key[16] = { 0xA5u, 1u, 2u, 3u, 4u, 5u, 6u,
+					       7u, 8u, 9u, 10u, 11u, 12u, 13u,
+					       14u, 15u };
+	uint16_t             period;
+
+	host_assign(true, true);
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_sec_key_set(HOST_CH, 128u, host_key));
+	/* Keyed, no epoch: a period change is still free. */
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_channel_period_set(HOST_CH, 4096u));
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_channel_period_set(
+			      HOST_CH, RADIANT_CHANNEL_PERIOD_ANT_PLUS));
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_sec_config(HOST_CH, RADIANT_SEC_SW_AUTH, 2u, 0x01u,
+				      0x0Fu));
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_sec_epoch_set(HOST_CH, 0u, 10u, 0u));
+
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_CHANNEL_IN_WRONG_STATE,
+		      radiant_ant_channel_period_set(HOST_CH, 4096u),
+		      "0x43 moved the period under a bound epoch");
+	zassert_ok(radiant_ant_channel_period_get(HOST_CH, &period));
+	zassert_equal(RADIANT_CHANNEL_PERIOD_ANT_PLUS, period);
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_channel_period_set(
+			      HOST_CH, RADIANT_CHANNEL_PERIOD_ANT_PLUS),
+		      "the same period again is not a change");
+
+	/* A different root leaves the channel pending, with no epoch. */
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_sec_key_set(HOST_CH, 128u, other_key));
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_channel_period_set(HOST_CH, 4096u));
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_sec_epoch_set(HOST_CH, 0u, 1u, 0u));
+	host_done();
+
+	api_assert_no_viol();
+}
+
+/*
+ * Review 2026-11-22: 0xF2 binds the channel's device number into the KDF
+ * (base_devnum) and the nonce once. A keyed master that took a 0x51 with
+ * another number went on the air under it with keys for the old one, and the
+ * host could believe (root, old number) free for another channel. Now a keyed
+ * master refuses a new number; its own number again (or a new device or
+ * transmission type, neither in the KDF nor the nonce) is accepted. A
+ * receiver's re-wildcard keeps its key and is not refused
+ * (test_sec_host_a_rewildcarded_keyed_scan_keeps_the_sender_number).
+ */
+ZTEST(api, test_sec_host_a_keyed_master_refuses_a_new_device_number)
+{
+	struct radiant_channel_id id;
+
+	host_assign(true, true);
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_sec_key_set(HOST_CH, 128u, host_key));
+
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_CHANNEL_IN_WRONG_STATE,
+		      radiant_ant_channel_id_set(HOST_CH, HOST_DEVNUM + 1u,
+					  HOST_DEVTYPE, HOST_TRANS),
+		      "a keyed master took a device number its keys are not "
+		      "bound to");
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_CHANNEL_IN_WRONG_STATE,
+		      radiant_ant_channel_id_set(HOST_CH, 0u, HOST_DEVTYPE,
+					  HOST_TRANS));
+	zassert_ok(radiant_channel_id_get(HOST_CH, &id));
+	zassert_equal(HOST_DEVNUM, id.device_number);
+
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_channel_id_set(HOST_CH, HOST_DEVNUM,
+					  HOST_DEVTYPE + 1u, HOST_TRANS + 1u));
+	host_done();
+
+	/* Unassigned, the key is gone and any number goes again. */
+	host_assign(true, true);
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_channel_id_set(HOST_CH, HOST_DEVNUM + 1u,
+					  HOST_DEVTYPE, HOST_TRANS));
 	host_done();
 
 	api_assert_no_viol();

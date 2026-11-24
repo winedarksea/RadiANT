@@ -106,6 +106,8 @@ ZTEST(sec_lock_hook, test_every_entry_point_asks_the_port_for_its_lock)
 		       radiant_sec_set_devnum(0u, 0x1234u));
 	EXPECT_CHECKED(radiant_sec_try_devnum,
 		       radiant_sec_try_devnum(0u, 0x1234u));
+	EXPECT_CHECKED(radiant_sec_binds_other,
+		       radiant_sec_binds_other(0u, 0x1234u, false));
 	/* Only an ARMED channel's transform is held to the lock (an unsecured
 	 * channel is posted from the scheduler callback and touches nothing). */
 	buf[0] = 0x05u;

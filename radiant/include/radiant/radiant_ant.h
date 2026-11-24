@@ -377,7 +377,9 @@ radiant_ant_err_t radiant_ant_channel_close(uint8_t channel);
  * reject it on an open channel rather than retuning underneath the host.
  *
  * Returns 0, RADIANT_WIRE_INVALID_MESSAGE (channel out of range) or
- * RADIANT_WIRE_CHANNEL_IN_WRONG_STATE (unassigned or open).
+ * RADIANT_WIRE_CHANNEL_IN_WRONG_STATE (unassigned or open, or, with the
+ * security host messages, a keyed master given a device number other than
+ * the one its key is bound to - see 0xF2 below).
  */
 radiant_ant_err_t radiant_ant_channel_id_set(uint8_t channel, uint16_t device_number,
 			       uint8_t device_type, uint8_t trans_type);
@@ -393,9 +395,10 @@ radiant_ant_err_t radiant_ant_channel_id_set(uint8_t channel, uint16_t device_nu
  * Must be called before the channel is opened.
  *
  * Returns 0, RADIANT_WIRE_INVALID_MESSAGE (channel out of range),
- * RADIANT_WIRE_CHANNEL_IN_WRONG_STATE (unassigned or open) or
- * RADIANT_WIRE_INVALID_PARAMETER_PROVIDED (period outside what the backend can
- * schedule).
+ * RADIANT_WIRE_CHANNEL_IN_WRONG_STATE (unassigned or open, or, with the
+ * security host messages, a change of period on a channel with an epoch - see
+ * 0xF3 below) or RADIANT_WIRE_INVALID_PARAMETER_PROVIDED (period outside what
+ * the backend can schedule).
  */
 radiant_ant_err_t radiant_ant_channel_period_set(uint8_t channel, uint16_t period);
 
@@ -1144,6 +1147,11 @@ radiant_ant_err_t radiant_ant_crypto_info_get(uint8_t type, uint8_t *info);
  * ORDERING: a channel needs its ID before its key (the device number is
  * bound into the KDF) and its period before its epoch (the period turns a
  * phase into a packet index). Both refused with RADIANT_WIRE_CHANNEL_IN_WRONG_STATE.
+ * "Its period" means one the host set with radiant_ant_channel_period_set() on
+ * this assignment, not the assign default. What they bound then stays put: a
+ * keyed master refuses a new device number, and a channel with an epoch a new
+ * period, both CHANNEL_IN_WRONG_STATE until an unassign (or, for the period,
+ * a key with a different root, which ends the epoch). Review 2026-11-22.
  */
 
 /**
@@ -1197,7 +1205,8 @@ radiant_ant_err_t radiant_ant_sec_key_set(uint8_t channel, uint8_t bits, const u
  * X_CONF and a full session replay against X_AUTH.
  *
  * Returns 0, RADIANT_WIRE_INVALID_MESSAGE, RADIANT_WIRE_INVALID_PARAMETER_PROVIDED or
- * RADIANT_WIRE_CHANNEL_IN_WRONG_STATE (no key, or no channel period).
+ * RADIANT_WIRE_CHANNEL_IN_WRONG_STATE (no key, or no channel period set by the
+ * host on this assignment).
  */
 radiant_ant_err_t radiant_ant_sec_epoch_set(uint8_t channel, uint8_t flags, uint32_t epoch,
 			      uint64_t us_into_epoch);
