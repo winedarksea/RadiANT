@@ -196,7 +196,17 @@ static void end_of_test(void)
 		      fake_radio_viol_name(fake_radio_viol(0)->code));
 }
 
-ZTEST_SUITE(radiant_search, NULL, NULL, setup, NULL, NULL);
+extern void (*radiant_test_crit_probe)(bool entering);
+
+/* The critical-section probe (test_begin_publishes_the_record_whole) must
+ * never outlive its case, failed or not: other suites share the hook. */
+static void teardown(void *f)
+{
+	ARG_UNUSED(f);
+	radiant_test_crit_probe = NULL;
+}
+
+ZTEST_SUITE(radiant_search, NULL, NULL, setup, teardown, NULL);
 
 /* ---------------------------------------------------------------------------
  * The pump - a two-line stand-in for radiant_sched.c
@@ -2064,6 +2074,180 @@ ZTEST(radiant_search, test_late_event_never_acquires)
 	zassert_equal(0u, g_cap.n_acquired);
 	zassert_equal(1u, radiant_search_get_stats(&g_s)->late_events);
 
+	zassert_ok(radiant_search_end(&g_s, 0u));
+	end_of_test();
+}
+
+/* ---------------------------------------------------------------------------
+ * A search record is published whole (security review 2026-11-22, Low)
+ *
+ * handle_ok() reads a channel's record from the radio interrupt, while
+ * radiant_search_begin() and radiant_search_end() write it from a thread. A
+ * record that reads active with its filter not yet written is a full-wildcard
+ * ACQUIRE, so an interrupt landing mid-begin made a pinned channel acquire
+ * whatever device it heard. begin built the record in place, active first.
+ *
+ * The torn instant itself cannot be reached from a single-threaded suite: it
+ * lies between two plain stores with no call between them, so there is no
+ * point at which a test could run the interrupt. What can be tested is the
+ * shape of the fix. begin and end must make their change inside
+ * radiant_event_crit_enter()/exit(), and test_event.c's port hook runs a probe
+ * at each edge of that section - the only two instants of a guarded update an
+ * interrupt can observe. The probe plays the interrupt there: it checks the
+ * record is either inactive or whole, and offers the armed window a frame from
+ * a device the record must refuse. Before the fix the probe never ran.
+ * ---------------------------------------------------------------------------
+ */
+
+static struct {
+	uint8_t                         chan;
+	/* The records the interrupt may see: the old one (a re-issue) and the
+	 * new one, each whole. */
+	struct radiant_search_id_filter want[2];
+	uint8_t                         n_want;
+	enum radiant_search_mode        mode;
+	uint32_t                        n_edges;
+	uint32_t                        n_active;
+	uint32_t                        n_torn;
+	bool                            busy;
+} g_probe;
+
+static void crit_probe(bool entering)
+{
+	const struct radiant_search_chan *ch = &g_s.chans[g_probe.chan];
+	struct radiant_rx_event           evt;
+	uint8_t                           frame[FAKE_RADIO_AIR_FRAME_MAX];
+	uint8_t                           len;
+
+	ARG_UNUSED(entering);
+	if (g_probe.busy) {
+		return;
+	}
+	g_probe.busy = true;
+	g_probe.n_edges++;
+	if (ch->active) {
+		bool whole = false;
+
+		g_probe.n_active++;
+		for (uint8_t i = 0u; i < g_probe.n_want; i++) {
+			if (ch->mode == g_probe.mode &&
+			    ch->want.device_number == g_probe.want[i].device_number &&
+			    ch->want.device_type == g_probe.want[i].device_type &&
+			    ch->want.trans_type == g_probe.want[i].trans_type) {
+				whole = true;
+			}
+		}
+		if (!whole) {
+			g_probe.n_torn++;
+		}
+	}
+
+	/* A heart-rate strap (type 0x78) on filter 0 of the armed window: the
+	 * record wants a power meter (0x0B), and channel 0's search wants a
+	 * type nothing on the air has, so nobody may take it. */
+	len = fake_radio_build_ant_frame(frame, 0x0500u, 0x78u, 1u, payload8);
+	memset(&evt, 0, sizeof(evt));
+	evt.op = g_op;
+	evt.status = RADIANT_RADIO_STATUS_OK;
+	evt.t_sync = g_w.t_open + 1000u;
+	evt.t_sync_exact = true;
+	evt.filter_index = 0u;
+	evt.body = &frame[RADIANT_FRAME_ADDR_LEN_SEARCH];
+	evt.body_len = (uint8_t)(len - RADIANT_FRAME_ADDR_LEN_SEARCH);
+	radiant_search_on_rx(&g_s, &evt);
+	g_probe.busy = false;
+}
+
+static void probe_arm(uint8_t chan, const struct radiant_search_id_filter *want,
+		      enum radiant_search_mode mode)
+{
+	/* Channel 0 keeps a window armed and is offered every probe frame; it
+	 * wants device type 0x01, which no probe frame carries. */
+	static const struct radiant_search_id_filter want_none = { 0u, 0x01u, 0u };
+
+	memset(&g_probe, 0, sizeof(g_probe));
+	g_probe.chan = chan;
+	g_probe.want[0] = *want;
+	g_probe.n_want = 1u;
+	g_probe.mode = mode;
+	zassert_ok(radiant_search_begin(&g_s, 0u, RADIANT_SEARCH_MODE_ACQUIRE, &want_none,
+					radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+	zassert_equal(RADIANT_SEARCH_OK, win_open());
+	radiant_test_crit_probe = crit_probe;
+}
+
+static void probe_check(const char *what)
+{
+	radiant_test_crit_probe = NULL;
+	zassert_true(g_probe.n_edges >= 2u,
+		     "%s made its change outside the critical section (%u edges): "
+		     "the radio interrupt can read the record half written",
+		     what, g_probe.n_edges);
+	zassert_equal(0u, g_probe.n_torn,
+		      "%s: the interrupt saw an active record whose filter or "
+		      "mode was not the one asked for", what);
+	zassert_equal(0u, g_cap.n_acquired,
+		      "%s: a frame offered mid-update was acquired (channel %u)",
+		      what, (unsigned int)g_cap.chan[0]);
+	zassert_true(radiant_search_get_stats(&g_s)->frames_ok >= g_probe.n_edges,
+		     "%s: the probe's frames never reached the offer loop", what);
+}
+
+ZTEST(radiant_search, test_begin_publishes_the_record_whole)
+{
+	static const struct radiant_search_id_filter want_pwr = { 0u, 0x0Bu, 0u };
+
+	bring_up(false);
+	probe_arm(1u, &want_pwr, RADIANT_SEARCH_MODE_ACQUIRE);
+
+	zassert_ok(radiant_search_begin(&g_s, 1u, RADIANT_SEARCH_MODE_ACQUIRE, &want_pwr,
+					radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+	probe_check("a fresh begin");
+	zassert_true(radiant_search_is_searching(&g_s, 1u));
+	zassert_equal(1u, g_probe.n_active,
+		      "the record must be inactive just before the section and "
+		      "whole just after it");
+
+	/* Re-issuing replaces a live record: the interrupt sees the old one
+	 * whole or the new one whole, never a mix. */
+	{
+		static const struct radiant_search_id_filter want_fe = { 0u, 0x11u, 0u };
+
+		g_probe.want[1] = want_fe;
+		g_probe.n_want = 2u;
+		g_probe.n_edges = 0u;
+		g_probe.n_active = 0u;
+		radiant_test_crit_probe = crit_probe;
+		zassert_ok(radiant_search_begin(&g_s, 1u, RADIANT_SEARCH_MODE_ACQUIRE,
+						&want_fe, radiant_radio_now(),
+						RADIANT_SEARCH_TIMEOUT_NONE));
+		probe_check("a re-issued begin");
+		zassert_equal(0x11u, g_s.chans[1].want.device_type);
+	}
+
+	win_run();
+	zassert_ok(radiant_search_end(&g_s, 0u));
+	zassert_ok(radiant_search_end(&g_s, 1u));
+	end_of_test();
+}
+
+ZTEST(radiant_search, test_end_clears_the_record_whole)
+{
+	static const struct radiant_search_id_filter want_pwr = { 0u, 0x0Bu, 0u };
+
+	bring_up(false);
+	zassert_ok(radiant_search_begin(&g_s, 1u, RADIANT_SEARCH_MODE_ACQUIRE, &want_pwr,
+					radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+	probe_arm(1u, &want_pwr, RADIANT_SEARCH_MODE_ACQUIRE);
+
+	zassert_ok(radiant_search_end(&g_s, 1u));
+	probe_check("end");
+	zassert_false(radiant_search_is_searching(&g_s, 1u));
+	zassert_equal(1u, g_probe.n_active,
+		      "the record must be whole just before the section and "
+		      "gone just after it");
+
+	win_run();
 	zassert_ok(radiant_search_end(&g_s, 0u));
 	end_of_test();
 }

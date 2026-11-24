@@ -1179,8 +1179,9 @@
 
 /*
  * The dispatcher does not implement this message, or its body was too short
- * to run. Distinguishing 'the bridge refused it' from 'the stack refused it'
- * is exactly this code: anything else means the message was decoded and
+ * to run, or (0x46, 0xF1, 0xF2, 0xF3, 0xF5) not the exact length the message
+ * declares. Distinguishing 'the bridge refused it' from 'the stack refused
+ * it' is exactly this code: anything else means the message was decoded and
  * handed on. [bridge, tools]
  */
 #define RADIANT_WIRE_INVALID_MESSAGE                         0x28

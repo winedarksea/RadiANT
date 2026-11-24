@@ -1907,12 +1907,37 @@ ZTEST(radiant_channel, test_an_unrecognised_channel_type_is_accepted)
 	/* radiant_ant_channel_assign()'s permitted error set has no code left to reject
 	 * a channel type with (INVALID_MESSAGE is already spoken for by the
 	 * channel number, and INVALID_PARAMETER_PROVIDED is not in the set). So
-	 * the type is carried verbatim, only bit 4 interpreted. */
+	 * the type's top nibble is carried as given, only bit 4 interpreted. */
 	up();
 	zassert_equal(RADIANT_CH_OK, radiant_channel_assign(0u, 0x70u, 0u, 0u));
 	zassert_equal(RADIANT_CH_OK, radiant_channel_status_get(0u, &status));
 	zassert_equal((uint8_t)(0x70u | RADIANT_CH_STATUS_ASSIGNED), status);
 	zassert_true(radiant_channel_is_master(0u));
+
+	radio_clean();
+}
+
+/* ...but its low nibble is dropped there (security review 2026-11-22,
+ * Hardening). The status byte never carried it, and the adapter compared the
+ * stored byte both masked and raw, so 0x41 read back as SLAVE_RX_ONLY while
+ * acknowledging like a bidirectional slave. Normalised once, every reader of
+ * radiant_channel_type_get() sees the type the host is told it has. */
+ZTEST(radiant_channel, test_the_low_nibble_of_the_channel_type_is_dropped)
+{
+	static const uint8_t in[] = { 0x41u, 0x5Fu, 0x01u, 0x7Fu };
+	static const uint8_t out[] = { 0x40u, 0x50u, 0x00u, 0x70u };
+	uint8_t status = 0u;
+
+	up();
+	for (uint8_t i = 0u; i < ARRAY_SIZE(in); i++) {
+		zassert_equal(RADIANT_CH_OK, radiant_channel_assign(0u, in[i], 0u, 0u));
+		zassert_equal(out[i], radiant_channel_type_get(0u),
+			      "type 0x%02x stored as 0x%02x", in[i],
+			      radiant_channel_type_get(0u));
+		zassert_equal(RADIANT_CH_OK, radiant_channel_status_get(0u, &status));
+		zassert_equal((uint8_t)(out[i] | RADIANT_CH_STATUS_ASSIGNED), status);
+		zassert_equal(RADIANT_CH_OK, radiant_channel_unassign(0u));
+	}
 
 	radio_clean();
 }

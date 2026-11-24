@@ -182,3 +182,41 @@ ZTEST(bridge_parser, test_an_oversize_len_is_dropped_silently)
 	zassert_equal(0u, n_dispatched);
 	zassert_true(n_desync > 0u);
 }
+
+/*
+ * 0x46, 0xF1, 0xF2 and 0xF3 have one length in protocol/ant_wire.yaml and no
+ * optional bytes, and dispatch() refuses any other length before an arm runs
+ * (security review 2026-11-22, Hardening): it used to check minimums only, so
+ * an over-long body was acted on by its prefix. 0xF5 already refused one.
+ * Messages with optional trailing bytes keep their minimum checks.
+ */
+ZTEST(bridge_parser, test_exact_length_messages_refuse_any_other_length)
+{
+	static const struct {
+		uint8_t id;
+		uint8_t len;
+	} exact[] = {
+		{ RADIANT_WIRE_MESG_NETWORK_KEY_ID, 9u },
+		{ RADIANT_WIRE_MESG_RADIANT_SEC_CONFIG_ID, 5u },
+		{ RADIANT_WIRE_MESG_RADIANT_SET_KEY_ID, 18u },
+		{ RADIANT_WIRE_MESG_RADIANT_EPOCH_ID, 14u },
+	};
+
+	for (size_t i = 0; i < ARRAY_SIZE(exact); i++) {
+		zassert_true(body_len_ok(exact[i].id, exact[i].len),
+			     "0x%02x refused at its own length %u", exact[i].id,
+			     exact[i].len);
+		zassert_false(body_len_ok(exact[i].id, (uint8_t)(exact[i].len - 1u)),
+			      "0x%02x accepted one byte short", exact[i].id);
+		zassert_false(body_len_ok(exact[i].id, (uint8_t)(exact[i].len + 1u)),
+			      "0x%02x accepted one byte over", exact[i].id);
+		zassert_false(body_len_ok(exact[i].id, RADIANT_WIRE_MAX_SIZE_VALUE),
+			      "0x%02x accepted a maximum-length body", exact[i].id);
+	}
+
+	/* Optional trailing bytes are not this gate's business: 0x42 with and
+	 * without its extended-assignment byte, 0x5E with its stall fields. */
+	zassert_true(body_len_ok(RADIANT_WIRE_MESG_ASSIGN_CHANNEL_ID, 3u));
+	zassert_true(body_len_ok(RADIANT_WIRE_MESG_ASSIGN_CHANNEL_ID, 4u));
+	zassert_true(body_len_ok(RADIANT_WIRE_MESG_CONFIG_ADV_BURST_ID, 12u));
+}

@@ -202,6 +202,8 @@ extern "C" {
  * a radio ISR, consumer is a thread, so map onto irq_lock()/irq_unlock() - a
  * mutex is wrong since the producer must not block. A handful of
  * instructions plus one 48-byte copy; never calls out, never loops.
+ * radiant_search.c takes the same section to publish and clear a channel's
+ * search record, which its offer loop reads from the radio interrupt.
  */
 unsigned int radiant_event_crit_enter(void);
 void         radiant_event_crit_exit(unsigned int key);

@@ -2626,6 +2626,86 @@ ZTEST(api, test_a_search_timeout_landing_mid_chunk_does_not_strand_the_sweep)
 }
 
 /*
+ * A channel that has left SEARCHING is not offered a frame (security review
+ * 2026-11-22, Low). A timed-out channel stays a member of the sweep until the
+ * next pump ends its record, and so does a closed one until the close path
+ * reaches radiant_search_end(). A frame in that gap used to go to it: the
+ * broadcast followed the close, and the frame's one ACQUIRE claim was spent
+ * on a dead channel while a live searcher behind it got nothing.
+ * api_search_permit() now refuses any channel that is not SEARCHING.
+ *
+ * CH times out with the tick's half of api_housekeep() and nothing after it
+ * (as test_a_search_timeout_landing_mid_chunk_does_not_strand_the_sweep does),
+ * so it is CLOSING and still a member; channel 1 is searching behind it.
+ */
+ZTEST(api, test_a_channel_that_left_searching_is_not_offered_a_frame)
+{
+	const struct fake_radio_arm *w;
+	uint16_t                     dev;
+	radiant_time_t               deadline;
+
+	api_long_match();
+
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_network_address_set(0u, ant_plus_key));
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_lib_config_set((uint8_t)RADIANT_WIRE_LIB_CONFIG_ALL_EXT_FIELDS));
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_channel_assign(CH,
+					  (uint8_t)RADIANT_WIRE_CHANNEL_TYPE_SLAVE_RX_ONLY,
+					  0u, 0u));
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_channel_id_set(CH, 0u, 0u, 0u));
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_channel_period_set(CH, RADIANT_CHANNEL_PERIOD_ANT_PLUS));
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_channel_radio_freq_set(CH, RF_INDEX));
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_channel_search_timeout_set(CH, 1u));
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_channel_open(CH));
+	/* Channel 1 keeps the default 25 s search timeout. */
+	open_wildcard_slave(1u, 0u, RF_INDEX);
+	/* Both channels join the sweep before anything is aired. */
+	k_sleep(K_MSEC(3 * RADIANT_API_HOUSEKEEP_MS));
+
+	w = armed_search_window();
+
+	deadline = radiant_channel_search_deadline(CH);
+	zassert_not_equal(RADIANT_TIME_NEVER, deadline,
+			  "setup: a 2.5 s search timeout produced no deadline");
+	zassert_equal(1u, radiant_channel_tick(deadline),
+		      "setup: the tick did not time out CH alone");
+	zassert_not_equal(RADIANT_CH_STATE_SEARCHING, radiant_channel_state_get(CH),
+			  "setup: CH is still SEARCHING after its timeout");
+	zassert_equal(RADIANT_CH_STATE_SEARCHING, radiant_channel_state_get(1u),
+		      "setup: channel 1 left the search");
+
+	/* One device, heard in the chunk while CH is still a member. */
+	air_device(w, 0u, 0x0500u, 0x0Bu, 1000u, &dev);
+	fake_radio_advance_to(w->t_open + 1500u);
+	drain();
+
+	zassert_equal(0u, count_bcast_on(CH),
+		      "a channel that had left SEARCHING was offered the frame "
+		      "and sent it to the host");
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(1u),
+		      "the frame's ACQUIRE claim was spent on the timed-out "
+		      "channel: the live searcher stayed in state %d",
+		      (int)radiant_channel_state_get(1u));
+	zassert_equal(1u, count_bcast_on(1u),
+		      "the acquiring frame did not reach the host on channel 1");
+
+	/* Let the chunk run out, so CH's close completes, then clean up. */
+	fake_radio_advance_past_close(w->t_close);
+	drain();
+	(void)radiant_ant_channel_close(1u);
+	fake_radio_advance(1000u);
+	drain();
+	end_of_test();
+}
+
+/*
  * SET_NETWORK_KEY(0) re-sent while the last carrier's chunk is still live
  * (review 2026-10-31, A4b-1 / O1 SF-4). With no searchers left - the carrier's
  * own channel has just acquired - the key install used to re-initialise the
@@ -4920,6 +5000,63 @@ ZTEST(api, test_a_master_tx_only_channel_opens_no_turnaround)
 	zassert_equal(0u, rx_arms,
 		      "a MASTER_TX_ONLY channel armed %u receive windows",
 		      rx_arms);
+
+	end_of_test();
+}
+
+/*
+ * The channel type's low nibble is dropped at assign (security review
+ * 2026-11-22, Hardening). The status byte reports only bits 7:4, and some
+ * paths masked the stored byte while others compared it raw, so 0x41 read
+ * back as SLAVE_RX_ONLY and refused a broadcast yet acknowledged and took
+ * acknowledged data and bursts, and 0x51 read back as MASTER_TX_ONLY yet
+ * listened. Assign cannot refuse the byte (its permitted error set has no code
+ * for a bad type), so the type is normalised there once and every reader
+ * agrees.
+ */
+ZTEST(api, test_a_master_tx_only_type_with_low_bits_set_still_does_not_listen)
+{
+	uint8_t data[8] = { 0 };
+
+	open_channel(0x51u);
+
+	host_writes_broadcast();
+	(void)run_one_master_slot();
+	host_writes_broadcast();
+	(void)run_one_master_slot();
+	zassert_equal(0u, fake_radio_stats()->arms_rx,
+		      "type 0x51 armed %u receive windows",
+		      fake_radio_stats()->arms_rx);
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_CHANNEL_IN_WRONG_STATE,
+		      radiant_ant_acknowledge_message_tx(CH, 8u, data),
+		      "type 0x51 accepted acknowledged data it cannot hear acked");
+
+	zassert_equal((uint8_t)RADIANT_WIRE_CHANNEL_TYPE_MASTER_TX_ONLY,
+		      radiant_channel_type_get(CH),
+		      "the low nibble of the type byte was stored");
+
+	end_of_test();
+}
+
+ZTEST(api, test_a_slave_rx_only_type_with_low_bits_set_never_transmits)
+{
+	uint8_t data[8] = { 0 };
+
+	open_channel(0x41u);
+
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_CHANNEL_IN_WRONG_STATE,
+		      radiant_ant_broadcast_message_tx(CH, 8u, data));
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_CHANNEL_IN_WRONG_STATE,
+		      radiant_ant_acknowledge_message_tx(CH, 8u, data),
+		      "type 0x41 accepted acknowledged data");
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_CHANNEL_IN_WRONG_STATE,
+		      radiant_ant_burst_tx(CH, 8u, data,
+					   RADIANT_ANT_BURST_SEGMENT_START),
+		      "type 0x41 accepted a burst");
+
+	zassert_equal((uint8_t)RADIANT_WIRE_CHANNEL_TYPE_SLAVE_RX_ONLY,
+		      radiant_channel_type_get(CH),
+		      "the low nibble of the type byte was stored");
 
 	end_of_test();
 }

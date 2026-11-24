@@ -569,14 +569,19 @@ radiant_channel_err_t radiant_channel_assign(uint8_t channel, uint8_t type,
 		return RADIANT_CH_ERR_INVALID_NETWORK;
 	}
 
-	/* `type` is stored without validation, deliberately: radiant_ant_channel_assign()'s
+	/* `type` is not refused, deliberately: radiant_ant_channel_assign()'s
 	 * permitted return set has no code for a bad type (INVALID_MESSAGE is
 	 * already used by the channel number), so refusing here would put an
-	 * out-of-contract byte on the wire. Only bit 4 is interpreted; the rest
-	 * is carried and reported back in the status byte. */
+	 * out-of-contract byte on the wire. Its low nibble is dropped, once,
+	 * here (security review 2026-11-22, Hardening): the status byte never
+	 * reported it, and with it kept the adapter's readers disagreed - those
+	 * that masked read 0x41 as SLAVE_RX_ONLY, those that compared raw let
+	 * it acknowledge. Bits 7:4 are carried as given, reported back in the
+	 * status byte, and only bit 4 and the two exact values 0x40/0x50 are
+	 * interpreted. */
 	chan_defaults(c);
 	c->state = RADIANT_CH_STATE_ASSIGNED;
-	c->type = type;
+	c->type = (uint8_t)(type & RADIANT_CH_STATUS_TYPE_MASK);
 	c->network = network;
 	c->ext_assign = ext_assign;
 

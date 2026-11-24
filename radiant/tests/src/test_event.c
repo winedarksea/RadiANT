@@ -56,14 +56,29 @@
 
 static uint32_t n_wakeups;
 
+/*
+ * Run at each edge of the critical section when set: true just before it is
+ * entered, false just after it is left. Those are the only two instants of a
+ * guarded update a radio interrupt can observe, so a suite points this at a
+ * function that plays the interrupt (test_search.c's begin/end ordering
+ * cases). NULL outside those cases; the suite that sets it clears it.
+ */
+void (*radiant_test_crit_probe)(bool entering);
+
 unsigned int radiant_event_crit_enter(void)
 {
+	if (radiant_test_crit_probe != NULL) {
+		radiant_test_crit_probe(true);
+	}
 	return 0u;
 }
 
 void radiant_event_crit_exit(unsigned int key)
 {
 	ARG_UNUSED(key);
+	if (radiant_test_crit_probe != NULL) {
+		radiant_test_crit_probe(false);
+	}
 }
 
 void radiant_event_wakeup(void)

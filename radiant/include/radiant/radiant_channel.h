@@ -126,7 +126,9 @@ typedef uint8_t radiant_channel_err_t;
  * An UNRECOGNISED type byte is accepted, deliberately: radiant_ant_channel_assign()
  * has no permitted error code left to reject a type with (only NO_ERROR,
  * INVALID_MESSAGE, WRONG_STATE, INVALID_NETWORK_NUMBER), so inventing one
- * would be wire-visible. See docs/sdk-ant-contract.md.
+ * would be wire-visible. See docs/sdk-ant-contract.md. Its low nibble is
+ * dropped at assign (the status byte never carried it), so 0x41 is stored,
+ * read back and acted on as 0x40 everywhere.
  */
 #define RADIANT_CH_TYPE_MASTER_BIT 0x10u /* RADIANT_WIRE_CHANNEL_TYPE_MASTER */
 
@@ -637,8 +639,8 @@ bool radiant_channel_is_master(uint8_t channel);
  * refused for wanting the radio, not for wanting the wrong state. */
 bool radiant_channel_is_open(uint8_t channel);
 
-/* The channel type and the extended assignment flags as assigned. Zero on an
- * unassigned channel. */
+/* The channel type (bits 7:4 of the assigned byte, low nibble dropped) and
+ * the extended assignment flags as assigned. Zero on an unassigned channel. */
 uint8_t radiant_channel_type_get(uint8_t channel);
 uint8_t radiant_channel_ext_assign_get(uint8_t channel);
 uint8_t radiant_channel_network_get(uint8_t channel);

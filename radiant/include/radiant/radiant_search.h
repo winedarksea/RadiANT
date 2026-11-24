@@ -680,6 +680,12 @@ uint32_t radiant_search_dwell_remaining(const struct radiant_search *s);
  * Re-issuing for a channel already searching REPLACES its filter, mode and
  * deadline rather than failing - what a host changing its mind looks like,
  * and the same path a re-SEARCHING state machine takes.
+ *
+ * Thread context. The channel's record is built aside and published inside
+ * radiant_event_crit_enter()/exit(), so the offer loop in the radio interrupt
+ * sees the old record or the whole new one, never an active record with its
+ * filter unwritten (a full-wildcard ACQUIRE). radiant_search_end() clears it
+ * the same way.
  */
 int radiant_search_begin(struct radiant_search *s, uint8_t channel,
 		     enum radiant_search_mode mode,
