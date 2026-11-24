@@ -87,6 +87,16 @@ struct sec_ctx {
 	 * because both fill alignment holes on a 32-bit target, so the fix that
 	 * added them cost no RAM. */
 	int32_t  rx_prev_err;
+	/* The guess budget (rx_close_window()), in the low 32 bits of the
+	 * t_sync clock: a failed judgement moves this W periods on from
+	 * max(itself, the closing packet's t_sync), a verified one moves it to
+	 * that max, and no judgement runs while it is more than W (and at most
+	 * 2W) periods ahead of that t_sync. Stale (never set, or no judgement
+	 * for a whole 71.6-minute wrap), it can land in that band for a window or
+	 * two. rx_discard() leaves it, so an epoch advance or a reopen
+	 * cannot refill it; release zeroes it. The last alignment hole before
+	 * epoch_anchor on a 32-bit target, so it costs no RAM. */
+	uint32_t rx_judge_tat;
 	/* radiant_radio_now() at us_into_epoch == 0. Signed: an epoch normally
 	 * began before this clock's zero (a receiver joins a sender that has
 	 * run for hours), and clamping that to zero counted from boot instead
@@ -1466,14 +1476,26 @@ static void hold_flush(struct sec_ctx *c, uint8_t b,
  * in-window - its last counter - or NULL when a packet from another window
  * closed it. Only the former can have a tag of its own: a window that never
  * saw its last counter is incomplete unless a counter repeated, and a repeat
- * cannot verify either.
+ * cannot verify either. `now` is the closing packet's t_sync, low 32 bits.
+ *
+ * Failed judgements are budgeted: at most one per W periods of receive time,
+ * after one spare (rx_judge_tat). A tracked channel hears one frame per slot,
+ * so a guess at a tag cost W periods there anyway; a background scan hears
+ * every frame on the air, and a window may be reopened and judged again, so
+ * without the budget an injector guessed a W=2 tag at air rate (security
+ * review 2026-11-22; docs/radiant-security.md 7.5). Only a comparison that
+ * ran and failed is charged; a genuine stream fails one only when a whole
+ * window is lost, at most once per 2W periods, so it never meets the budget.
  */
 static void rx_close_window(struct sec_ctx *c, const struct sec_pkt *last,
-			    uint16_t counter)
+			    uint16_t counter, uint32_t now)
 {
 	uint8_t                  own[RADIANT_SEC_BLOCK_BYTES];
 	enum radiant_sec_verdict verdict = RADIANT_SEC_VERDICT_UNVERIFIED;
 	uint64_t                 period_us = period_us_of(c);
+	/* W periods, at most 8 x 2 s: 32 bits, like the budget's clock. */
+	uint32_t                 gap = c->w * (uint32_t)period_us;
+	uint32_t                 ahead = c->rx_judge_tat - now;
 	bool                     tag_full;
 	bool                     own_ok;
 
@@ -1496,9 +1518,14 @@ static void rx_close_window(struct sec_ctx *c, const struct sec_pkt *last,
 		 * A window at or behind the judged one is a reopen. Either is
 		 * UNVERIFIED, for the event and the drop policy alike. */
 		uint16_t span = (uint16_t)(c->rx_win_start - c->rx_prev_start);
+		/* And the guess budget still holds a judgement: refused only
+		 * while rx_judge_tat is more than W periods ahead. It is never
+		 * more than 2W ahead, so anything further is behind, or stale
+		 * past the 32-bit wrap: spare, not spent. */
+		bool     judge = c->rx_prev_valid && tag_full && span >= c->w &&
+			     span < 256u && (uint32_t)(ahead - gap - 1u) >= gap;
 
-		if (c->rx_prev_valid && tag_full && span >= c->w &&
-		    span < 256u &&
+		if (judge &&
 		    radiant_sec_ct_equal(c->rx_prev_tag, c->rx_tag, c->w)) {
 			/* The previous window's closing packet is now known
 			 * to be the sender's - bytes, counter and all; only
@@ -1524,6 +1551,15 @@ static void rx_close_window(struct sec_ctx *c, const struct sec_pkt *last,
 			stat_bump(&c->stats.windows_verified);
 		} else {
 			stat_bump(&c->stats.windows_unverified);
+		}
+		if (judge) {
+			/* From max(rx_judge_tat, now): a failed guess spends W
+			 * periods, and a pass keeps the 32-bit value fresh, so
+			 * on a stream that verifies it never goes stale. */
+			c->rx_judge_tat =
+				now + ((ahead <= gap) ? ahead : 0u) +
+				((verdict == RADIANT_SEC_VERDICT_VERIFIED) ? 0u
+									   : gap);
 		}
 		c->last_verdict = verdict;
 		if ((c->switches & RADIANT_SEC_SW_DROP_UNVER) != 0u) {
@@ -1665,7 +1701,8 @@ static void rx_process(struct sec_pkt *pkt)
 		start = (uint16_t)(counter - (counter % c->w));
 		if (!c->rx_win_open || c->rx_win_start != start) {
 			if (c->rx_win_open) {
-				rx_close_window(c, NULL, 0u);
+				rx_close_window(c, NULL, 0u,
+						(uint32_t)pkt->t_sync);
 			}
 			rx_open_window(c, start, (counter % c->w) == 0u);
 		}
@@ -1745,7 +1782,7 @@ static void rx_process(struct sec_pkt *pkt)
 	}
 
 	if ((uint8_t)(counter % c->w) == (uint8_t)(c->w - 1u)) {
-		rx_close_window(c, pkt, counter);
+		rx_close_window(c, pkt, counter, (uint32_t)pkt->t_sync);
 	}
 }
 
