@@ -385,7 +385,7 @@ group.
 
 ## Medium
 
-- [ ] **A keyed receiver accepts a wholly plain descriptor set** (library;
+- [x] **A keyed receiver accepts a wholly plain descriptor set** (library;
   radio peer without the key). `radiant_profile_desc_rx_take_auth()`
   (`radiant_profile_telemetry.c` ~:994) returns success without verifying anything when
   frame 0 has no transform bit, and `radiant_profile_desc_may_decode_data()` (~:113)
@@ -397,7 +397,16 @@ group.
   or a sealed set was authenticated before on this channel id, refuse a set
   without transform bits (`-EBADMSG`, data not decoded). Add a red test, mirror
   it in the host tools and correct 7.6.
-- [ ] **Treadmill: FE-C page 51 incline is clamped to the wire range, not the
+  *Done 2026-11-23 (merge 09edcff, wip/s22-desc-plain):* `take_auth()`
+  returns `-EBADMSG` for a set with neither X_CONF nor X_AUTH (reserved-bit
+  only included); a receiver-side `keyed` field (never encoded) makes
+  `may_decode_data()` refuse a keyed-but-unauthenticated descriptor even if
+  the caller ignores the return code. The "sealed before on this channel"
+  trigger was dropped: a key is mandatory in `take_auth()`. Residual,
+  documented: `keyed` is per descriptor, so a keyed receiver must never fall
+  back to the keyless take for that node. Mirrored in ant_pages/ant_verify
+  (`--compat-key` applies to every channel); radiant-security 5.3/7.6 fixed.
+- [x] **Treadmill: FE-C page 51 incline is clamped to the wire range, not the
   machine's** (shipped app, physical safety; any ANT+ transmitter in range).
   `treadmill_state_request_incline()` (`apps/treadmill/src/treadmill_state.c`)
   clamps only to +/-100.00 %, and `apps/treadmill/src/main.c` (~:343) passes
@@ -409,7 +418,14 @@ group.
   enforced in `treadmill_state_request_*()`, with page 71 answering
   REJECTED/FAIL out of range. Also bound `radiant_profile_fec_grade_to_centi_pct()`
   (`radiant_profile_fec_tx.c` ~:62) at raw 40000; it accepts up to +455 % today.
-- [ ] **Matter: a spoofed FE-C equipment type drives one flash write per second
+  *Done 2026-11-23 (merge 88507c6, wip/s22-incline-range):* owner call - sim
+  grade (page 51, BLE grade seam) clamps to the machine range and page 71
+  answers PASS; explicit FTMS set incline/speed refuse (`-ERANGE` ->
+  INVALID_PARAM). New `TREADMILL_MIN/MAX_INCLINE_DECI` and
+  `TREADMILL_MAX_SPEED_CENTI_KPH` (no BLE dependency) replace the removed
+  `TREADMILL_BLE_*` range symbols; FE-C-only builds now narrow too. Raw grade
+  40001..65534 clamps to +200.00 %. **Owner step:** a real deck.
+- [x] **Matter: a spoofed FE-C equipment type drives one flash write per second
   per endpoint, with no bound** (Matter image; radio transmitter).
   `ant_matter_note_sample()` (`ant_bridge.cpp` ~:1175) sets `labelDirty` on
   every equipment-type change, and the 1 Hz flush (~:838) then calls
@@ -422,7 +438,17 @@ group.
   accept a subtype only after several identical page 16s, and cap persisted
   renames per source. Correct the doc. `mqtt_sink.c` (~:1066) re-arms retained
   discovery on the same flip (only with `PROFILES_EXTRA` on the MQTT image).
-- [ ] **Release: shipping rows restore compiler, ccache and pip caches written
+  *Done 2026-11-23 (merge 3d10312 + 6cb4e1d, wip/s22-fec-type-wear):* the
+  power adapter posts the first page 16 after bind at once and a type change
+  only after 4 identical page 16s; Matter persists a label only when its
+  FNV-1a hash differs from the stored record's, and at most 4 renames per
+  source per boot (`LabelPersist`, every rename trigger shares the budget);
+  MQTT caps subtype re-arms the same way. Matter image +732 B flash, +328 B
+  RAM (98.1 %). Accepted: a spoofer whose page 16 arrives first after a bind
+  can set the name (name integrity, not wear). The MQTT cap has no test (no
+  mqtt_sink suite). **Owner step:** L15 Matter bench of the ant_bridge.cpp
+  wiring (creation/adoption seeding, flush decision), untestable on native_sim.
+- [x] **Release: shipping rows restore compiler, ccache and pip caches written
   by ordinary master CI runs.** `release.yml` (~:374) restores
   `ccache-core-<index>-` from any earlier run, and
   `action-zephyr-setup@cc223fe` caches the Zephyr SDK under a key with no
@@ -438,7 +464,8 @@ group.
   because the -D does not reach the sysbuild image), linted in
   `tools/test_ci_actions.py`. Left: the non-shipping release jobs still use
   `action-zephyr-setup` and their caches; an owner `workflow_dispatch`.
-- [ ] **Release: the shipping rows' toolchain is not pinned.** The same action
+  *Merged 2026-11-23 (f45a4eb).*
+- [x] **Release: the shipping rows' toolchain is not pinned.** The same action
   downloads the Zephyr SDK with `wget` and no digest, installs the latest
   `west`, and installs Zephyr's open-range requirements unhashed. `west.yml`
   pins sdk-nrf by tag (`revision: v3.4.0`, `import: true`), and the imported
@@ -453,7 +480,11 @@ group.
   the SDK and toolchain digests; `SECURITY.md` lists what is not pinned (runner
   image, setup-python's interpreter and pip). Left: the same for the
   non-shipping jobs if wanted; an owner `workflow_dispatch`.
-- [ ] **New USB stack: each suspend/resume leaves one more bulk-OUT buffer
+  *Merged 2026-11-23 (f45a4eb).* Dry-run on Bluefin: Feather RGB, Pro Micro,
+  nRF52840 Dongle (with DFU package) and nrf54l15dk rows build with the
+  locked set. actionlint (first run) flags two older findings outside
+  `build-core` near release.yml :1601 (`matrix.extra_cmake` undefined; SC2206).
+- [x] **New USB stack: each suspend/resume leaves one more bulk-OUT buffer
   armed** (USB_NEXT images only, none shipped; any host that suspends the bus).
   `usb_ant_class_next.c`: `USBD_MSG_SUSPEND` (~:454) clears `rx_armed` without
   dequeuing the buffer `arm_rx()` queued, and `USBD_MSG_RESUME` (~:446) arms
@@ -463,6 +494,41 @@ group.
   The legacy transport cancels transfers on suspend. Fix: leave `rx_armed`
   alone on suspend, or `usbd_ep_dequeue()` the OUT endpoint there. Add a
   suspend case to `tools/bench_usb_stall.py`. Fix before the USB_NEXT move.
+  *Done 2026-11-23 (merge 5a29753, wip/s22-usb-suspend):* suspend/resume no
+  longer touch `rx_armed`/`rx_backpressured` (udc_nrf keeps queued buffers
+  across suspend; only endpoint disable dequeues). On Linux the leak never
+  lost a reply: the kernel resets the device after the failed post-resume
+  GET_STATUS, which dequeues the leak, so `bench_usb_stall.py
+  --suspend-cycles` (root, Linux) fails on host resets. Feather A/B/A: unfixed
+  reset at cycles 17 / 29+58, fixed 0 resets in 60. The 0x57 UF2 reboot
+  request now also works on USB_NEXT (vendor-to-device only).
+- [ ] **USB_NEXT: the first request after an open is usually lost** (found
+  2026-11-23 doing item 6 above). USBD ignores a repeat SET_CONFIGURATION
+  (`usbd_ch9.c` ~:142), so the device keeps its data toggles, while Linux
+  turns libusb `set_configuration()` into `usb_reset_configuration()` and
+  resets the host's. `ant_probe.open_device` sends it on every open: 9 of 10
+  one-request opens lost the request on the Feather, 0 of 10 without it.
+  Legacy stack unaffected; Windows untested. Fix: USBD patch (reset toggles /
+  re-run the configuration) or skip the redundant SET_CONFIGURATION in the
+  tools. Fix before the USB_NEXT move.
+- [ ] **USB_NEXT: `arm_rx()` check-then-set race** (reviewer 2026-11-23,
+  older than item 6). RESUME's `arm_rx()` (system workqueue) and
+  `usb_ant_resume_rx()` (bridge thread) both test then set `rx_armed`;
+  `usbd_ep_enqueue` can yield between, leaving one extra buffer that defeats
+  NAK back-pressure. A plain CAS with rollback can leave OUT unarmed for good
+  (claim held, ring-space check fails, the bridge's call already returned).
+  Fix: move all arming onto the USBD thread (class `.resumed` callback, same
+  thread as `ant_request`), or CAS plus a retry after rollback.
+- [ ] **USB_NEXT: a deferred RESET handled after `.enable` leaves the device
+  deaf** (reviewer 2026-11-23, older). With `USBD_MSG_DEFERRED_MODE` the
+  message callback runs on the system workqueue; if it is stalled for a whole
+  re-enumeration (~50 ms, e.g. a flash erase on that queue), a late RESET or
+  SUSPEND clears `configured` after the USBD thread already ran `.enable`,
+  until the next SET_CONFIGURATION.
+- [ ] **Security size headroom is nearly gone** (measured 2026-11-23 on
+  6cb4e1d). Security text 7828/7856 B (+4 since 7824), compat object
+  4768/5120 B (+112 since 4656), compat linked 188/288 B. Not traced; the
+  next security change should measure before and after.
 
 ## Low
 
