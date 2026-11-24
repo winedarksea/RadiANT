@@ -36,10 +36,19 @@ why, because "unsigned" reads as carelessness when here it is a constraint:
 
 So the honest guarantee is integrity-on-download, not authenticity-at-flash:
 
-- Every release artifact is published with a `.sha256` sidecar, generated in CI
-  by the job that built the image and re-checked by the separate `publish` job
-  before it attaches anything (`.github/workflows/release.yml`). Only `publish`
-  can write to the release, and it runs only after every build job passes.
+- Every release artifact published by the release workflow has a `.sha256`
+  sidecar, generated in CI by the job that built the image and re-checked by
+  the separate `publish` job before it attaches anything
+  (`.github/workflows/release.yml`). Only `publish` can write to the release,
+  it runs only after every build job passes, it releases only a tag whose
+  commit is on master, and it never replaces an asset already on a release.
+  **v1.0 and v1.1 predate this:** their assets were uploaded by hand and have
+  no sidecars and no attestation. v1.2.0 has no assets.
+- The same job attaches a GitHub build-provenance attestation to every file it
+  publishes. `gh attestation verify <file> -R winedarksea/RadiANT` checks that
+  the file was built by this repository's release workflow, and from which
+  commit. Unlike the sidecar, this does not depend on trusting whoever can
+  write to the release.
 - Compare the sum before flashing (`sha256sum -c <artifact>.sha256` beside the
   downloaded file). If it does not match, do not flash it.
 - The job that builds the shipping images (`build-core` in
@@ -70,9 +79,10 @@ So the honest guarantee is integrity-on-download, not authenticity-at-flash:
   artifacts by name; tying each artifact to the job that built it is still
   open.
 
-**What this does not protect against:** an attacker who can write to the
-release, or who has physical access to the board. Neither is addressed by
-anything in this repository today.
+**What this does not protect against:** physical access to the board, and an
+attacker who can write to the release, for anyone who checks only the
+sidecar. Such an attacker can replace an image and its sum together; the
+attestation check above detects that, the sidecar alone does not.
 
 ## Version and downgrade
 

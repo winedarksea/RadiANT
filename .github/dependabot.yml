@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Every third-party action in .github/workflows is pinned by commit SHA, which
+# stops a moved tag from changing what runs but also means nothing moves the
+# pins forward. This opens a pull request when an action has a newer release;
+# the `# vX.Y.Z` comment beside each pin is updated with it.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns:
+          - "*"

@@ -22,6 +22,13 @@ Checks and decisions left over from work that has otherwise landed.
   2026-11-21). Only a tag exercises the `publish` job and
   `scripts/check_release_artifacts.py`. Known residual: a compromised build row
   can still upload an image with a matching sum.
+- [ ] **Release settings in the GitHub UI** (2026-11-24, with the
+  `publish` hardening below). `publish` now runs in a `release` environment,
+  which the first tag run creates *unprotected*: add a required reviewer and a
+  `v*`-tags-only deployment rule. Also turn on immutable releases and add a tag
+  ruleset for `v*` (restrict creation and deletion). After the next tag, run
+  `gh attestation verify <image> -R winedarksea/RadiANT` on one downloaded
+  image.
 - [ ] **Matter endpoint ids, on an L15 Matter image** (sec reviews 2026-11-20,
   2026-11-21):
   1. Bind 3 sensors, unbind the newest, reboot, bind one: it must get a new id.
@@ -885,7 +892,12 @@ group.
   `overwrite_files: false`, a tag ruleset for `v*`, a protected `release`
   environment, and `git merge-base --is-ancestor "$GITHUB_SHA" origin/master`
   in `publish`. Repository rulesets were not checked.
-- [ ] **`SECURITY.md` integrity claims do not match what exists.** Line 45 says
+  *2026-11-24:* the workflow half is done: `overwrite_files: false`,
+  `environment: release`, and a "Tagged commit is on master" step
+  (checkout now `fetch-depth: 0` so `origin/master` is there). Not run yet:
+  only a tag exercises `publish`. The settings half (environment protection,
+  immutable releases, `v*` ruleset) is an owner step above.
+- [x] **`SECURITY.md` integrity claims do not match what exists.** Line 45 says
   the build is reproducible with the toolchain the workflow pins: nothing is
   pinned (above), no job rebuilds and compares, and the DFU zip embeds
   wall-clock entry times. "Every release artifact has a `.sha256` sidecar": the
@@ -893,6 +905,12 @@ group.
   assets and no sidecars, and v1.2.0 with no assets (not re-checked). Fix:
   state the claim for the UF2 or inner `zephyr.bin` only after one
   rebuild-and-compare has passed, and say which releases predate sidecars.
+  *Done 2026-11-24:* the reproducibility claim was already corrected (902dbf6:
+  "not shown to be reproducible", pinned inputs listed). Now the sidecar claim
+  is limited to workflow-published releases, and SECURITY.md says v1.0 and
+  v1.1 were hand-uploaded with no sidecars and v1.2.0 has no assets
+  (re-checked against the GitHub API today). It also documents the attestation
+  check.
 
 ## Hardening
 
@@ -1007,3 +1025,6 @@ group.
   case `SECURITY.md` lists as unaddressed, and a `github-actions` dependabot
   entry so the SHA pins move. `linkcheck.yml` downloads the lychee binary with
   no checksum in a weekly default-branch job.
+  *2026-11-24:* attestation (v4.2.2, SHA-pinned, before the attach step) and
+  `.github/dependabot.yml` (github-actions, monthly, grouped) added. Open:
+  the lychee binary checksum.
