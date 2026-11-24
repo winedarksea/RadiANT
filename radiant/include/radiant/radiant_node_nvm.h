@@ -5,7 +5,7 @@
  * Provenance: docs/decisions/0009-hostless-node-identity.md decision 7 (the
  * counters live in the node application, not in radiant).
  *
- * Four fixed-size records, written twice per boot, once per pairing window
+ * Five fixed-size records, written twice per boot, once per pairing window
  * and about once per epoch counter wrap - small, but the seam earns its keep twice: radiant/tests/
  * fake_nvm.c implements it against RAM with an explicit reboot and an
  * injectable write failure (same rationale as fake_radio.c), and the shipping
@@ -51,8 +51,16 @@ extern "C" {
 #define RADIANT_NODE_NVM_KEY_KDEV  "kdev"   /* 16 bytes, written once (ADR 0020) */
 /* uint32_t, the next epoch nobody has used (docs/radiant-security.md 3.5):
  * written at every boot and about once per counter wrap. Absent on a store
- * from an older image, which reads as 0 - the boot counter is then the floor. */
+ * from an older image; the boot counter is then the floor - but only on a
+ * store with no format marker (below). */
 #define RADIANT_NODE_NVM_KEY_EPOCH "epn"
+/* uint32_t, the format marker (security review 2026-11-22): written once,
+ * after every other record is in storage, and never removed except by
+ * radiant_node_ident_wipe(). On a store that has it, a record that reads as
+ * absent was lost, not never written, and radiant_node_ident_boot() refuses
+ * the store (EIO) instead of reading the record as 0. See the record table in
+ * radiant_node_ident.c. */
+#define RADIANT_NODE_NVM_KEY_FMT   "fmt"
 
 /* Prepare the backend. Idempotent; radiant_node_ident_boot() calls it first. */
 int radiant_node_nvm_init(void);
@@ -62,6 +70,12 @@ int radiant_node_nvm_init(void);
  * update redefined the record. */
 int radiant_node_nvm_load(const char *key, void *out, size_t len);
 int radiant_node_nvm_store(const char *key, const void *val, size_t len);
+
+/* Remove a record, so that the next load answers RADIANT_NODE_NVM_ENOENT. A
+ * record that is absent already, or present but unloadable (the load answers
+ * EIO), is removed too: this is how a corrupt record is cleared. Same
+ * durability contract as a store. Only radiant_node_ident_wipe() calls it. */
+int radiant_node_nvm_delete(const char *key);
 
 #ifdef __cplusplus
 }

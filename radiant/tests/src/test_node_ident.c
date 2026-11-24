@@ -531,18 +531,21 @@ ZTEST(node_ident, test_an_interrupted_first_provisioning_recovers)
 	/* The half above passes on the old code too (it zeroed everything);
 	 * this half is the one that discriminates. Some present, one never
 	 * written: a boot ran in between (boot counter 1, reservation 3) and
-	 * the interrupted provisioning never wrote the pairing record, modelled
-	 * by forgetting it. Creating an absent record at 0 is safe only for one
-	 * never written; a record lost after use would repeat a scalar or an
-	 * epoch - the exposure radiant_node_ident_boot() already has when it reads an
-	 * absent counter as 0. */
+	 * an interrupted provisioning by an image from before the format
+	 * marker never wrote the pairing record, modelled by forgetting it and
+	 * the marker. Creating an absent record at 0 is safe only for one
+	 * never written; on a store WITH the marker the same absence is a lost
+	 * record, and the retry refuses it
+	 * (test_a_same_key_retry_refuses_a_lost_record). */
 	zassert_equal(RADIANT_NODE_IDENT_OK, radiant_node_ident_boot());
 	fake_nvm_forget(RADIANT_NODE_NVM_KEY_PAIR);
+	fake_nvm_forget(RADIANT_NODE_NVM_KEY_FMT);
 	zassert_equal(RADIANT_NODE_IDENT_OK, radiant_node_ident_provision(k_dev));
 	zassert_true(peek_counters(v));
 	zassert_equal(1u, v[0]);
 	zassert_equal(0u, v[1]);
 	zassert_equal(3u, v[2]);
+	zassert_true(fake_nvm_peek_u32(RADIANT_NODE_NVM_KEY_FMT, &v[0]));
 }
 
 ZTEST(node_ident, test_a_new_key_still_resets_all_three_counters)
@@ -726,16 +729,472 @@ ZTEST(node_ident, test_a_store_without_an_epoch_record_boots_from_the_counter)
 	uint32_t epoch;
 	uint32_t v = 41u;
 
-	/* A store an older image wrote: boot counter, no N record. */
+	/* A store an older image wrote: boot counter, no N record, and no
+	 * format marker (that image had none). */
 	provisioned_and_booted();
 	zassert_equal(RADIANT_NODE_NVM_OK,
 		      radiant_node_nvm_store(RADIANT_NODE_NVM_KEY_BOOT, &v, sizeof(v)));
 	fake_nvm_forget(RADIANT_NODE_NVM_KEY_EPOCH);
+	fake_nvm_forget(RADIANT_NODE_NVM_KEY_FMT);
 	fake_nvm_reboot();
 	radiant_node_ident_reset();
 	zassert_equal(RADIANT_NODE_IDENT_OK, radiant_node_ident_boot());
 	zassert_equal(RADIANT_NODE_IDENT_OK, radiant_node_ident_epoch(&epoch));
 	zassert_equal(42u, epoch);
+
+	/* Migrated: N and then the marker are in storage, so from here on a
+	 * lost N is refused rather than migrated again. */
+	zassert_true(fake_nvm_peek_u32(RADIANT_NODE_NVM_KEY_EPOCH, &v));
+	zassert_equal(44u, v);
+	zassert_true(fake_nvm_peek_u32(RADIANT_NODE_NVM_KEY_FMT, &v));
+}
+
+/* ── Lost records (security review 2026-11-22) ────────────────────────────
+ *
+ * Zephyr's NVS settings loader deletes a setting whose name or value entry
+ * fails to read and never reports it, so a flash fault makes a record read as
+ * ABSENT, not as an error. The node used to take any absent counter as 0: a
+ * lost epoch reservation alone sent the next boot back to the boot counter,
+ * about half of N, and reused an epoch with the slot counter at 0 (keystream
+ * reuse under X_CONF). A lost K_dev was silently replaced. These assert the
+ * record table in radiant_node_ident.c; fake_nvm_forget() is the fault. */
+
+static void reboot_only(void)
+{
+	fake_nvm_reboot();
+	radiant_node_ident_reset();
+}
+
+/* The boot refused, wrote nothing, and left nothing that could arm. */
+static void assert_refused_and_untouched(void)
+{
+	uint32_t stores = fake_nvm_store_count();
+	uint32_t v;
+
+	zassert_equal(RADIANT_NODE_IDENT_EIO, radiant_node_ident_boot());
+	zassert_equal(stores, fake_nvm_store_count(), "the refusal wrote");
+	zassert_equal(RADIANT_NODE_IDENT_ESTATE, radiant_node_ident_epoch(&v));
+	zassert_equal(RADIANT_NODE_IDENT_ESTATE,
+		      radiant_node_ident_arm_sec(TEST_CH, TEST_PERIOD));
+#if defined(CONFIG_RADIANT_TEST_FAKE_RNG)
+	zassert_equal(0u, fake_rng_draw_count(), "the refusal drew a key");
+#endif
+}
+
+ZTEST(node_ident, test_a_lost_epoch_record_is_eio_never_an_old_epoch)
+{
+	uint32_t v[3];
+
+	/* Epochs 1, 3 and 5 used, N = 7. Without N the boot counter (4)
+	 * would be the floor: epoch 4 is the one boot 2's first wrap was
+	 * given, now used again from slot 0. */
+	advance_counters(v);
+	fake_nvm_forget(RADIANT_NODE_NVM_KEY_EPOCH);
+	reboot_only();
+	assert_refused_and_untouched();
+
+	/* The fault is in storage, not in this boot: every later boot says
+	 * the same until the store is wiped. */
+	reboot_only();
+	assert_refused_and_untouched();
+	zassert_false(fake_nvm_peek_u32(RADIANT_NODE_NVM_KEY_EPOCH, &v[0]));
+}
+
+ZTEST(node_ident, test_a_lost_boot_counter_is_eio)
+{
+	uint32_t v[3];
+
+	advance_counters(v);
+	fake_nvm_forget(RADIANT_NODE_NVM_KEY_BOOT);
+	reboot_only();
+	assert_refused_and_untouched();
+}
+
+ZTEST(node_ident, test_a_lost_pair_counter_is_eio_never_scalar_one_again)
+{
+	uint32_t v[3];
+
+	/* Counter 1's scalar has been used; read as 0, the next window would
+	 * derive it again. */
+	advance_counters(v);
+	fake_nvm_forget(RADIANT_NODE_NVM_KEY_PAIR);
+	reboot_only();
+	assert_refused_and_untouched();
+}
+
+ZTEST(node_ident, test_a_lost_k_dev_is_eio_and_is_not_replaced)
+{
+	uint32_t before[3];
+	uint32_t after[3];
+
+	/* ADR 0020's trigger rule says only "never written" may lead to a new
+	 * key. A K_dev that vanished from under counters it used is not that:
+	 * re-provisioning would move the device number and orphan every
+	 * paired receiver, with no error anywhere. */
+	advance_counters(before);
+	fake_nvm_forget(RADIANT_NODE_NVM_KEY_KDEV);
+	reboot_only();
+	assert_refused_and_untouched();
+	zassert_false(radiant_node_ident_is_provisioned());
+	zassert_true(peek_counters(after));
+	zassert_mem_equal(before, after, sizeof(before));
+}
+
+ZTEST(node_ident, test_a_format_marker_with_an_unknown_value_is_eio)
+{
+	uint32_t v[3];
+	uint32_t fmt = 2u;
+
+	/* A store a later format wrote: this image cannot know which of its
+	 * records are mandatory, so it refuses rather than guess. */
+	advance_counters(v);
+	zassert_equal(RADIANT_NODE_NVM_OK,
+		      radiant_node_nvm_store(RADIANT_NODE_NVM_KEY_FMT, &fmt, sizeof(fmt)));
+	reboot_only();
+	assert_refused_and_untouched();
+}
+
+ZTEST(node_ident, test_a_lost_marker_alone_is_rewritten)
+{
+	uint32_t v[3];
+	uint32_t e;
+	uint32_t stores;
+
+	/* Every other record is there, N included, so nothing is at risk:
+	 * boot normally and put the marker back (one extra write). */
+	advance_counters(v);
+	fake_nvm_forget(RADIANT_NODE_NVM_KEY_FMT);
+	reboot_only();
+	stores = fake_nvm_store_count();
+	zassert_equal(RADIANT_NODE_IDENT_OK, radiant_node_ident_boot());
+	zassert_equal(RADIANT_NODE_IDENT_OK, radiant_node_ident_epoch(&e));
+	zassert_equal(7u, e);
+	zassert_equal(stores + 3u, fake_nvm_store_count());
+	zassert_true(fake_nvm_peek_u32(RADIANT_NODE_NVM_KEY_FMT, &e));
+	zassert_equal(1u, e);
+}
+
+ZTEST(node_ident, test_an_unmarked_store_that_lost_its_boot_counter_is_eio)
+{
+	uint32_t v[3];
+
+	/* Every writer creates the boot counter before the pairing counter
+	 * and the reservation, so a store holding either without it lost it,
+	 * marker or not. */
+	advance_counters(v);
+	fake_nvm_forget(RADIANT_NODE_NVM_KEY_FMT);
+	fake_nvm_forget(RADIANT_NODE_NVM_KEY_BOOT);
+	reboot_only();
+	assert_refused_and_untouched();
+}
+
+ZTEST(node_ident, test_an_older_store_with_no_pair_record_completes_the_set)
+{
+	uint32_t v[3];
+	uint32_t e;
+
+	/* An older image's provisioning cut after the boot counter, then
+	 * booted (it read the absent pairing counter as 0 and never wrote it).
+	 * This boot creates the record at 0, then the marker. */
+	advance_counters(v);
+	fake_nvm_forget(RADIANT_NODE_NVM_KEY_FMT);
+	fake_nvm_forget(RADIANT_NODE_NVM_KEY_EPOCH);
+	fake_nvm_forget(RADIANT_NODE_NVM_KEY_PAIR);
+	reboot_only();
+	zassert_equal(RADIANT_NODE_IDENT_OK, radiant_node_ident_boot());
+	zassert_equal(RADIANT_NODE_IDENT_OK, radiant_node_ident_epoch(&e));
+	zassert_equal(4u, e);
+	zassert_true(peek_counters(v));
+	zassert_equal(4u, v[0]);
+	zassert_equal(0u, v[1]);
+	zassert_equal(6u, v[2]);
+	zassert_true(fake_nvm_peek_u32(RADIANT_NODE_NVM_KEY_FMT, &e));
+}
+
+ZTEST(node_ident, test_a_provisioning_cut_after_its_key_boots_as_a_first_boot)
+{
+	uint32_t v[3];
+	uint32_t e;
+
+	/* Key written, every later write fails: the store is K_dev alone. */
+	fake_nvm_fail_stores_after(1u, 1u);
+	zassert_equal(RADIANT_NODE_IDENT_EIO, radiant_node_ident_provision(k_dev));
+	zassert_false(fake_nvm_peek_u32(RADIANT_NODE_NVM_KEY_BOOT, &v[0]));
+	reboot_only();
+	zassert_equal(RADIANT_NODE_IDENT_OK, radiant_node_ident_boot());
+	zassert_equal(RADIANT_NODE_IDENT_OK, radiant_node_ident_epoch(&e));
+	zassert_equal(1u, e);
+	zassert_true(peek_counters(v));
+	zassert_equal(1u, v[0]);
+	zassert_equal(0u, v[1]);
+	zassert_equal(3u, v[2]);
+	zassert_true(fake_nvm_peek_u32(RADIANT_NODE_NVM_KEY_FMT, &e));
+}
+
+ZTEST(node_ident, test_a_same_key_retry_refuses_a_lost_record)
+{
+	uint32_t v[3];
+	uint32_t stores;
+
+	/* The factory step re-run on a store that lost its reservation: the
+	 * old retry re-created it at 0, and the next boot fell back to the
+	 * boot counter exactly as above. */
+	advance_counters(v);
+	fake_nvm_forget(RADIANT_NODE_NVM_KEY_EPOCH);
+	reboot_only();
+	stores = fake_nvm_store_count();
+	zassert_equal(RADIANT_NODE_IDENT_EIO, radiant_node_ident_provision(k_dev));
+	zassert_equal(stores, fake_nvm_store_count());
+	zassert_false(fake_nvm_peek_u32(RADIANT_NODE_NVM_KEY_EPOCH, &v[0]));
+}
+
+/*
+ * The whole record table, one row per combination of present records, on a
+ * store that has lived (boot counter 3, pair counter 1, reservation 7, the
+ * marker). A row's absent records are forgotten and the node rebooted. This is
+ * the same table as the comment above radiant_node_ident_boot(), stated again
+ * here independently rather than computed, so that a change to one shows up
+ * as a disagreement with the other.
+ *
+ *   FRESH - a first boot: self-provisioning draws a key (OK), or ENOKEY
+ *   EIO   - refused, nothing written
+ *   OK    - boots, and leaves all five records in storage
+ */
+#define R_K 0x10u
+#define R_F 0x08u
+#define R_B 0x04u
+#define R_P 0x02u
+#define R_N 0x01u
+
+enum row_want { WANT_FRESH, WANT_EIO, WANT_OK };
+
+static const struct {
+	uint8_t       present;
+	enum row_want want;
+} record_table[] = {
+	/* No K_dev: only the empty store is a first boot. */
+	{ 0u,                           WANT_FRESH },
+	{ R_N,                          WANT_EIO },
+	{ R_P,                          WANT_EIO },
+	{ R_P | R_N,                    WANT_EIO },
+	{ R_B,                          WANT_EIO },
+	{ R_B | R_N,                    WANT_EIO },
+	{ R_B | R_P,                    WANT_EIO },
+	{ R_B | R_P | R_N,              WANT_EIO },
+	{ R_F,                          WANT_EIO },
+	{ R_F | R_N,                    WANT_EIO },
+	{ R_F | R_P,                    WANT_EIO },
+	{ R_F | R_P | R_N,              WANT_EIO },
+	{ R_F | R_B,                    WANT_EIO },
+	{ R_F | R_B | R_N,              WANT_EIO },
+	{ R_F | R_B | R_P,              WANT_EIO },
+	{ R_F | R_B | R_P | R_N,        WANT_EIO },
+	/* K_dev, no marker: an older image's store or an interrupted write.
+	 * Accepted, except a counter present without the boot counter. */
+	{ R_K,                          WANT_OK },  /* provisioning cut after K */
+	{ R_K | R_N,                    WANT_EIO },
+	{ R_K | R_P,                    WANT_EIO },
+	{ R_K | R_P | R_N,              WANT_EIO },
+	{ R_K | R_B,                    WANT_OK },  /* cut after B */
+	{ R_K | R_B | R_N,              WANT_OK },  /* cut after B, then booted */
+	{ R_K | R_B | R_P,              WANT_OK },  /* older image: migrate */
+	{ R_K | R_B | R_P | R_N,        WANT_OK },  /* cut before the marker */
+	/* K_dev and the marker: every record is mandatory. */
+	{ R_K | R_F,                    WANT_EIO },
+	{ R_K | R_F | R_N,              WANT_EIO },
+	{ R_K | R_F | R_P,              WANT_EIO },
+	{ R_K | R_F | R_P | R_N,        WANT_EIO },
+	{ R_K | R_F | R_B,              WANT_EIO },
+	{ R_K | R_F | R_B | R_N,        WANT_EIO },
+	{ R_K | R_F | R_B | R_P,        WANT_EIO },
+	{ R_K | R_F | R_B | R_P | R_N,  WANT_OK },
+};
+
+ZTEST(node_ident, test_every_combination_of_present_records)
+{
+	static const struct {
+		uint8_t     bit;
+		const char *key;
+	} recs[] = {
+		{ R_K, RADIANT_NODE_NVM_KEY_KDEV }, { R_F, RADIANT_NODE_NVM_KEY_FMT },
+		{ R_B, RADIANT_NODE_NVM_KEY_BOOT }, { R_P, RADIANT_NODE_NVM_KEY_PAIR },
+		{ R_N, RADIANT_NODE_NVM_KEY_EPOCH },
+	};
+	uint8_t  kdev[RADIANT_NODE_IDENT_K_DEV_BYTES];
+	uint32_t v[3];
+	uint32_t e;
+	int      rc;
+
+	zassert_equal(32u, ARRAY_SIZE(record_table));
+	for (size_t row = 0u; row < ARRAY_SIZE(record_table); row++) {
+		const uint8_t present = record_table[row].present;
+
+		zassert_equal(row, present, "table out of order at row %u", (unsigned)row);
+		node_before(NULL);
+		advance_counters(v);
+		for (size_t i = 0u; i < ARRAY_SIZE(recs); i++) {
+			if ((present & recs[i].bit) == 0u) {
+				fake_nvm_forget(recs[i].key);
+			}
+		}
+		reboot_only();
+
+		switch (record_table[row].want) {
+		case WANT_EIO:
+			assert_refused_and_untouched();
+			break;
+		case WANT_FRESH:
+			rc = radiant_node_ident_boot();
+#if defined(CONFIG_RADIANT_NODE_IDENT_SELF_PROVISION)
+			zassert_equal(RADIANT_NODE_IDENT_OK, rc, "row %u", (unsigned)row);
+			zassert_true(fake_nvm_peek(RADIANT_NODE_NVM_KEY_KDEV, kdev,
+						   sizeof(kdev)));
+			zassert_true(memcmp(kdev, k_dev, sizeof(kdev)) != 0);
+			zassert_true(fake_nvm_peek_u32(RADIANT_NODE_NVM_KEY_FMT, &e));
+#else
+			ARG_UNUSED(kdev);
+			zassert_equal(RADIANT_NODE_IDENT_ENOKEY, rc, "row %u",
+				      (unsigned)row);
+#endif
+			break;
+		case WANT_OK:
+			zassert_equal(RADIANT_NODE_IDENT_OK, radiant_node_ident_boot(),
+				      "row %u", (unsigned)row);
+			zassert_true(peek_counters(v), "row %u", (unsigned)row);
+			zassert_true(fake_nvm_peek_u32(RADIANT_NODE_NVM_KEY_FMT, &e),
+				     "row %u", (unsigned)row);
+			/* With N present the epoch never goes below it. */
+			if ((present & R_N) != 0u) {
+				zassert_equal(RADIANT_NODE_IDENT_OK,
+					      radiant_node_ident_epoch(&e));
+				zassert_true(e >= 7u, "row %u epoch %u", (unsigned)row,
+					     (unsigned)e);
+			}
+			break;
+		}
+	}
+}
+
+/* ── Wipe: the recovery (security review 2026-11-22) ──────────────────────── */
+
+/* After a wipe the store is empty and the next boot is a first one. */
+static void assert_wiped_then_first_boot(void)
+{
+	static const char *const keys[] = {
+		RADIANT_NODE_NVM_KEY_KDEV, RADIANT_NODE_NVM_KEY_BOOT,
+		RADIANT_NODE_NVM_KEY_PAIR, RADIANT_NODE_NVM_KEY_EPOCH,
+		RADIANT_NODE_NVM_KEY_FMT,
+	};
+	uint8_t  kdev[RADIANT_NODE_IDENT_K_DEV_BYTES];
+	uint32_t v;
+	uint16_t devnum;
+
+	for (size_t i = 0u; i < ARRAY_SIZE(keys); i++) {
+		zassert_false(fake_nvm_peek(keys[i], kdev, sizeof(kdev)), "%s", keys[i]);
+		zassert_false(fake_nvm_peek_u32(keys[i], &v), "%s", keys[i]);
+	}
+	reboot_only();
+#if defined(CONFIG_RADIANT_NODE_IDENT_SELF_PROVISION)
+	zassert_equal(RADIANT_NODE_IDENT_OK, radiant_node_ident_boot());
+	zassert_equal(RADIANT_NODE_IDENT_OK, radiant_node_ident_devnum(&devnum));
+	zassert_not_equal(VECTOR_DEVNUM, devnum);
+#else
+	uint8_t other[RADIANT_NODE_IDENT_K_DEV_BYTES];
+
+	zassert_equal(RADIANT_NODE_IDENT_ENOKEY, radiant_node_ident_boot());
+	memset(other, 0x5A, sizeof(other));
+	zassert_equal(RADIANT_NODE_IDENT_OK, radiant_node_ident_provision(other));
+	zassert_equal(RADIANT_NODE_IDENT_OK, radiant_node_ident_boot());
+	zassert_equal(RADIANT_NODE_IDENT_OK, radiant_node_ident_devnum(&devnum));
+	zassert_not_equal(VECTOR_DEVNUM, devnum);
+#endif
+	zassert_equal(RADIANT_NODE_IDENT_OK, radiant_node_ident_boot_counter(&v));
+	zassert_equal(1u, v);
+	zassert_equal(RADIANT_NODE_IDENT_OK, radiant_node_ident_epoch(&v));
+	zassert_equal(1u, v);
+}
+
+ZTEST(node_ident, test_a_wipe_makes_the_next_boot_a_first_boot)
+{
+	uint32_t v[3];
+
+	advance_counters(v);
+	zassert_equal(RADIANT_NODE_IDENT_OK, radiant_node_ident_wipe());
+	/* The cached identity went with it. */
+	zassert_equal(RADIANT_NODE_IDENT_ESTATE, radiant_node_ident_epoch(&v[0]));
+	assert_wiped_then_first_boot();
+}
+
+ZTEST(node_ident, test_a_wipe_recovers_a_store_that_lost_its_epoch_record)
+{
+	uint32_t v[3];
+
+	advance_counters(v);
+	fake_nvm_forget(RADIANT_NODE_NVM_KEY_EPOCH);
+	reboot_only();
+	zassert_equal(RADIANT_NODE_IDENT_EIO, radiant_node_ident_boot());
+	zassert_equal(RADIANT_NODE_IDENT_OK, radiant_node_ident_wipe());
+	assert_wiped_then_first_boot();
+}
+
+ZTEST(node_ident, test_a_wipe_clears_a_corrupt_k_dev)
+{
+	uint8_t short_key[8];
+
+	/* A K_dev record of the wrong size: boot and provisioning both refuse
+	 * it (ADR 0020), and before the wipe nothing could clear it short of
+	 * erasing the partition. */
+	zassert_equal(RADIANT_NODE_IDENT_OK, radiant_node_ident_provision(k_dev));
+	memset(short_key, 0x77, sizeof(short_key));
+	zassert_equal(RADIANT_NODE_NVM_OK,
+		      radiant_node_nvm_store(RADIANT_NODE_NVM_KEY_KDEV, short_key,
+					     sizeof(short_key)));
+	reboot_only();
+	zassert_equal(RADIANT_NODE_IDENT_EIO, radiant_node_ident_boot());
+	zassert_equal(RADIANT_NODE_IDENT_EIO, radiant_node_ident_provision(k_dev));
+	zassert_equal(RADIANT_NODE_IDENT_OK, radiant_node_ident_wipe());
+	assert_wiped_then_first_boot();
+}
+
+ZTEST(node_ident, test_a_wipe_cut_short_is_refused_and_a_second_wipe_finishes)
+{
+	uint32_t v[3];
+	uint8_t  kdev[RADIANT_NODE_IDENT_K_DEV_BYTES];
+
+	/* Cut after each of the first four deletes in turn. Whatever is left,
+	 * the old K_dev is gone first, so no boot can pair it with a store
+	 * missing its reservation: every cut boots EIO, and wiping again
+	 * finishes the job. */
+	for (uint32_t cut = 1u; cut <= 4u; cut++) {
+		node_before(NULL);
+		advance_counters(v);
+		fake_nvm_fail_stores_after(cut, 1u);
+		zassert_equal(RADIANT_NODE_IDENT_EIO, radiant_node_ident_wipe(),
+			      "cut %u", (unsigned)cut);
+		zassert_false(fake_nvm_peek(RADIANT_NODE_NVM_KEY_KDEV, kdev,
+					    sizeof(kdev)), "cut %u", (unsigned)cut);
+		reboot_only();
+		assert_refused_and_untouched();
+		zassert_equal(RADIANT_NODE_IDENT_OK, radiant_node_ident_wipe());
+		assert_wiped_then_first_boot();
+	}
+}
+
+ZTEST(node_ident, test_a_wipe_that_cannot_delete_k_dev_changes_nothing)
+{
+	uint32_t before[3];
+	uint32_t after[3];
+	uint16_t devnum;
+
+	advance_counters(before);
+	fake_nvm_fail_stores(1u);
+	zassert_equal(RADIANT_NODE_IDENT_EIO, radiant_node_ident_wipe());
+	zassert_true(peek_counters(after));
+	zassert_mem_equal(before, after, sizeof(before));
+	reboot_only();
+	zassert_equal(RADIANT_NODE_IDENT_OK, radiant_node_ident_boot());
+	zassert_equal(RADIANT_NODE_IDENT_OK, radiant_node_ident_devnum(&devnum));
+	zassert_equal(VECTOR_DEVNUM, devnum);
 }
 
 ZTEST(node_ident, test_epoch_from_a_clock_is_coarse_real_time)

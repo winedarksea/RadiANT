@@ -150,11 +150,107 @@ static int store_u32_confirmed(const char *key, uint32_t val)
 	return RADIANT_NODE_IDENT_OK;
 }
 
-/* ── Provisioning (first boot, ADR 0020, or a factory step) ──────────────── */
+/* ── The record table (security review 2026-11-22) ───────────────────────────
+ *
+ * A record that reads as ABSENT is not always one that was never written.
+ * Zephyr's NVS settings loader (settings_nvs.c, settings_nvs_load()) deletes a
+ * setting whose name or value entry fails to read and never reports it, so a
+ * flash fault looks exactly like "never written". This code used to read any
+ * absent counter as 0: losing N alone sent the next boot back to the boot
+ * counter, about half of N - an epoch already used, with the slot counter at
+ * 0, which is keystream reuse under X_CONF - and losing K_dev alone made a
+ * self-provisioning node draw a new identity, which ADR 0020 excludes.
+ *
+ * What makes the faults visible is the order every writer creates records in:
+ * K_dev, then the boot counter, then the pairing counter, then N, then the
+ * format marker F (provisioning, this image's or an older one's; boot creates
+ * B before P and N, and F last). Nothing deletes a record except
+ * radiant_node_ident_wipe(). So a healthy store holds a prefix of that order,
+ * give or take records an older image never wrote, and F, once written, says
+ * every record is there. One lost record then shows, except F itself, whose
+ * loss alone is harmless (N is still there).
+ *
+ * K = kdev, F = fmt, B = boot, P = pair, N = epn; 1 present, 0 absent, - any.
+ * A record that fails to READ (RADIANT_NODE_NVM_EIO) is EIO before this table,
+ * and so is an F holding a value other than FMT_V1 (a later format).
+ *
+ *   K F B P N  what it is                                  the boot
+ *   0 0 0 0 0  a factory-fresh part                        first boot (ADR 0020), or ENOKEY
+ *   0 any other  K_dev lost from under its counters        EIO, writes nothing
+ *   1 1 1 1 1  this image's store                          boots
+ *   1 1 any 0  a record lost after it was written          EIO, writes nothing
+ *   1 0 0 0 0  provisioning cut after the key              boots: B 0 -> 1, creates P, N, F
+ *   1 0 1 0 0  provisioning cut after B                    boots, creates P, N, F
+ *   1 0 1 0 1  the same, then booted by an older image     boots, creates P, F
+ *   1 0 1 1 0  an older image's store (it had no N)        migrates: B is the floor; N, F
+ *   1 0 1 1 1  cut before the marker, or F lost alone      boots, writes F
+ *   1 0 0 - -  P or N without B: B was lost                EIO, writes nothing
+ *
+ * The unmarked rows stay accepted because the stores they describe exist: an
+ * older image never wrote F (nor, before 2026-11-13, N). A fault there that
+ * takes F as well as another record is a double fault, and still reads as one
+ * of those rows; the marker makes every single loss refuse. radiant_node_ident_
+ * provision() with the installed key refuses the same rows, and a boot that
+ * accepts an unmarked store completes it (P, N, then F) before it returns.
+ *
+ * The way out of an EIO row is radiant_node_ident_wipe() and a reboot (a new
+ * identity), or, where K_dev is the record lost, radiant_node_ident_provision()
+ * with a new key. test_node_ident.c's record_table[] restates this table row by
+ * row.
+ */
 
-static const char *const prov_keys[] = {
+/* The format marker's only value in this image. */
+#define FMT_V1 1u
+
+/* Indices into struct records, in prov_keys[] order. */
+enum { REC_BOOT, REC_PAIR, REC_NEXT, REC_COUNT };
+
+static const char *const prov_keys[REC_COUNT] = {
 	RADIANT_NODE_NVM_KEY_BOOT, RADIANT_NODE_NVM_KEY_PAIR, RADIANT_NODE_NVM_KEY_EPOCH,
 };
+
+struct records {
+	uint32_t val[REC_COUNT];  /* 0 when absent */
+	bool     has[REC_COUNT];
+	bool     has_fmt;
+};
+
+/* Load the records beside K_dev. EIO on any read failure, or on a marker
+ * this image does not know. */
+static int records_load(struct records *r)
+{
+	uint32_t fmt;
+	int      rc;
+
+	for (size_t i = 0u; i < REC_COUNT; i++) {
+		rc = load_u32(prov_keys[i], &r->val[i], &r->has[i]);
+		if (rc != RADIANT_NODE_IDENT_OK) {
+			return rc;
+		}
+	}
+	rc = load_u32(RADIANT_NODE_NVM_KEY_FMT, &fmt, &r->has_fmt);
+	if (rc == RADIANT_NODE_IDENT_OK && r->has_fmt && fmt != FMT_V1) {
+		rc = RADIANT_NODE_IDENT_EIO;
+	}
+	return rc;
+}
+
+/* The table above: false for every row that only a lost record explains. */
+static bool records_consistent(bool have_kdev, const struct records *r)
+{
+	const bool counters = r->has[REC_BOOT] || r->has[REC_PAIR] ||
+			      r->has[REC_NEXT];
+
+	if (!have_kdev) {
+		return !counters && !r->has_fmt;
+	}
+	if (r->has_fmt) {
+		return r->has[REC_BOOT] && r->has[REC_PAIR] && r->has[REC_NEXT];
+	}
+	return r->has[REC_BOOT] || !counters;
+}
+
+/* ── Provisioning (first boot, ADR 0020, or a factory step) ──────────────── */
 
 /* Load the stored K_dev and compare it with `k` in constant time. `*eq` is
  * false whenever the load is not RADIANT_NODE_NVM_OK; the load's code is returned. */
@@ -171,11 +267,10 @@ static int kdev_load_eq(const uint8_t *k, bool *eq)
 
 int radiant_node_ident_provision(const uint8_t k_dev[RADIANT_NODE_IDENT_K_DEV_BYTES])
 {
-	uint32_t v;
-	bool     present;
-	bool     same;
-	bool     ok;
-	int      rc;
+	struct records r = { 0 };
+	bool           same;
+	bool           ok;
+	int            rc;
 
 	if (k_dev == NULL) {
 		return RADIANT_NODE_IDENT_EINVAL;
@@ -216,18 +311,30 @@ int radiant_node_ident_provision(const uint8_t k_dev[RADIANT_NODE_IDENT_K_DEV_BY
 
 	/* Boot counter, pairing counter, epoch reservation: all three belong
 	 * to the key. A new key zeroes them; the same key keeps them and
-	 * creates only those an interrupted first provisioning never wrote. */
-	for (size_t i = 0u; i < ARRAY_SIZE(prov_keys); i++) {
-		if (same) {
-			rc = load_u32(prov_keys[i], &v, &present);
-			if (rc != RADIANT_NODE_IDENT_OK) {
-				return rc;
-			}
-			if (present) {
-				continue;
-			}
+	 * creates only those an interrupted first provisioning never wrote -
+	 * which the record table tells from one lost after use, refused here
+	 * as at boot (security review 2026-11-22). */
+	if (same) {
+		rc = records_load(&r);
+		if (rc != RADIANT_NODE_IDENT_OK) {
+			return rc;
+		}
+		if (!records_consistent(true, &r)) {
+			return RADIANT_NODE_IDENT_EIO;
+		}
+	}
+	for (size_t i = 0u; i < REC_COUNT; i++) {
+		if (r.has[i]) {
+			continue;
 		}
 		rc = store_u32_confirmed(prov_keys[i], 0u);
+		if (rc != RADIANT_NODE_IDENT_OK) {
+			return rc;
+		}
+	}
+	/* The marker last: from here on every record is mandatory. */
+	if (!r.has_fmt) {
+		rc = store_u32_confirmed(RADIANT_NODE_NVM_KEY_FMT, FMT_V1);
 		if (rc != RADIANT_NODE_IDENT_OK) {
 			return rc;
 		}
@@ -235,6 +342,48 @@ int radiant_node_ident_provision(const uint8_t k_dev[RADIANT_NODE_IDENT_K_DEV_BY
 
 	/* Provisioning invalidates everything derived from the old key. */
 	radiant_node_ident_reset();
+	return RADIANT_NODE_IDENT_OK;
+}
+
+/* K_dev first: from the first delete on, a wipe cut short leaves no K_dev
+ * beside some records, which boot refuses (the record table) and a second
+ * wipe finishes. Any other order can leave K_dev with part of its set, and
+ * once the marker is gone too the table takes that for an older image's
+ * store - without N, booting from the boot counter. The marker goes last. */
+static const struct {
+	const char *key;
+	size_t      len;
+} wipe_keys[] = {
+	{ RADIANT_NODE_NVM_KEY_KDEV, RADIANT_NODE_IDENT_K_DEV_BYTES },
+	{ RADIANT_NODE_NVM_KEY_BOOT, sizeof(uint32_t) },
+	{ RADIANT_NODE_NVM_KEY_PAIR, sizeof(uint32_t) },
+	{ RADIANT_NODE_NVM_KEY_EPOCH, sizeof(uint32_t) },
+	{ RADIANT_NODE_NVM_KEY_FMT, sizeof(uint32_t) },
+};
+
+int radiant_node_ident_wipe(void)
+{
+	uint8_t back[RADIANT_NODE_IDENT_K_DEV_BYTES];
+	int     rc;
+
+	/* Nothing armed after this may use the identity being erased. */
+	radiant_node_ident_reset();
+	if (radiant_node_nvm_init() != RADIANT_NODE_NVM_OK) {
+		return RADIANT_NODE_IDENT_EIO;
+	}
+	for (size_t i = 0u; i < ARRAY_SIZE(wipe_keys); i++) {
+		if (radiant_node_nvm_delete(wipe_keys[i].key) != RADIANT_NODE_NVM_OK) {
+			return RADIANT_NODE_IDENT_EIO;
+		}
+		/* Confirmed, as every store is: only a deleted record reads
+		 * ENOENT at its own size. */
+		rc = radiant_node_nvm_load(wipe_keys[i].key, back, wipe_keys[i].len);
+		radiant_sec_wipe(back, sizeof(back));
+		if (rc != RADIANT_NODE_NVM_ENOENT) {
+			return RADIANT_NODE_IDENT_EIO;
+		}
+	}
+	LOG_WRN("identity wiped; the next boot is a first boot");
 	return RADIANT_NODE_IDENT_OK;
 }
 
@@ -395,12 +544,12 @@ static int self_provision(void)
 
 int radiant_node_ident_boot(void)
 {
-	uint64_t wall = 0u;
-	bool     clock_valid;
-	bool     present;
-	uint32_t counter;
-	int      nrc;
-	int      rc;
+	struct records r = { 0 };
+	uint64_t       wall = 0u;
+	bool           clock_valid;
+	uint32_t       counter;
+	int            nrc;
+	int            rc;
 
 	radiant_node_ident_reset();
 
@@ -414,8 +563,26 @@ int radiant_node_ident_boot(void)
 	 * record of the wrong size - is a failure, reported as EIO and never
 	 * repaired by re-provisioning: a flaky read that re-rolled K_dev would
 	 * silently move the device number and orphan every paired receiver.
+	 *
+	 * And "never written" is believed only beside an empty store: a K_dev
+	 * that reads as absent next to counters it used was lost, not never
+	 * written (the record table above). So is any other record missing
+	 * from a set that cannot lack it. Both are EIO, and neither writes.
 	 */
 	nrc = radiant_node_nvm_load(RADIANT_NODE_NVM_KEY_KDEV, s.k_dev, sizeof(s.k_dev));
+	if (nrc != RADIANT_NODE_NVM_OK && nrc != RADIANT_NODE_NVM_ENOENT) {
+		rc = RADIANT_NODE_IDENT_EIO;
+		goto fail;
+	}
+	rc = records_load(&r);
+	if (rc != RADIANT_NODE_IDENT_OK) {
+		goto fail;
+	}
+	if (!records_consistent(nrc == RADIANT_NODE_NVM_OK, &r)) {
+		LOG_ERR("identity record lost; radiant_node_ident_wipe() re-provisions");
+		rc = RADIANT_NODE_IDENT_EIO;
+		goto fail;
+	}
 	if (nrc == RADIANT_NODE_NVM_ENOENT) {
 #if defined(CONFIG_RADIANT_NODE_IDENT_SELF_PROVISION)
 		rc = self_provision();
@@ -429,12 +596,13 @@ int radiant_node_ident_boot(void)
 			rc = RADIANT_NODE_IDENT_EIO;
 			goto fail;
 		}
+		rc = records_load(&r);
+		if (rc != RADIANT_NODE_IDENT_OK) {
+			goto fail;
+		}
 #else
 		return RADIANT_NODE_IDENT_ENOKEY;
 #endif
-	} else if (nrc != RADIANT_NODE_NVM_OK) {
-		rc = RADIANT_NODE_IDENT_EIO;
-		goto fail;
 	}
 	/* A stored all-zero key is not "never written", so it is not repaired
 	 * either; radiant_node_ident_provision() can never have written one. */
@@ -444,10 +612,7 @@ int radiant_node_ident_boot(void)
 	}
 	s.have_k_dev = true;
 
-	rc = load_u32(RADIANT_NODE_NVM_KEY_BOOT, &counter, &present);
-	if (rc != RADIANT_NODE_IDENT_OK) {
-		goto fail;
-	}
+	counter = r.val[REC_BOOT];
 	if (counter >= BOOT_COUNTER_MAX) {
 		rc = RADIANT_NODE_IDENT_ESTATE;
 		goto fail;
@@ -462,9 +627,15 @@ int radiant_node_ident_boot(void)
 	}
 	s.boot_counter = counter;
 
-	rc = load_u32(RADIANT_NODE_NVM_KEY_PAIR, &s.pair_counter, &present);
-	if (rc != RADIANT_NODE_IDENT_OK) {
-		goto fail;
+	/* Absent only on an unmarked store whose provisioning never wrote it
+	 * (the table): 0 is then its true value, and it is created so that
+	 * the marker below can say every record is there. */
+	s.pair_counter = r.val[REC_PAIR];
+	if (!r.has[REC_PAIR]) {
+		rc = store_u32_confirmed(RADIANT_NODE_NVM_KEY_PAIR, 0u);
+		if (rc != RADIANT_NODE_IDENT_OK) {
+			goto fail;
+		}
 	}
 
 	rc = derive_devnum(s.k_dev, &s.devnum);
@@ -480,30 +651,31 @@ int radiant_node_ident_boot(void)
 	 * E + 1 is reserved for this session's first wrap, so a crash right after
 	 * that wrap still leaves the next boot above it. An older image's store
 	 * has no N record, and the boot counter alone is then the floor it always
-	 * was.
+	 * was - but only an unmarked store gets here without N: on a marked one
+	 * a missing N was lost, and the table refused it above.
 	 */
-	{
-		uint32_t next;
+	clock_valid = radiant_node_ident_wall_seconds(&wall);
+	s.epoch = radiant_node_ident_epoch_from(s.boot_counter, clock_valid, wall);
+	if (r.val[REC_NEXT] > s.epoch) {
+		s.epoch = r.val[REC_NEXT];
+	}
+	if (s.epoch > EPOCH_BOOT_MAX) {
+		rc = RADIANT_NODE_IDENT_ESTATE;
+		goto fail;
+	}
+	rc = store_u32_confirmed(RADIANT_NODE_NVM_KEY_EPOCH, s.epoch + 2u);
+	if (rc != RADIANT_NODE_IDENT_OK) {
+		goto fail;
+	}
+	s.epoch_next = s.epoch + 2u;
 
-		rc = load_u32(RADIANT_NODE_NVM_KEY_EPOCH, &next, &present);
+	/* Every record is in storage now; mark the store so that a later loss
+	 * of any of them is refused rather than read as 0. Once per store. */
+	if (!r.has_fmt) {
+		rc = store_u32_confirmed(RADIANT_NODE_NVM_KEY_FMT, FMT_V1);
 		if (rc != RADIANT_NODE_IDENT_OK) {
 			goto fail;
 		}
-		clock_valid = radiant_node_ident_wall_seconds(&wall);
-		s.epoch = radiant_node_ident_epoch_from(s.boot_counter, clock_valid,
-						wall);
-		if (next > s.epoch) {
-			s.epoch = next;
-		}
-		if (s.epoch > EPOCH_BOOT_MAX) {
-			rc = RADIANT_NODE_IDENT_ESTATE;
-			goto fail;
-		}
-		rc = store_u32_confirmed(RADIANT_NODE_NVM_KEY_EPOCH, s.epoch + 2u);
-		if (rc != RADIANT_NODE_IDENT_OK) {
-			goto fail;
-		}
-		s.epoch_next = s.epoch + 2u;
 	}
 	s.booted = true;
 	return RADIANT_NODE_IDENT_OK;
@@ -525,7 +697,7 @@ const char *radiant_node_ident_strerror(int rc)
 	case RADIANT_NODE_IDENT_ENOKEY:
 		return "no K_dev (not provisioned, and none could be generated)";
 	case RADIANT_NODE_IDENT_EIO:
-		return "identity storage failed";
+		return "identity storage failed, or lost a record";
 	case RADIANT_NODE_IDENT_ESTATE:
 		return "boot counter exhausted, or identity not booted";
 	case RADIANT_NODE_IDENT_EAGAIN:

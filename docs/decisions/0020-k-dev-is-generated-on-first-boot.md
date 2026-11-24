@@ -132,6 +132,28 @@ forbade and which under this ADR would have re-rolled the identity. It now
 marks such a record bad and answers `RADIANT_NODE_NVM_EIO`; a zero-length record (the
 settings subsystem's deletion) is still absent.
 
+**Amended 2026-11-24 (security review 2026-11-22): "absent" is believed only
+beside an empty store.** The backend fix above covers what reaches its handler,
+and a flash fault does not always get that far. Zephyr's NVS settings loader
+(`settings_nvs_load()`) deletes a setting whose name or value entry fails to read
+and never calls the handler, so a lost `K_dev` still read as `ENOENT` and was
+replaced. The same fault on the epoch reservation alone sent the next boot back
+to the boot counter, an epoch already used. So `radiant_node_ident_boot()` now
+cross-checks which records are present before it believes any absence: an
+absent `K_dev` is a first boot only when nothing else is stored, and a format
+marker (`RADIANT_NODE_NVM_KEY_FMT`), written after every other record, makes
+every record mandatory from then on. Any set that only a lost record explains
+is `EIO`, writes nothing and draws nothing. The full table is in
+`radiant_node_ident.c` above `records_consistent()`, and
+`test_every_combination_of_present_records` checks all 32 rows. Stores that
+older images wrote (no marker; before 2026-11-13 no epoch reservation either)
+still boot and are completed and marked on that boot.
+
+The way back from that `EIO`, and from a corrupt `K_dev` that provisioning
+refuses by design, is `radiant_node_ident_wipe()`: it deletes `K_dev` first,
+then the counters, then the marker, so a wipe cut short is still refused and a
+second wipe finishes it, and the next boot is a first boot with a new identity.
+
 ## Accepted costs
 
 - **A full flash erase re-rolls the device number.** The identity is in the
@@ -192,9 +214,12 @@ settings subsystem's deletion) is still absent.
 - **ADR 0009's counter invariant holds.** "The counters are never reset
   independently of `K_dev`": provisioning writes a new key and fresh counters
   together, in that order, as it always did.
-- **A Tier 1 factory reset is now "delete the `K_dev` record and reboot".**
-  The next boot finds `ENOENT` and provisions a new key with fresh counters.
-  Not built: no trigger exists yet (out of scope here).
+- **A Tier 1 factory reset is `radiant_node_ident_wipe()` and a reboot**
+  (2026-11-24; this said "delete the `K_dev` record", which the amended
+  trigger rule now refuses as a lost key). The wipe deletes every identity
+  record, `K_dev` first; the next boot finds an empty store and provisions a
+  new key with fresh counters. The API exists; no application wires a
+  trigger to it yet.
 - **Dongles are unaffected.** Their epoch and pairing scalar come from the host
   (`0xF3`/`0xF5`) and they do not enable `RADIANT_NODE_IDENT`.
 

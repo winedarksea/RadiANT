@@ -89,7 +89,14 @@ extern "C" {
  * an interrupted first provisioning never wrote. A K_dev read that fails for
  * any reason but "never written" returns RADIANT_NODE_IDENT_EIO and writes nothing -
  * so a corrupt K_dev record (wrong size, read error) makes provisioning fail
- * closed instead of overwriting it.
+ * closed instead of overwriting it. The same-key retry also returns
+ * RADIANT_NODE_IDENT_EIO, writing nothing, when the records present are a set
+ * that a lost record explains and no interrupted write does (the record table
+ * in radiant_node_ident.c; security review 2026-11-22): re-creating a lost
+ * counter at zero would replay epochs or scalars.
+ *
+ * Writes the format marker (RADIANT_NODE_NVM_KEY_FMT) last, once every record
+ * is in storage.
  *
  * The same rule applies to a new-key provisioning interrupted after its key
  * write: retrying with that key keeps the old counters, so it cannot clear an
@@ -102,6 +109,39 @@ extern "C" {
 int radiant_node_ident_provision(const uint8_t k_dev[RADIANT_NODE_IDENT_K_DEV_BYTES]);
 
 bool radiant_node_ident_is_provisioned(void);
+
+/*
+ * ── Wipe: the way back from RADIANT_NODE_IDENT_EIO ─────────────────────────
+ *
+ * Deletes every identity record (K_dev, both counters, the epoch reservation
+ * and the format marker), so the next radiant_node_ident_boot() is a first
+ * boot: with CONFIG_RADIANT_NODE_IDENT_SELF_PROVISION it draws a NEW K_dev,
+ * and so a new Tier 0 device number (paired receivers re-pair once).
+ *
+ * This is the recovery for a store radiant_node_ident_boot() refuses - a K_dev
+ * that does not load (corrupt, wrong size), or a record lost from under the
+ * others - which provisioning deliberately cannot repair (security reviews
+ * 2026-11-17 item 7 and 2026-11-22). It is also the Tier 1 factory reset ADR
+ * 0020 describes. Nothing calls it on its own: a product wires it to an
+ * explicit user action (a long button press, a shell command).
+ *
+ * K_dev is deleted first and the marker last, so a wipe cut short by a power
+ * loss or a failed delete leaves K_dev absent beside some of the other records:
+ * a store boot refuses (EIO) and that a second wipe finishes. It can never
+ * leave a K_dev whose epoch reservation is gone.
+ *
+ * The counters restart at zero, which is safe only under a key this node has
+ * never had (ADR 0009: counters reset only with a new K_dev). Self-
+ * provisioning draws one; a factory flow that provisions its own key after a
+ * wipe must likewise use a key it never gave this node before.
+ *
+ * Drops the cached identity (radiant_node_ident_reset()), so nothing armed
+ * afterwards uses the old one. Call it with no channel armed under the node's
+ * identity, then reboot. Returns RADIANT_NODE_IDENT_OK, or
+ * RADIANT_NODE_IDENT_EIO if storage could not be opened or a delete failed
+ * (run it again).
+ */
+int radiant_node_ident_wipe(void);
 
 /*
  * ── Boot ───────────────────────────────────────────────────────────────────
@@ -119,6 +159,14 @@ bool radiant_node_ident_is_provisioned(void);
  * radiant_node_ident_provision(), then boots normally. Any other K_dev load failure is
  * RADIANT_NODE_IDENT_EIO and provisions nothing: a flaky read must never re-roll the
  * identity.
+ *
+ * An absent record is believed only where nothing else contradicts it (the
+ * record table in radiant_node_ident.c; security review 2026-11-22): a
+ * K_dev absent beside counters, or a counter absent from a store that carries
+ * the format marker, was lost to a storage fault, and reading it as "never
+ * written" would re-roll the identity or reuse an epoch. Such a store is
+ * RADIANT_NODE_IDENT_EIO, nothing is written, and every boot says the same
+ * until radiant_node_ident_wipe() clears it.
  *
  * Returns RADIANT_NODE_IDENT_ENOKEY when unprovisioned (or when self-provisioning had
  * no usable entropy), RADIANT_NODE_IDENT_EIO on a storage failure, RADIANT_NODE_IDENT_ESTATE

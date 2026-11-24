@@ -222,9 +222,17 @@ noticeably degrade primary functionality, such as receiving a heart rate strap.
   item 6). The host checks an announcement at the last verified Tier I counter,
   but the firmware tags at the clock's interval index. An announcement whose
   Tier I page was lost, or sent before it, fails on the host.
-- [ ] **Recovering a node whose K_dev record is corrupt** needs a partition erase
+- [x] **Recovering a node whose K_dev record is corrupt** needs a partition erase
   or a separate delete API, because provisioning refuses by design (low; sec
   review 2026-11-17 item 7).
+  *Done 2026-11-24 (wip/s24-node-ident):* `radiant_node_ident_wipe()` deletes
+  every identity record (K_dev first, so a wipe cut short is still refused at
+  boot and a second wipe finishes) through the new seam call
+  `radiant_node_nvm_delete()`, which clears a record that does not load too;
+  the next boot is a first boot with a new K_dev. It is also the Tier 1
+  factory reset ADR 0020 now names. No application wires a trigger to it yet
+  (a product decision: button, shell command). Tests:
+  `test_a_wipe_clears_a_corrupt_k_dev` and four more in `test_node_ident.c`.
 - [ ] **Escape binding labels in MQTT discovery JSON before any path sets one**
   (deferred 2026-11-20: not reachable today, since the only production bind
   passes a NULL label). Whoever adds editable labels must first add a bounded
@@ -239,7 +247,7 @@ noticeably degrade primary functionality, such as receiving a heart rate strap.
 
 # Matter bridge
 
-- [ ] **"Absent vs unreadable" high-water mark is only partly closed**
+- [x] **"Absent vs unreadable" high-water mark is only partly closed**
   (reviewer, 2026-11-22). Zephyr's `settings_load_subtree_direct()` drops
   backend read errors, so a fault that hides the stored `br/brd_ep_hw` entry
   still reads as Absent, and the max(restored)+1 fallback can reuse an
@@ -248,6 +256,25 @@ noticeably degrade primary functionality, such as receiving a heart rate strap.
   in `bridge_storage_manager.cpp` (`LoadEndpointHighWater()`, ~:414-417), which
   claims `HasEntry()` separates a missing key from a read error; it cannot
   when the fault hides the key.
+  *Done 2026-11-24 (wip/s24-node-ident):* a second marker key, the same
+  pattern as the node-identity format marker. `br/brd_ep_mk` (one byte) is
+  written only once the mark is in storage (`EndpointHighWater::NeedsMarker()`:
+  after a successful `StoreEndpointHighWater()`, or by a load that finds the
+  mark Valid on an unmarked store), and `Classify()` takes whether it exists:
+  a missing mark beside the marker is Unreadable (new ids deferred), and only
+  neither key is the legacy fallback. The comment is corrected (HasEntry()
+  iterates the same backend, so a hidden key reads as missing there too).
+  `matter_storage` +5 (hidden mark on a marked store does not reuse, one
+  marker write per store, upgraded store marked at boot, lost marker
+  rewritten, failed marker write retried) plus marker rows in the classify
+  test; red on the codec with the marker ignored. `bridge_storage_manager.cpp`
+  and `bridge_manager.cpp` compile-checked against an nRF54L15 Matter build's
+  flags only (no Matter image built or run). Open, owner call: a lost mark
+  never comes back, and nothing in this image clears the bridge store short of
+  a settings-partition erase (CHIP's factory reset here deletes only `mt/`,
+  `CONFIG_CHIP_FACTORY_RESET_ERASE_SETTINGS` is off, and
+  `BridgeStorageManager::FactoryReset()` has no caller); wiring that call into
+  the Matter factory reset would give the Unreadable states a recovery.
 
 # Backends: shared HAL contract layer
 
@@ -607,7 +634,7 @@ group.
   follows. Fix: use the trial-key path for the locked branch too, and commit
   wraps only on a matching tag. Extend
   `test_a_forged_first_page_fails_once_and_moves_nothing` to a locked receiver.
-- [ ] **Node identity: a record that reads as absent is taken as 0** (library;
+- [x] **Node identity: a record that reads as absent is taken as 0** (library;
   storage fault or local flash write). `radiant_node_ident_boot()` ignores `present`
   from `load_u32()` (`radiant_node_ident.c` ~:447, :465, :488). If `radiant/epoch`
   alone is lost, the epoch falls back to the boot counter, which is about half
@@ -619,6 +646,27 @@ group.
   cross-check the records at boot (EIO when K_dev is absent but a counter is
   present, or when N is absent with a non-zero boot counter), and gate the
   "older image has no N" migration on a format marker.
+  *Done 2026-11-24 (wip/s24-node-ident):* a fifth record, the format marker
+  `fmt` (u32 = 1), is written after every other record (by provisioning, and
+  by the boot that completes an older image's store). Boot and the same-key
+  provisioning retry load all five and check the present set against a table
+  (comment above `records_consistent()` in `radiant_node_ident.c`): K_dev
+  absent is a first boot only beside an empty store; with the marker every
+  record is mandatory; without it the older-image and interrupted-write sets
+  still boot (the boot creates a missing pairing counter, N, then the
+  marker), except a pairing counter or N without the boot counter. Every
+  refused set is EIO, writes nothing and draws nothing, on every boot until
+  wiped. Recovery: new `radiant_node_ident_wipe()` (deletes K_dev first, the
+  marker last, each confirmed; a wipe cut short still boots EIO and a second
+  wipe finishes) over a new seam call `radiant_node_nvm_delete()`.
+  `test_node_ident.c` +16: one per lost record, the marker cases, all 32
+  present/absent combinations in an explicit `record_table[]`, and five wipe
+  cases (every cut point, a corrupt K_dev). Red on the old code: 18 failures
+  per unit scenario (the 16 plus two updated cases). ADR 0020 amended (trigger
+  rule, Tier 1 reset), radiant-security.md 3.5 and section 4 updated. A double
+  fault (the marker and a counter both lost) still reads as an older image's
+  store; the NVS backend can also roll a record back to an older value when
+  its newest ATE is corrupt, which this does not detect (not a new exposure).
 - [ ] **A search record goes live before its filter is written.**
   `begin_common()` (`radiant_search.c` ~:582) sets `active` first and `want`
   last, in thread context with no critical section, and `handle_ok()` (~:1043)

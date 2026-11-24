@@ -267,7 +267,11 @@ min_scenarios: 29
 # scenario (radiant_power_adapter: FE-C equipment-type debounce - alternating, N identical,
 # rebind) and +5 in dongle_thread.matter_storage (LabelPersist: hash, unchanged, unknown,
 # alternating bound, one charge per rename per source).
-min_testcases: 8263
+# 2026-11-24: +101 (security review 2026-11-22, node identity lost records and
+# the Matter mark's marker, wip/s24-node-ident): +16 per unit scenario
+# (node_ident: one per lost record, marker cases, the 32-row record table, wipe)
+# and +5 in dongle_thread.matter_storage (the high-water mark's format marker).
+min_testcases: 8364
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -304,16 +308,20 @@ min_testcases: 8263
 # reserved-bit-only sets).
 # 2026-11-23: +2 per unit scenario (fec_tx: page 51 raw grade above 40000 clamps).
 # 2026-11-23: +3 per unit scenario (radiant_power_adapter: FE-C equipment-type debounce).
-min_cases.radiant.unit: 1141
-min_cases.radiant.unit.sec_modes: 1141
-min_cases.radiant.unit.no_pairing: 1077
+# 2026-11-24: +16 per unit scenario (node_ident: lost records, the record
+# table, the format marker and radiant_node_ident_wipe(); security review
+# 2026-11-22). No #if: no_pairing runs them too.
+min_cases.radiant.unit: 1157
+min_cases.radiant.unit.sec_modes: 1157
+min_cases.radiant.unit.no_pairing: 1093
 # radiant.unit.pairing_no_rng: 1218, the observed count on sec/item8-pair-rng
 # (2026-11-20), including test_pair_begin_without_an_rng_uses_the_kdf_scalar.
 # +4 (HAL drift item 5 settled, as radiant.unit).
 # 2026-11-23: +3 (profiles: a keyed receiver refuses plain and reserved-bit-only sets).
 # 2026-11-23: +2 (fec_tx grade clamp, as radiant.unit).
 # 2026-11-23: +3 (FE-C equipment-type debounce, as radiant.unit).
-min_cases.radiant.unit.pairing_no_rng: 1244
+# 2026-11-24: +16 (node_ident lost records, record table and wipe, as radiant.unit).
+min_cases.radiant.unit.pairing_no_rng: 1260
 min_cases.radiant.api: 91
 min_cases.radiant.api.sec: 95
 # +1 with the identical-0xF1 retry case (review 2026-11-17 item 4).
@@ -380,7 +388,8 @@ min_cases.treadmill.hr_rx: 3
 # 2026-11-23: +3 (profiles: a keyed receiver refuses plain and reserved-bit-only sets).
 # 2026-11-23: +2 (fec_tx grade clamp, as radiant.unit).
 # 2026-11-23: +3 (FE-C equipment-type debounce, as radiant.unit).
-min_cases.radiant.unit.ack_faults: 1148
+# 2026-11-24: +16 (node_ident lost records, record table and wipe, as radiant.unit).
+min_cases.radiant.unit.ack_faults: 1164
 # radiant.unit.diag: the unit suites with CONFIG_RADIANT_DIAG_COUNTERS.
 # 1127 (2026-11-16, Bluefin twister on fix/diag-page9-done-cb): the observed
 # count, including the four page-9/page-12 scheduler cases.
@@ -398,7 +407,8 @@ min_cases.radiant.unit.ack_faults: 1148
 # 2026-11-23: +3 (profiles: a keyed receiver refuses plain and reserved-bit-only sets).
 # 2026-11-23: +2 (fec_tx grade clamp, as radiant.unit).
 # 2026-11-23: +3 (FE-C equipment-type debounce, as radiant.unit).
-min_cases.radiant.unit.diag: 1219
+# 2026-11-24: +16 (node_ident lost records, record table and wipe, as radiant.unit).
+min_cases.radiant.unit.diag: 1235
 min_cases.trainer.model: 14
 # radiant.lp_clock (power plan pass B2): the low-power timebase arithmetic,
 # 31 unit cases and seven 100 000-cycle drift simulations (three of them
@@ -449,6 +459,7 @@ min_cases.radiant.backend_cc26xx.coex: 67
 # refusals, seed, wrap guard, and bind/unbind/reboot sequences.
 # 44 (+7, security review 2026-11-21): missing vs unreadable endpoint mark, provider quota.
 # 49 (+5, security review 2026-11-22 item 3, 2026-11-23): LabelPersist renamed-label writes.
-min_cases.dongle_thread.matter_storage: 49
+# 54 (+5, security review 2026-11-22 Matter item, 2026-11-24): the mark's format marker.
+min_cases.dongle_thread.matter_storage: 54
 # radiant.backend_cc26xx.short_match (item 7): caps parity, short-match row only.
 min_cases.radiant.backend_cc26xx.short_match: 1
