@@ -44,7 +44,9 @@ void fake_nvm_fail_stores(uint32_t n);
 void fake_nvm_fail_stores_after(uint32_t skip, uint32_t n);
 
 /* Remove one record, as a store written by an older image that never had it
- * would look. */
+ * would look - or as a record lost to a flash fault does: Zephyr's NVS
+ * settings loader deletes an entry it cannot read and reports nothing, so
+ * the loss reads as absent, not as an error. Not counted as a store. */
 void fake_nvm_forget(const char *key);
 
 /* Sever the store from the load: reported as written but is not. Exercises
@@ -65,7 +67,9 @@ bool fake_nvm_peek_u32(const char *key, uint32_t *out);
 bool fake_nvm_peek(const char *key, void *out, size_t len);
 
 /* How many stores have been attempted, so ADR 0009's flash-wear argument
- * ("once per boot, once per pairing window") is assertable. */
+ * ("once per boot, once per pairing window") is assertable. A
+ * radiant_node_nvm_delete() is a write here: it is counted, and the fail and
+ * swallow controls above apply to it as to a store. */
 uint32_t fake_nvm_store_count(void);
 
 #ifdef __cplusplus

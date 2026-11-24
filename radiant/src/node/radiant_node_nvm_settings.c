@@ -7,7 +7,7 @@
  * settings over NVS in storage_partition - rather than a private format.
  *
  * The settings subtree-walk read path is the wrong shape/cost for a lookup
- * radiant_node_ident.c makes before every public key. So the four records are read
+ * radiant_node_ident.c makes before every public key. So the five records are read
  * once at init into a RAM cache, and radiant_node_nvm_load() answers from it. This
  * narrows what a load after store proves: it confirms the cache, not that the
  * flash sector reads back. The durability claim rests on settings_save_one()
@@ -23,6 +23,14 @@
  * sectors, so per-page cycles stay inside Nordic flash's 10k endurance for
  * any partition of a few sectors or more. An argument, not a measurement; no
  * board here runs this backend yet.
+ *
+ * What this backend cannot see (security review 2026-11-22): Zephyr's NVS
+ * settings loader (settings_nvs.c, settings_nvs_load()) deletes a setting
+ * whose name or value entry fails to read and never calls set_cb() for it,
+ * so a record hidden by a flash fault reads as absent here, not as `bad`.
+ * The `bad` flag covers only what reaches set_cb(). radiant_node_ident.c
+ * closes the rest by cross-checking which records are present (its record
+ * table, and the format marker RADIANT_NODE_NVM_KEY_FMT).
  */
 
 #include <errno.h>
@@ -54,6 +62,7 @@ struct record {
 static uint32_t cache_boot;
 static uint32_t cache_pair;
 static uint32_t cache_epoch;
+static uint32_t cache_fmt;
 static uint8_t  cache_kdev[16];
 
 static struct record records[] = {
@@ -61,6 +70,7 @@ static struct record records[] = {
 	{ RADIANT_NODE_NVM_KEY_PAIR, &cache_pair, sizeof(cache_pair), false, false },
 	{ RADIANT_NODE_NVM_KEY_KDEV, cache_kdev,  sizeof(cache_kdev), false, false },
 	{ RADIANT_NODE_NVM_KEY_EPOCH, &cache_epoch, sizeof(cache_epoch), false, false },
+	{ RADIANT_NODE_NVM_KEY_FMT, &cache_fmt, sizeof(cache_fmt), false, false },
 };
 
 static bool initialised;
@@ -198,6 +208,39 @@ int radiant_node_nvm_store(const char *key, const void *val, size_t len)
 	}
 	memcpy(r->buf, val, len);
 	r->present = true;
+	r->bad = false;
+	return RADIANT_NODE_NVM_OK;
+}
+
+int radiant_node_nvm_delete(const char *key)
+{
+	struct record *r;
+	char           path[sizeof(SUBTREE) + 8];
+	int            rc;
+
+	if (key == NULL) {
+		return RADIANT_NODE_NVM_EINVAL;
+	}
+	if (!initialised) {
+		return RADIANT_NODE_NVM_EIO;
+	}
+	r = find(key);
+	if (r == NULL) {
+		return RADIANT_NODE_NVM_EINVAL;
+	}
+	rc = snprintk(path, sizeof(path), SUBTREE "/%s", key);
+	if (rc < 0 || (size_t)rc >= sizeof(path)) {
+		return RADIANT_NODE_NVM_EINVAL;
+	}
+	/* settings_delete() finds the record by name whatever its value
+	 * holds, so a `bad` record goes too, and deleting an absent one is a
+	 * no-op that returns 0. Flash first, cache second, as in a store. */
+	rc = settings_delete(path);
+	if (rc != 0) {
+		return RADIANT_NODE_NVM_EIO;
+	}
+	memset(r->buf, 0, r->len);
+	r->present = false;
 	r->bad = false;
 	return RADIANT_NODE_NVM_OK;
 }

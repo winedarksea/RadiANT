@@ -734,7 +734,16 @@ after the persist and the raise land; this
 is not the permanent `tx_spent` state that exhausting the headroom causes. The
 work item has one whole wrap to land, about 4.5 h at 4 Hz (at least 18 h on
 compat, 15 days at T = 20 s), and a write that never lands fails closed
-(retried with backoff, capped at 30 s).
+(retried with backoff, capped at 30 s). A store that **loses** `N` is refused,
+not migrated (security review 2026-11-22): a flash fault can make a record read
+as absent rather than as an error, and the boot counter alone is about `N / 2`,
+an epoch already used. So once a store carries the format marker (written after
+every other record), a boot that finds no `N` - or any other identity record
+missing - returns `RADIANT_NODE_IDENT_EIO` and arms nothing; only a store an
+older image wrote, with no marker, takes the boot counter as its floor, and
+that boot writes `N` and the marker. `radiant_node_ident_wipe()` and a reboot
+recover (a new identity, so no epoch under the old one is reused); the record
+table is in `radiant_node_ident.c`.
 
 Three rules keep the following honest. While the node follows a channel (it
 carries a ceiling), `radiant` refuses anyone else's `set_epoch` there: a host
@@ -908,7 +917,9 @@ around 300 devices in range, which is a constraint ANT+ already lives with.
 A button, a host command, or a factory reset. Receivers must re-pair, but the
 user just asked for a new identity, so the loss is expected rather than
 mysterious. This is the tier that covers "I am selling this" and "I am going
-somewhere I would rather not be logged".
+somewhere I would rather not be logged". On a hostless node the mechanism is
+`radiant_node_ident_wipe()` followed by a reboot, which self-provisions a new
+`K_dev` (ADR 0020); a product wires its own trigger to it.
 
 ### Tier 2 — re-roll at every power-up. Opt-in, off by default, RadiANT device types only
 

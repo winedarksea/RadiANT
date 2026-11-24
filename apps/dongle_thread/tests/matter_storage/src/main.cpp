@@ -549,10 +549,13 @@ struct Bridge {
 	} recs[8] = {};
 	size_t nRecs = 0;
 	unsigned hwWrites = 0;
+	bool mkPresent = false; /* br/brd_ep_mk, the format marker */
+	unsigned mkWrites = 0;
 
 	/* Faults. */
 	bool hwReadFault = false;  /* the key exists, its load fails */
 	bool hwWriteFault = false; /* every store of the key fails */
+	bool mkWriteFault = false; /* every store of the marker fails */
 	bool createFault = false;  /* CreateEndpoint()'s internal-error path */
 
 	/* Runtime. */
@@ -574,7 +577,28 @@ struct Bridge {
 		hwLen = sizeof(b);
 		hwPresent = true;
 		hwWrites++;
+		/* BridgeStorageManager::StoreEndpointHighWater(): the marker
+		 * after the mark, best effort. */
+		if (EndpointHighWater::NeedsMarker(true, mkPresent)) {
+			StoreMk();
+		}
 		return true;
+	}
+
+	void StoreMk()
+	{
+		if (!mkWriteFault) {
+			mkPresent = true;
+			mkWrites++;
+		}
+	}
+
+	/* The NVS settings loader's answer to an entry that fails to read: it
+	 * deletes the setting and never reports it, so it is simply gone. */
+	void HideHw()
+	{
+		hwPresent = false;
+		hwLen = 0;
 	}
 
 	/* A value put in the store behind the bridge's back (corruption, or a
@@ -590,8 +614,13 @@ struct Bridge {
 	EndpointHighWater::MarkLoad LoadHw(uint16_t &stored)
 	{
 		const bool loaded = hwPresent && !hwReadFault;
+		const EndpointHighWater::MarkLoad load =
+			EndpointHighWater::Classify(loaded, hw, hwLen, hwPresent, mkPresent, stored);
 
-		return EndpointHighWater::Classify(loaded, hw, hwLen, hwPresent, stored);
+		if (EndpointHighWater::NeedsMarker(load == EndpointHighWater::MarkLoad::Valid, mkPresent)) {
+			StoreMk();
+		}
+		return load;
 	}
 
 	/* BridgeManager::Init(): load and seed, restore, persist a raised
@@ -882,18 +911,36 @@ ZTEST(matter_storage, test_endpoint_hw_classify)
 	EndpointHighWater::Encode(9, good);
 	EndpointHighWater::Encode(EndpointHighWater::kInvalid, invalid);
 
-	zassert_equal(EndpointHighWater::Classify(false, good, 0, false, out), EndpointHighWater::MarkLoad::Absent);
-	zassert_equal(EndpointHighWater::Classify(false, good, 0, true, out), EndpointHighWater::MarkLoad::Unreadable,
+	zassert_equal(EndpointHighWater::Classify(false, good, 0, false, false, out), EndpointHighWater::MarkLoad::Absent);
+	zassert_equal(EndpointHighWater::Classify(false, good, 0, true, false, out), EndpointHighWater::MarkLoad::Unreadable,
 		      "a key that exists but did not load was taken for a legacy store");
-	zassert_equal(EndpointHighWater::Classify(true, good, 1, true, out), EndpointHighWater::MarkLoad::Unreadable,
+	zassert_equal(EndpointHighWater::Classify(true, good, 1, true, false, out), EndpointHighWater::MarkLoad::Unreadable,
 		      "a short value was taken for a legacy store");
-	zassert_equal(EndpointHighWater::Classify(true, good, EndpointHighWater::kSize + 1, true, out),
+	zassert_equal(EndpointHighWater::Classify(true, good, EndpointHighWater::kSize + 1, true, false, out),
 		      EndpointHighWater::MarkLoad::Unreadable, "an oversized value was taken for a legacy store");
-	zassert_equal(EndpointHighWater::Classify(true, invalid, sizeof(invalid), true, out),
+	zassert_equal(EndpointHighWater::Classify(true, invalid, sizeof(invalid), true, false, out),
 		      EndpointHighWater::MarkLoad::Unreadable, "0xFFFF was taken for a legacy store");
 	zassert_equal(out, 1234, "a refused value was written out");
-	zassert_equal(EndpointHighWater::Classify(true, good, sizeof(good), true, out), EndpointHighWater::MarkLoad::Valid);
+	zassert_equal(EndpointHighWater::Classify(true, good, sizeof(good), true, false, out), EndpointHighWater::MarkLoad::Valid);
 	zassert_equal(out, 9);
+
+	/* With the marker (security review 2026-11-22): a missing key is a
+	 * lost one. Every other row reads as without it. */
+	out = 1234;
+	zassert_equal(EndpointHighWater::Classify(false, good, 0, false, true, out),
+		      EndpointHighWater::MarkLoad::Unreadable, "a hidden key on a marked store was taken for a legacy store");
+	zassert_equal(EndpointHighWater::Classify(false, good, 0, true, true, out), EndpointHighWater::MarkLoad::Unreadable);
+	zassert_equal(EndpointHighWater::Classify(true, invalid, sizeof(invalid), true, true, out),
+		      EndpointHighWater::MarkLoad::Unreadable);
+	zassert_equal(out, 1234);
+	zassert_equal(EndpointHighWater::Classify(true, good, sizeof(good), true, true, out), EndpointHighWater::MarkLoad::Valid);
+	zassert_equal(out, 9);
+
+	/* The marker follows the mark, never precedes it. */
+	zassert_true(EndpointHighWater::NeedsMarker(true, false));
+	zassert_false(EndpointHighWater::NeedsMarker(true, true));
+	zassert_false(EndpointHighWater::NeedsMarker(false, false), "a marker beside no mark reads as a lost mark");
+	zassert_false(EndpointHighWater::NeedsMarker(false, true));
 }
 
 ZTEST(matter_storage, test_endpoint_hw_unknown_mark_blocks_allocation_and_write_back)
@@ -977,6 +1024,97 @@ ZTEST(matter_storage, test_endpoint_hw_malformed_mark_defers_until_repaired)
 	br.PokeHw(repaired, sizeof(repaired));
 	zassert_equal(br.Bind(), 9, "the repaired mark was not adopted");
 	zassert_equal(br.Bind(), 10);
+}
+
+/* ---- a hidden mark: the format marker (security review 2026-11-22) ----- */
+
+/* The review's case again, with the fault Zephyr really produces: the mark is
+ * not unreadable but GONE (the NVS loader deleted it). Without the marker this
+ * is a legacy store and max(restored) + 1 hands out the unbound top id. */
+ZTEST(matter_storage, test_endpoint_hw_hidden_mark_on_a_marked_store_does_not_reuse)
+{
+	Bridge br;
+
+	br.Boot();
+	zassert_equal(br.Bind(), 3);
+	zassert_equal(br.Bind(), 4);
+	zassert_equal(br.Bind(), 5);
+	zassert_true(br.mkPresent, "the first stored mark wrote no marker");
+	br.Unbind(5);
+
+	br.HideHw();
+	br.Boot();
+	zassert_equal(br.live, 2, "the stored devices were not restored");
+	zassert_false(br.hwPresent, "the hidden mark was overwritten with max(restored) + 1 at boot");
+	for (int i = 0; i < 3; i++) {
+		zassert_equal(br.Bind(), 0, "endpoint 5 was handed out after its mark vanished");
+	}
+	zassert_equal(br.providers, 2, "a deferred bind kept a provider slot");
+}
+
+/* One marker write per store, not one per mark write. */
+ZTEST(matter_storage, test_endpoint_hw_marker_is_written_once)
+{
+	Bridge br;
+
+	br.Boot();
+	zassert_false(br.mkPresent, "an empty bridge wrote the marker before any mark");
+	for (int i = 0; i < 4; i++) {
+		zassert_not_equal(br.Bind(), 0);
+	}
+	br.Boot();
+	zassert_equal(br.Bind(), 7);
+	zassert_equal(br.mkWrites, 1);
+}
+
+/* A store from before the marker (it has the mark): the boot that finds the
+ * mark Valid writes the marker, so the next loss is caught. */
+ZTEST(matter_storage, test_endpoint_hw_upgraded_store_gets_its_marker_at_boot)
+{
+	Bridge br;
+	uint8_t b[EndpointHighWater::kSize];
+
+	br.AddLegacyRecord(3);
+	br.AddLegacyRecord(4);
+	EndpointHighWater::Encode(6, b);
+	br.PokeHw(b, sizeof(b));
+	br.Boot();
+	zassert_true(br.mkPresent, "a Valid mark on an unmarked store got no marker");
+	zassert_equal(br.hwWrites, 0, "an unchanged mark was rewritten");
+
+	br.HideHw();
+	br.Boot();
+	zassert_equal(br.Bind(), 0, "endpoint 5 or 6 was handed out after the mark vanished");
+}
+
+/* The marker lost alone: the mark still loads, nothing is at risk, and the
+ * marker is put back. Both lost is the double fault the design accepts. */
+ZTEST(matter_storage, test_endpoint_hw_lost_marker_alone_is_rewritten)
+{
+	Bridge br;
+
+	br.Boot();
+	zassert_equal(br.Bind(), 3);
+	zassert_equal(br.Bind(), 4);
+	br.mkPresent = false;
+	br.Boot();
+	zassert_true(br.mkPresent);
+	zassert_equal(br.Bind(), 5);
+}
+
+/* A marker write that fails is retried with the next mark write or load, and
+ * until then the store reads as unmarked (as before the marker existed). */
+ZTEST(matter_storage, test_endpoint_hw_failed_marker_write_is_retried)
+{
+	Bridge br;
+
+	br.mkWriteFault = true;
+	br.Boot();
+	zassert_equal(br.Bind(), 3);
+	zassert_false(br.mkPresent);
+	br.mkWriteFault = false;
+	zassert_equal(br.Bind(), 4);
+	zassert_true(br.mkPresent, "the marker was not retried with the next mark");
 }
 
 /* ---- the provider quota (security review 2026-11-21) ------------------- */

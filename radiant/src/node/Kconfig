@@ -76,11 +76,12 @@ config RADIANT_NODE_NVM_SETTINGS
 	select FLASH_MAP
 	select NVS
 	help
-	  src/node/radiant_node_nvm_settings.c: three records - two u32 counters and
-	  K_dev - in the "radiant" settings subtree, over NVS in the board's
+	  src/node/radiant_node_nvm_settings.c: five records - K_dev, the boot
+	  and pairing counters, the epoch reservation and a format marker - in
+	  the "radiant" settings subtree, over NVS in the board's
 	  storage_partition. The standard Zephyr answer, chosen because this
 	  repository had no persistence layer at all before this phase and a
-	  private one for three records would be the worse mistake.
+	  private one for a handful of records would be the worse mistake.
 
 	  Turn it OFF to supply your own radiant_node_nvm.h implementation - a secure
 	  element, which is where ADR 0009 says the counters belong on a part

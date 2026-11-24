@@ -77,8 +77,30 @@ sensors until the store is repaired or factory-reset: that is the price of
 never guessing an id. `sPersistedEndpointHighWater` became
 `sEndpointMark` (`EndpointHighWater::Mark`: the persisted value plus whether
 it is known). One limit is below this layer: Zephyr's
-`settings_load_subtree_direct()` returns 0 whatever its backend does, so a
-fault that hides the key from iteration altogether still reads as Absent.
+`settings_load_subtree_direct()` returns 0 whatever its backend does, and the
+NVS settings loader deletes an entry it cannot read without reporting it, so a
+fault that hides the key reads as missing to `NonSecureHasEntry()` too.
+
+**`core/bridge_storage_manager.{h,cpp}` and the codec gain a format marker for
+the mark** (security review 2026-11-22), which closes that limit for a single
+fault. A second key, `br/brd_ep_mk` (one byte, 1), is written only once the
+mark is in storage: after a successful `StoreEndpointHighWater()`, or by a
+`LoadEndpointHighWater()` that finds the mark Valid on a store from before the
+marker. `EndpointHighWater::Classify()` takes whether the marker exists, and a
+missing mark beside the marker is Unreadable, not Absent, so a mark lost after
+it was written defers new ids instead of falling back to max(restored) + 1. A
+store with neither key is still the legacy case. Losing the marker alone is
+harmless (the mark loads; the marker is rewritten); losing both is a double
+fault and still reads as legacy. A lost mark does not come back, so new
+sensors stay refused until the bridge's storage is cleared. Note what clears
+it in this build: a Matter factory reset does **not** (this image's `.config`
+has `CONFIG_CHIP_FACTORY_RESET_ERASE_SETTINGS` off, so CHIP deletes only its own
+`mt` subtree and every `br/` key survives, bridged-device records included),
+and `BridgeStorageManager::FactoryReset()`, which deletes the `br` subtree,
+has no caller. Today the recovery is erasing the settings partition (a full
+chip erase and reflash, which also drops the fabric and the Thread dataset).
+`NeedsMarker()` is the ordering rule, tested with the rest in
+`apps/dongle_thread/tests/matter_storage`.
 
 **`core/bridge_manager.cpp` is patched for the provider quota** (security
 review 2026-11-21). Upstream's `AddSingleDevice()` counted a new data

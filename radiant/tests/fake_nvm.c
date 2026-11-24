@@ -11,7 +11,7 @@
  * demand - as fake_radio.c is to the radio HAL.
  *
  * No allocation, no threads, fixed records. The record set is closed because
- * radiant_node_nvm.h's is: four names.
+ * radiant_node_nvm.h's is: five names.
  */
 
 #include <stdbool.h>
@@ -35,6 +35,7 @@ static struct rec parts[] = {
 	{ RADIANT_NODE_NVM_KEY_PAIR, { 0 }, 0u },
 	{ RADIANT_NODE_NVM_KEY_KDEV, { 0 }, 0u },
 	{ RADIANT_NODE_NVM_KEY_EPOCH, { 0 }, 0u },
+	{ RADIANT_NODE_NVM_KEY_FMT, { 0 }, 0u },
 };
 
 static bool     initialised;
@@ -197,5 +198,39 @@ int radiant_node_nvm_store(const char *key, const void *val, size_t len)
 
 	memcpy(r->buf, val, len);
 	r->len = len;
+	return RADIANT_NODE_NVM_OK;
+}
+
+/* A write like any other: counted, and failed or swallowed by the same
+ * controls, so an interrupted radiant_node_ident_wipe() is assertable. */
+int radiant_node_nvm_delete(const char *key)
+{
+	struct rec *r;
+
+	if (key == NULL) {
+		return RADIANT_NODE_NVM_EINVAL;
+	}
+	if (!initialised) {
+		return RADIANT_NODE_NVM_EIO;
+	}
+	r = find(key);
+	if (r == NULL) {
+		return RADIANT_NODE_NVM_EINVAL;
+	}
+
+	stores++;
+
+	if (fail_skip > 0u) {
+		fail_skip--;
+	} else if (fail_remaining > 0u) {
+		fail_remaining--;
+		return RADIANT_NODE_NVM_EIO;
+	}
+	if (swallow) {
+		return RADIANT_NODE_NVM_OK;
+	}
+
+	memset(r->buf, 0, sizeof(r->buf));
+	r->len = 0u;
 	return RADIANT_NODE_NVM_OK;
 }

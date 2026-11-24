@@ -221,17 +221,40 @@ bool NeedsMark(uint16_t id, uint16_t next, uint16_t persistedNext);
  * reboot to a different device. So an unreadable mark restores the stored
  * devices (their ids are their own) and refuses NEW allocations until a later
  * read establishes the mark; the bridge's bind retry asks again every second.
+ *
+ * "Confirmed absent" needs a second key (security review 2026-11-22). Zephyr's
+ * NVS settings loader deletes a setting whose name or value entry fails to
+ * read and never reports it, and settings_load_subtree_direct() returns 0
+ * whatever its backend did, so a fault that hides `br/brd_ep_hw` makes both
+ * NonSecureLoad() and NonSecureHasEntry() say "no such key". The format marker
+ * `br/brd_ep_mk` is written once, only after the mark itself is in storage
+ * (NeedsMarker()), and never removed except with the whole bridge store (a
+ * settings-partition erase; see src/matter/README.md for why a Matter factory
+ * reset does not). So a store with the marker and no mark lost the mark: Unreadable,
+ * not Absent. Losing the marker alone is harmless (the mark still loads, and
+ * the marker is written again). Losing both is a double fault and still reads
+ * as a legacy store. A mark lost this way never comes back, so new
+ * allocations stay refused until the bridge store is cleared - the same price
+ * as a malformed mark.
  */
 enum class MarkLoad : uint8_t {
-	Absent,     /* no key */
+	Absent,     /* no key, on a store with no marker */
 	Valid,      /* the key holds a valid next id */
-	Unreadable, /* the key exists but did not load, or holds a malformed value */
+	Unreadable, /* the key exists but did not load, or holds a malformed value,
+		     * or is missing from a store that has the marker */
 };
 
 /* What a load found. `loaded` is the storage load's result and buf/size what
  * it read; `present` whether the key exists at all (checked when the load
- * failed). next is written only for Valid. */
-MarkLoad Classify(bool loaded, const uint8_t *buf, size_t size, bool present, uint16_t &next);
+ * failed); `marked` whether the format marker exists. next is written only for
+ * Valid. */
+MarkLoad Classify(bool loaded, const uint8_t *buf, size_t size, bool present, bool marked, uint16_t &next);
+
+/* True if the format marker must be written now: the mark is known to be in
+ * storage (`markStored`: a load found it Valid, or a store of it succeeded)
+ * and the marker is not. Never before the mark: a marker beside no mark would
+ * read as a lost mark. */
+bool NeedsMarker(bool markStored, bool marked);
 
 /* BridgeManager's view of the stored mark. */
 struct Mark {
