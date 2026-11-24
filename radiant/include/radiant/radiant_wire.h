@@ -437,6 +437,14 @@
 #define RADIANT_WIRE_MESG_SET_SEARCH_CH_PRIORITY_ID          0x75
 
 /*
+ * [network number, key[16]]. Not bridged, and listed because it carries a
+ * key: the host trace, the parser-buffer wipe and the Zwift shim's log mask
+ * everything after the network number. Rev 5.1 sec 9.5.2.25
+ * (ANT_Set128BitNetworkKey). [rev5.1 sec 9.5.2.25]
+ */
+#define RADIANT_WIRE_MESG_SET_128BIT_NETWORK_KEY_ID          0x76
+
+/*
  * Advertised in the capabilities reply and deliberately not bridged: sdk-ant
  * has no single-chip API for it. Clearing the bit instead would make this
  * dongle report something no ANTUSB-m reports. [tools, readme]
@@ -541,6 +549,16 @@
 
 /* [channel, cycles]. [bridge, rev5.1 sec 9.5 + verify:sdk-ant-shim] */
 #define RADIANT_WIRE_MESG_ACTIVE_SEARCH_SHARING_ID           0x81
+
+/*
+ * [operation, NVM key index, volatile key index] to load (operation 0x00),
+ * [operation, NVM key index, key[16]] to store (0x01). Not bridged, and
+ * listed because a store carries a key: the host trace, the parser-buffer
+ * wipe and the Zwift shim's log mask everything after the NVM key index,
+ * whatever the operation byte says. Rev 5.1 sec 9.5.2.36
+ * (System_CryptoKeyNVMOp). [rev5.1 sec 9.5.2.36]
+ */
+#define RADIANT_WIRE_MESG_CRYPTO_KEY_NVM_OP_ID               0x83
 
 /*
  * [filler, enable]. Enhanced channel spacing. A Nordic extension: not in Rev

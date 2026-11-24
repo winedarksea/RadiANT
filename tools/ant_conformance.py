@@ -65,9 +65,10 @@ CHANNEL = 0
 # byte 0 happens to mean.
 BAD_INDEX = 0xFF
 
-# Messages never sent, whatever the YAML says. All three would break
+# Messages never sent, whatever the YAML says. The first three would break
 # reproducibility: scan mode fills the transcript with whatever's in the room,
-# and CW mode keys the transmitter and leaves it keyed.
+# and CW mode keys the transmitter and leaves it keyed. The two key messages
+# would change a reference stick's keys.
 EXCLUDED = {
     wire.MESG_RADIO_CW_MODE_ID:
         "keys the transmitter; a backend that bridges it would leave a carrier "
@@ -77,6 +78,13 @@ EXCLUDED = {
     wire.MESG_OPEN_RX_SCAN_MODE_ID:
         "radiant implements background scan mode, so this would fill the "
         "transcript with whatever sensors happen to be in the room",
+    wire.MESG_SET_128BIT_NETWORK_KEY_ID:
+        "listed in ant_wire.yaml only so key redaction knows it; a reference "
+        "stick that implements it would take the probe's bytes as a network "
+        "key",
+    wire.MESG_CRYPTO_KEY_NVM_OP_ID:
+        "same reason: a store writes an encryption key into the reference "
+        "stick's NVM, where it outlives the run",
 }
 
 # Token marking a case as deliberately not conformant. `tools/test_ant_golden.py`
