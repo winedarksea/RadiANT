@@ -3410,7 +3410,9 @@ static void api_reset_state(void)
 	}
 
 	/* Keys are write-only and do not survive a reset, so epoch monotonicity
-	 * can only be enforced within one power cycle. Compat contexts too: a
+	 * can only be enforced while a channel keeps its root and number (an
+	 * unassign or a different root also reopen it; the epoch authority's
+	 * persisted floor is the real guarantee). Compat contexts too: a
 	 * stale one would still count as a live twin to node_ident's arm. */
 	radiant_sec_reset();
 	radiant_sec_compat_reset();
@@ -3615,6 +3617,10 @@ radiant_ant_err_t radiant_ant_channel_assign(uint8_t channel, uint8_t type, uint
 		/* Assignment resets every config byte to default, so this
 		 * file's own bytes (broadcast payload, ID list) go with them. */
 		memset(&api_ch[channel], 0, sizeof(api_ch[channel]));
+#if defined(CONFIG_RADIANT_SEC_HOST_MESSAGES)
+		/* So does the host's 0x43: 0xF3 waits for a new one. */
+		radiant_ant_sec_period_mask &= ~BIT(channel);
+#endif
 	}
 	k_mutex_unlock(&api_lock);
 
@@ -3851,13 +3857,26 @@ radiant_ant_err_t radiant_ant_channel_close(uint8_t channel)
 radiant_ant_err_t radiant_ant_channel_id_set(uint8_t channel, uint16_t device_number,
 			       uint8_t device_type, uint8_t trans_type)
 {
+#if defined(CONFIG_RADIANT_SEC_HOST_MESSAGES)
+	/* A keyed master's number is bound (radiant_ant_sec_rebind()). */
+	return radiant_ant_sec_rebind(channel, device_number,
+				      (int32_t)device_type |
+					      ((int32_t)trans_type << 8));
+#else
 	return radiant_channel_id_set(channel, device_number, device_type,
 				  trans_type);
+#endif
 }
 
 radiant_ant_err_t radiant_ant_channel_period_set(uint8_t channel, uint16_t period)
 {
+#if defined(CONFIG_RADIANT_SEC_HOST_MESSAGES)
+	/* An epoch's period is bound, and 0xF3 needs this call first
+	 * (radiant_ant_sec_rebind()). */
+	return radiant_ant_sec_rebind(channel, period, -1);
+#else
 	return radiant_channel_period_set(channel, period);
+#endif
 }
 
 radiant_ant_err_t radiant_ant_channel_radio_freq_set(uint8_t channel, uint8_t freq)

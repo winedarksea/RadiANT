@@ -1337,9 +1337,13 @@ MESG_RADIANT_SEC_CONFIG_ID = 0xF1
 # is in flight. A different root (a real rekey) on a keyed, secured master
 # takes back the slot and acknowledgement payload built under the old key
 # before this answers, as a changed 0xF1 does; the channel is then pending
-# until 0xF3. The root already installed (a retry) changes nothing. On TI the
-# take-back's RF_flushCmd is asynchronous, so a frame already on the air may
-# complete. [K4 (docs/radiant-security.md sec 3.4 and 9)]
+# until 0xF3. The root already installed (a retry) changes nothing. A failed
+# import changes nothing either: the new root is imported before the old one is
+# destroyed. Once keyed, a MASTER refuses a 0x51 that changes its device number
+# (CHANNEL_IN_WRONG_STATE; unassign to re-number), since the number is bound
+# into the keys and the nonce. On TI the take-back's RF_flushCmd is
+# asynchronous, so a frame already on the air may complete. [K4 (docs/radiant-
+# security.md sec 3.4 and 9)]
 MESG_RADIANT_SET_KEY_ID = 0xF2
 
 # Set the epoch and its time anchor. [0] channel; [1] flags, bit 0 = the epoch
@@ -1350,14 +1354,17 @@ MESG_RADIANT_SET_KEY_ID = 0xF2
 # before its boot). REFUSES an epoch less than or equal to the current one,
 # refuses epochs near 0xFFFFFFFF so a counter wrap always has headroom, and
 # refuses a phase of more than INT32_MAX channel periods or whose whole wraps
-# would pass that headroom, changing nothing. No transform enables until this
-# has been set after a reset: a reboot that restarts the counter under an
-# unchanged epoch is a two-time pad for X_CONF and a full session replay
-# against X_AUTH. WRITE ONLY: MESG_REQUEST for 0xF3 answers
-# RADIANT_WIRE_INVALID_MESSAGE. The epoch, the expected slot index and the
-# armed state read back through 0xF4; the exact phase and the real-time flag
-# are not retained, so nothing could echo them. [K4 (docs/radiant-security.md
-# sec 3.5 and 9)]
+# would pass that headroom, changing nothing. REFUSED with
+# RADIANT_WIRE_CHANNEL_IN_WRONG_STATE until the host has set the channel period
+# with 0x43 on this assignment (the assign default does not count); once an
+# epoch is set, a 0x43 that changes the period is refused the same way, until a
+# different root or an unassign. No transform enables until this has been set
+# after a reset: a reboot that restarts the counter under an unchanged epoch is
+# a two-time pad for X_CONF and a full session replay against X_AUTH. WRITE
+# ONLY: MESG_REQUEST for 0xF3 answers RADIANT_WIRE_INVALID_MESSAGE. The epoch,
+# the expected slot index and the armed state read back through 0xF4; the exact
+# phase and the real-time flag are not retained, so nothing could echo them.
+# [K4 (docs/radiant-security.md sec 3.5 and 9)]
 MESG_RADIANT_EPOCH_ID = 0xF3
 
 # Per-channel security state, requested with MESG_REQUEST (0x4D). [0] channel;
@@ -2130,13 +2137,13 @@ RADIANT_MESSAGES = {
         "name": 'MESG_RADIANT_SET_KEY_ID',
         "direction": 'h2d',
         "payload_len": 18,
-        "desc": "Install the one 16-byte root key for a channel. [0] channel; [1] key length in bits, 128 and nothing else in v1; [2..17] the key. Everything else - K_enc, K_auth, K_id, K_cmd - is derived from it, so a pairing moves exactly sixteen bytes. WRITE ONLY: there is no read arm anywhere, and MESG_REQUEST for 0xF2 answers RADIANT_WIRE_INVALID_MESSAGE rather than a key. NOT checked against other channels: the host gives each live channel a distinct root or base device number, or two channels given one epoch by 0xF3 share a keystream (docs/radiant-security.md sec 3.5). On a MASTER, REFUSED with RADIANT_WIRE_CHANNEL_IN_WRONG_STATE while host acknowledged data or a burst is in flight. A different root (a real rekey) on a keyed, secured master takes back the slot and acknowledgement payload built under the old key before this answers, as a changed 0xF1 does; the channel is then pending until 0xF3. The root already installed (a retry) changes nothing. On TI the take-back's RF_flushCmd is asynchronous, so a frame already on the air may complete.",
+        "desc": "Install the one 16-byte root key for a channel. [0] channel; [1] key length in bits, 128 and nothing else in v1; [2..17] the key. Everything else - K_enc, K_auth, K_id, K_cmd - is derived from it, so a pairing moves exactly sixteen bytes. WRITE ONLY: there is no read arm anywhere, and MESG_REQUEST for 0xF2 answers RADIANT_WIRE_INVALID_MESSAGE rather than a key. NOT checked against other channels: the host gives each live channel a distinct root or base device number, or two channels given one epoch by 0xF3 share a keystream (docs/radiant-security.md sec 3.5). On a MASTER, REFUSED with RADIANT_WIRE_CHANNEL_IN_WRONG_STATE while host acknowledged data or a burst is in flight. A different root (a real rekey) on a keyed, secured master takes back the slot and acknowledgement payload built under the old key before this answers, as a changed 0xF1 does; the channel is then pending until 0xF3. The root already installed (a retry) changes nothing. A failed import changes nothing either: the new root is imported before the old one is destroyed. Once keyed, a MASTER refuses a 0x51 that changes its device number (CHANNEL_IN_WRONG_STATE; unassign to re-number), since the number is bound into the keys and the nonce. On TI the take-back's RF_flushCmd is asynchronous, so a frame already on the air may complete.",
     },
     0xF3: {
         "name": 'MESG_RADIANT_EPOCH_ID',
         "direction": 'h2d',
         "payload_len": 14,
-        "desc": "Set the epoch and its time anchor. [0] channel; [1] flags, bit 0 = the epoch is coarse real time (minutes since the RadiANT date) rather than a bare ordinal; [2..5] epoch (u32 LE); [6..13] microseconds into that epoch (u64 LE), which is the phase a receiver derives the slot counter from rather than from arrival history; it may exceed the dongle's uptime (the anchor then lies before its boot). REFUSES an epoch less than or equal to the current one, refuses epochs near 0xFFFFFFFF so a counter wrap always has headroom, and refuses a phase of more than INT32_MAX channel periods or whose whole wraps would pass that headroom, changing nothing. No transform enables until this has been set after a reset: a reboot that restarts the counter under an unchanged epoch is a two-time pad for X_CONF and a full session replay against X_AUTH. WRITE ONLY: MESG_REQUEST for 0xF3 answers RADIANT_WIRE_INVALID_MESSAGE. The epoch, the expected slot index and the armed state read back through 0xF4; the exact phase and the real-time flag are not retained, so nothing could echo them.",
+        "desc": "Set the epoch and its time anchor. [0] channel; [1] flags, bit 0 = the epoch is coarse real time (minutes since the RadiANT date) rather than a bare ordinal; [2..5] epoch (u32 LE); [6..13] microseconds into that epoch (u64 LE), which is the phase a receiver derives the slot counter from rather than from arrival history; it may exceed the dongle's uptime (the anchor then lies before its boot). REFUSES an epoch less than or equal to the current one, refuses epochs near 0xFFFFFFFF so a counter wrap always has headroom, and refuses a phase of more than INT32_MAX channel periods or whose whole wraps would pass that headroom, changing nothing. REFUSED with RADIANT_WIRE_CHANNEL_IN_WRONG_STATE until the host has set the channel period with 0x43 on this assignment (the assign default does not count); once an epoch is set, a 0x43 that changes the period is refused the same way, until a different root or an unassign. No transform enables until this has been set after a reset: a reboot that restarts the counter under an unchanged epoch is a two-time pad for X_CONF and a full session replay against X_AUTH. WRITE ONLY: MESG_REQUEST for 0xF3 answers RADIANT_WIRE_INVALID_MESSAGE. The epoch, the expected slot index and the armed state read back through 0xF4; the exact phase and the real-time flag are not retained, so nothing could echo them.",
     },
     0xF4: {
         "name": 'MESG_RADIANT_SEC_STATUS_ID',

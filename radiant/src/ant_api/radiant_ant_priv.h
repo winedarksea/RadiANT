@@ -53,6 +53,19 @@ int radiant_ant_sec_policy_set(uint8_t ch, uint8_t switches, uint8_t w,
  * the busy check. Review 2026-11-20 item C. */
 int radiant_ant_sec_key_replace(uint8_t ch, const uint8_t *root, size_t bits,
 			 uint16_t base_devnum);
+
+/* 0x51 (types = device type | transmission type << 8, v the device number)
+ * and 0x43 (types < 0, v the period; three arguments so both wrappers are
+ * tail calls) with the security bindings applied: a keyed
+ * master's device number and an epoch's period are refused as
+ * RADIANT_WIRE_CHANNEL_IN_WRONG_STATE when changed, and an accepted 0x43
+ * marks the channel in radiant_ant_sec_period_mask (review 2026-11-22).
+ * Takes api_lock. */
+radiant_ant_err_t radiant_ant_sec_rebind(uint8_t ch, uint16_t v, int32_t types);
+
+/* Bit n: the host set channel n's period with 0x43 since its last assign,
+ * which 0xF3 requires. The assign clears it. Under api_lock. */
+extern uint32_t radiant_ant_sec_period_mask;
 #endif
 
 #if defined(CONFIG_ZTEST)

@@ -752,11 +752,14 @@ def check_scan_mode_keyed(dev, reader) -> list[str]:
     print("\n[scan-sec] Open Rx Scan Mode keeps channel 0's security (0x5B)")
     switches = ant_sec.SW_AUTH | ant_sec.SW_DROP_UNVER
     epoch = 1
-    # A key needs a non-zero device number: it is bound into the KDF.
+    # A key needs a non-zero device number: it is bound into the KDF. And
+    # 0xF3 needs a period the host set (0x43): firmware since 2026-11-24
+    # refuses an epoch on the assign default.
     setup = [
         (MESG_NETWORK_KEY_ID, bytes([0]) + ANT_PLUS_KEY, "network key"),
         (MESG_ASSIGN_CHANNEL_ID, bytes([0, 0x00, 0x00]), "assign channel 0"),
         (MESG_CHANNEL_ID_ID, bytes([0, 0x34, 0x12, 0, 0]), "channel id"),
+        (MESG_CHANNEL_MESG_PERIOD_ID, bytes([0, 0x00, 0x20]), "period 8192"),
         (MESG_CHANNEL_RADIO_FREQ_ID, bytes([0, ANT_PLUS_FREQ]), "RF 57"),
     ]
     for msg_id, payload, name in setup:
