@@ -548,7 +548,7 @@ Byte 2 of a RESPONSE_EVENT answering a command. Same number space as the event c
 | `RADIANT_WIRE_TRANSFER_IN_ERROR` | `0x21` | Burst aborted. | rev5.1 sec 9.5.6 + verify:sdk-ant-shim |
 | `RADIANT_WIRE_TRANSFER_BUSY` | `0x22` | The channel is busy with another transfer. Distinct from TRANSFER_IN_PROGRESS (0x1F), which is what this bridge answers when the host outruns its single burst block. | rev5.1 sec 9.5.6 + verify:sdk-ant-shim |
 | `RADIANT_WIRE_MESSAGE_SIZE_EXCEEDS_LIMIT` | `0x27` | Payload longer than the message allows. | rev5.1 sec 9.5.6 + verify:sdk-ant-shim |
-| `RADIANT_WIRE_INVALID_MESSAGE` | `0x28` | The dispatcher does not implement this message, or its body was too short to run. Distinguishing 'the bridge refused it' from 'the stack refused it' is exactly this code: anything else means the message was decoded and handed on. | bridge, tools |
+| `RADIANT_WIRE_INVALID_MESSAGE` | `0x28` | The dispatcher does not implement this message, or its body was too short to run, or (0x46, 0xF1, 0xF2, 0xF3, 0xF5) not the exact length the message declares. Distinguishing 'the bridge refused it' from 'the stack refused it' is exactly this code: anything else means the message was decoded and handed on. | bridge, tools |
 | `RADIANT_WIRE_INVALID_NETWORK_NUMBER` | `0x29` | Network number above the maximum the capabilities reply advertises. | rev5.1 sec 9.5.6 + verify:sdk-ant-shim |
 | `RADIANT_WIRE_INVALID_LIST_ID` | `0x30` | Inclusion/exclusion list index out of range. | rev5.1 sec 9.5.6 + verify:sdk-ant-shim |
 | `RADIANT_WIRE_INVALID_SCAN_TX_CHANNEL` | `0x31` | Transmit attempted on a channel other than 0 in scan mode. | rev5.1 sec 9.5.6 + verify:sdk-ant-shim |

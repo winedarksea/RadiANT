@@ -1907,7 +1907,7 @@ ZTEST(radiant_channel, test_an_unrecognised_channel_type_is_accepted)
 	/* radiant_ant_channel_assign()'s permitted error set has no code left to reject
 	 * a channel type with (INVALID_MESSAGE is already spoken for by the
 	 * channel number, and INVALID_PARAMETER_PROVIDED is not in the set). So
-	 * the type is carried verbatim, only bit 4 interpreted. */
+	 * the type's top nibble is carried as given, only bit 4 interpreted. */
 	up();
 	zassert_equal(RADIANT_CH_OK, radiant_channel_assign(0u, 0x70u, 0u, 0u));
 	zassert_equal(RADIANT_CH_OK, radiant_channel_status_get(0u, &status));

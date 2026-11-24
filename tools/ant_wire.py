@@ -885,9 +885,10 @@ TRANSFER_BUSY = 0x22
 MESSAGE_SIZE_EXCEEDS_LIMIT = 0x27
 
 # The dispatcher does not implement this message, or its body was too short to
-# run. Distinguishing 'the bridge refused it' from 'the stack refused it' is
-# exactly this code: anything else means the message was decoded and handed on.
-# [bridge, tools]
+# run, or (0x46, 0xF1, 0xF2, 0xF3, 0xF5) not the exact length the message
+# declares. Distinguishing 'the bridge refused it' from 'the stack refused it'
+# is exactly this code: anything else means the message was decoded and handed
+# on. [bridge, tools]
 INVALID_MESSAGE = 0x28
 
 # Network number above the maximum the capabilities reply advertises. [rev5.1

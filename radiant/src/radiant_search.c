@@ -27,6 +27,7 @@
 
 #include <radiant/radiant_search.h>
 
+#include <radiant/radiant_event.h> /* radiant_event_crit_enter/exit() */
 #include <radiant/radiant_frame.h>
 #include <radiant/radiant_radio_hal.h>
 #include <radiant/radiant_sched.h> /* RADIANT_SCHED_ARMED_STALE_US */
@@ -87,7 +88,8 @@ static bool chan_permits(const struct radiant_search *s, uint8_t channel,
 
 static bool seen_find(const struct radiant_search *s,
 		      const struct radiant_search_id_filter *want, radiant_time_t now,
-		      bool filtered, uint8_t channel, struct radiant_channel_id *out);
+		      bool filtered, uint8_t channel, uint8_t rf_plus1,
+		      struct radiant_channel_id *out);
 
 /* ---------------------------------------------------------------------------
  * The sweep
@@ -545,6 +547,9 @@ static int begin_common(struct radiant_search *s, uint8_t channel,
 			radiant_time_t now, uint32_t timeout_us, uint8_t rf_plus1)
 {
 	struct radiant_search_chan *ch;
+	struct radiant_search_chan  rec;
+	uint16_t                    steer;
+	unsigned int                key;
 
 	if (!inst_ok(s) || want == NULL) {
 		return RADIANT_SEARCH_EINVAL;
@@ -579,12 +584,21 @@ static int begin_common(struct radiant_search *s, uint8_t channel,
 		}
 	}
 
-	ch = &s->chans[channel];
-	ch->active = true;
-	ch->mode = mode;
-	ch->rf_plus1 = rf_plus1; /* before the seen_find() below reads it */
-	ch->want = *want;
-	ch->deadline = (timeout_us == RADIANT_SEARCH_TIMEOUT_NONE)
+	/*
+	 * BUILT IN A LOCAL, PUBLISHED UNDER THE CRITICAL SECTION, active LAST
+	 * (security review 2026-11-22, Low). handle_ok() reads the record from
+	 * the radio interrupt, and a record that is active with its filter not
+	 * yet written is a full-wildcard ACQUIRE: a frame landing in that window
+	 * made a pinned channel acquire whatever device it was, or turned a
+	 * scan channel into a tracker. Built in place, the record went live at
+	 * its first store. Now the interrupt sees either the old record (none,
+	 * or the one this call replaces) or the whole new one.
+	 */
+	memset(&rec, 0, sizeof(rec));
+	rec.mode = mode;
+	rec.rf_plus1 = rf_plus1;
+	rec.want = *want;
+	rec.deadline = (timeout_us == RADIANT_SEARCH_TIMEOUT_NONE)
 			       ? RADIANT_TIME_NEVER
 			       : now + (radiant_time_t)timeout_us;
 
@@ -600,45 +614,65 @@ static int begin_common(struct radiant_search *s, uint8_t channel,
 	 * and steering to a device the offer loop will then withhold buys a
 	 * dwell that cannot acquire, re-bought on every rebuild of the search.
 	 * A named device number is steered to as asked: the caller named it. */
-	ch->steer_set = RADIANT_SEARCH_SETS_NONE;
+	rec.steer_set = RADIANT_SEARCH_SETS_NONE;
 	if (want->device_number != 0u) {
-		ch->steer_set = radiant_search_set_for_devnum(s, want->device_number);
+		rec.steer_set = radiant_search_set_for_devnum(s, want->device_number);
 	} else {
 		struct radiant_channel_id hit;
 
-		if (seen_find(s, want, now, true, channel, &hit)) {
-			ch->steer_set = radiant_search_set_for_devnum(s, hit.device_number);
+		if (seen_find(s, want, now, true, channel, rf_plus1, &hit)) {
+			rec.steer_set = radiant_search_set_for_devnum(s, hit.device_number);
 		}
 	}
-	if (ch->steer_set != RADIANT_SEARCH_SETS_NONE) {
-		push_steer(s, ch->steer_set, rf_plus1);
-	}
+	steer = rec.steer_set;
 
 	/* And keep coming back, for ACQUIRE only: one steered dwell holds
 	 * about one transmission, and a lossy link loses it about as often as
 	 * not. SCAN never leaves the search, so it has nothing to come back
 	 * for - and is what a host's wildcard background scan is. */
 	if (mode != RADIANT_SEARCH_MODE_ACQUIRE) {
-		ch->steer_set = RADIANT_SEARCH_SETS_NONE;
+		rec.steer_set = RADIANT_SEARCH_SETS_NONE;
 	}
-	ch->revisit_gap = RADIANT_SEARCH_REVISIT_FIRST;
-	ch->revisit_left = RADIANT_SEARCH_REVISIT_FIRST;
+	rec.revisit_gap = RADIANT_SEARCH_REVISIT_FIRST;
+	rec.revisit_left = RADIANT_SEARCH_REVISIT_FIRST;
+
+	ch = &s->chans[channel];
+	key = radiant_event_crit_enter();
+	rec.active = false;
+	*ch = rec;
+	ch->active = true;
+	radiant_event_crit_exit(key);
+
+	/* The steer queue is read only by radiant_search_window(), in thread
+	 * context like this call, so it needs no critical section. */
+	if (steer != RADIANT_SEARCH_SETS_NONE) {
+		push_steer(s, steer, rf_plus1);
+	}
 
 	return RADIANT_SEARCH_OK;
 }
 
 int radiant_search_end(struct radiant_search *s, uint8_t channel)
 {
+	unsigned int key;
+
 	if (!inst_ok(s)) {
 		return RADIANT_SEARCH_EINVAL;
 	}
 	if (channel >= (uint8_t)RADIANT_SEARCH_MAX_CHANNELS) {
 		return RADIANT_SEARCH_EINVAL;
 	}
+	/* Under the critical section, as radiant_search_begin() publishes: a
+	 * memset seen half done from the radio interrupt is a record still
+	 * active with its filter partly zeroed, which is a wider search than
+	 * the channel asked for. */
+	key = radiant_event_crit_enter();
 	if (!s->chans[channel].active) {
+		radiant_event_crit_exit(key);
 		return RADIANT_SEARCH_ENOENT;
 	}
 	memset(&s->chans[channel], 0, sizeof(s->chans[channel]));
+	radiant_event_crit_exit(key);
 	return RADIANT_SEARCH_OK;
 }
 
@@ -1470,10 +1504,14 @@ void radiant_search_seen_note_rf(struct radiant_search *s,
  * it costs at most one call per ring entry and usually far fewer. Bounded by
  * the ring size either way, which is what the no-proportional-work rule asks of
  * this side of the callback.
+ *
+ * rf_plus1 is the asking channel's frequency, passed rather than read from its
+ * record: radiant_search_begin() asks before the record is published.
  */
 static bool seen_find(const struct radiant_search *s,
 		      const struct radiant_search_id_filter *want, radiant_time_t now,
-		      bool filtered, uint8_t channel, struct radiant_channel_id *out)
+		      bool filtered, uint8_t channel, uint8_t rf_plus1,
+		      struct radiant_channel_id *out)
 {
 	const struct radiant_search_seen *best = NULL;
 
@@ -1487,8 +1525,8 @@ static bool seen_find(const struct radiant_search *s,
 			continue;
 		}
 		/* A device heard on another frequency is not this channel's. */
-		if (filtered && s->chans[channel].rf_plus1 != 0u &&
-		    (uint8_t)(s->chans[channel].rf_plus1 - 1u) != e->rf) {
+		if (filtered && rf_plus1 != 0u &&
+		    (uint8_t)(rf_plus1 - 1u) != e->rf) {
 			continue;
 		}
 		if (filtered && !chan_permits(s, channel, &e->id)) {
@@ -1513,7 +1551,7 @@ bool radiant_search_seen_lookup(const struct radiant_search *s,
 	if (!inst_ok(s) || want == NULL) {
 		return false;
 	}
-	return seen_find(s, want, now, false, 0u, out);
+	return seen_find(s, want, now, false, 0u, 0u, out);
 }
 
 uint8_t radiant_search_seen_count(const struct radiant_search *s, radiant_time_t now)

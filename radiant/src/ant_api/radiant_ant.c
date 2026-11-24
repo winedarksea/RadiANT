@@ -1713,12 +1713,21 @@ static void api_search_timeout(uint8_t channel, void *user)
 }
 
 /* May this channel acquire this device? Asked by radiant_search before it
- * spends anything on the answer. See api_id_list_permits(). */
+ * spends anything on the answer. See api_id_list_permits().
+ *
+ * Only a SEARCHING channel may (security review 2026-11-22, Low). A channel
+ * leaves the sweep after its state changes: a timed-out one at the next pump,
+ * a closed one when the close path reaches radiant_search_end(). A frame in
+ * that gap went to it, so a broadcast followed CHANNEL_CLOSED and the frame's
+ * one ACQUIRE claim was spent on a dead channel. A scan stays SEARCHING, so
+ * it is unaffected; radiant_search_begin() asks only for a SEARCHING channel.
+ */
 static bool api_search_permit(uint8_t channel, const struct radiant_channel_id *id,
 			      void *user)
 {
 	(void)user;
-	if (!api_ch_valid(channel) || id == NULL) {
+	if (!api_ch_valid(channel) || id == NULL ||
+	    radiant_channel_state_get(channel) != RADIANT_CH_STATE_SEARCHING) {
 		return false;
 	}
 	return api_id_list_permits(channel, id);

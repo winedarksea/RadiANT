@@ -117,13 +117,13 @@ static inline bool body_len_ok(uint8_t id, uint8_t len)
 {
 	switch (id) {
 	case RADIANT_WIRE_MESG_NETWORK_KEY_ID:
-		return len >= 9U;
+		return len == 9U;
 	case RADIANT_WIRE_MESG_RADIANT_SEC_CONFIG_ID:
-		return len >= 5U;
+		return len == 5U;
 	case RADIANT_WIRE_MESG_RADIANT_SET_KEY_ID:
-		return len >= 18U;
+		return len == 18U;
 	case RADIANT_WIRE_MESG_RADIANT_EPOCH_ID:
-		return len >= 14U;
+		return len == 14U;
 	default:
 		return true;
 	}
