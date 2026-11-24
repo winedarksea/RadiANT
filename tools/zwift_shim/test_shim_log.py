@@ -216,7 +216,7 @@ def child_write():
     sys.stdout.write(got.hex())
 
 
-def make_pipe(k32):
+def make_pipe(k32, instances=1):
     """The server end of the named pipe RADIANT_ANT_COM names (blocking)."""
     k32.CreateNamedPipeW.restype = ctypes.wintypes.HANDLE
     k32.CreateNamedPipeW.argtypes = [
@@ -228,10 +228,53 @@ def make_pipe(k32):
         ctypes.POINTER(ctypes.wintypes.DWORD), ctypes.c_void_p]
     k32.WriteFile.argtypes = k32.ReadFile.argtypes
     pipe = k32.CreateNamedPipeW('\\\\.\\' + os.environ['RADIANT_ANT_COM'],
-                                3, 0, 1, 65536, 65536, 0, None)
+                                3, 0, instances, 65536, 65536, 0, None)
     if pipe is None or pipe == ctypes.wintypes.HANDLE(-1).value:
         raise OSError(ctypes.get_last_error(), 'CreateNamedPipeW')
     return pipe
+
+
+def child_reopen_stale():
+    """Run in the subprocess: the port drops and comes back under the same
+    name while the shim holds it, and ANT_DLL calls SI_Open again without an
+    SI_Close (review 2026-11-24). Pipe instance A plays the first device;
+    closing its server end breaks the shim's handle as a USB removal does;
+    instance B is the device back. Prints JSON: each step's status and what
+    B received."""
+    k32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    xp = ctypes.WinDLL(XP_TEST_DLL)
+    # Three instances allowed, so a new one can exist while the shim's broken
+    # client end of A is still open. SI_GetNumDevices' probe connects to B and
+    # closes it, and a pipe instance (unlike a COM port) takes no second
+    # client until its server end resets, so the re-open gets C.
+    a = make_pipe(k32, instances=3)
+    h = ctypes.c_void_p()
+    out = {'open1': xp.SI_Open(0, ctypes.byref(h))}
+    k32.CloseHandle(ctypes.wintypes.HANDLE(a))
+    probe = make_pipe(k32, instances=3)
+    n = ctypes.c_ulong(99)
+    xp.SI_GetNumDevices(ctypes.byref(n))
+    out['num'] = n.value
+    k32.CloseHandle(ctypes.wintypes.HANDLE(probe))
+    b = make_pipe(k32, instances=3)
+    out['open2'] = xp.SI_Open(0, ctypes.byref(h))
+    put = ctypes.c_ulong()
+    buf = ctypes.create_string_buffer(OPEN, len(OPEN))
+    out['write'] = xp.SI_Write(h, buf, len(OPEN), ctypes.byref(put), None)
+    out['put'] = put.value
+    wire = b''
+    if out['write'] == 0 and put.value == len(OPEN):
+        chunk = ctypes.create_string_buffer(len(OPEN))
+        got = ctypes.wintypes.DWORD()
+        while len(wire) < len(OPEN):
+            if not k32.ReadFile(b, chunk, len(OPEN) - len(wire),
+                                ctypes.byref(got), None) or not got.value:
+                break
+            wire += chunk.raw[:got.value]
+    out['wire'] = wire.hex()
+    xp.SI_Close(h)
+    k32.CloseHandle(ctypes.wintypes.HANDLE(b))
+    sys.stdout.write(json.dumps(out))
 
 
 def child_write_vs_read():
@@ -766,6 +809,24 @@ class ShimOverlappedTest(unittest.TestCase):
         self.assertFalse([l for l in lines
                           if 'SI_Read err' in l or 'SI_Write err' in l], lines)
 
+    def test_reopen_replaces_a_stale_handle(self):
+        """Review 2026-11-24: SI_Open with a handle already held kept it
+        without checking it was still the selected port's, so after a drop
+        and return every read and write went to the dead handle."""
+        try:
+            out, lines = run_child('--child-reopen-stale', self.pipe('ros'),
+                                   timeout=15)
+        except subprocess.TimeoutExpired:
+            self.fail('the re-open or the write after it never returned')
+        self.assertEqual((out['open1'], out['num'], out['open2']), (0, 1, 0),
+                         out)
+        self.assertEqual((out['write'], out['put']), (0, len(OPEN)), out)
+        self.assertEqual(bytes.fromhex(out['wire']), OPEN, out)
+        self.assertTrue([l for l in lines if 'handle held here is stale' in l],
+                        lines)
+        self.assertTrue([l for l in lines
+                         if 'replacing the stale handle held on' in l], lines)
+
     def test_silent_read_ends_at_the_backstop_as_a_timeout(self):
         try:
             out, lines = run_child('--child-silent-read', self.pipe('sr'),
@@ -1052,5 +1113,7 @@ if __name__ == '__main__':
         child_close_under_read_loop()
     elif sys.argv[1:] == ['--child-close-under-read']:
         child_close_under_read()
+    elif sys.argv[1:] == ['--child-reopen-stale']:
+        child_reopen_stale()
     else:
         unittest.main()

@@ -19,6 +19,8 @@
 const char shim_dll_tag[] = "usbxp";
 
 static HANDLE g_port = INVALID_HANDLE_VALUE;
+/* The port g_port was opened on (under g_port_lock, like g_port). */
+static char g_port_name[SHIM_PORT_MAX];
 static DWORD g_read_timeout = 1000;
 static DWORD g_write_timeout = 1000;
 
@@ -408,11 +410,21 @@ static void port_set_timeouts(HANDLE h)
  * only once it is configured, all under the exclusive lock: a second
  * SI_Open, or one racing another, finds the first caller's handle and keeps
  * it, and a failed open never touches it. The selection is resolved before
- * the lock is taken, since it may walk the device tree. */
+ * the lock is taken, since it may walk the device tree.
+ *
+ * A handle already held is kept only while it is the live one. The open is
+ * exclusive (share mode 0), so while it is, a second open of the selected
+ * port fails (ACCESS_DENIED on a COM port, PIPE_BUSY on a test pipe). An open
+ * that SUCCEEDS proves the held handle is not on that port: its device left
+ * USB and came back, or the selection now names another port. Before, a
+ * re-open kept the dead handle and every read and write went to it. The new
+ * handle replaces it and the old one is closed. g_close_lock is taken first,
+ * as close_port() takes it, so a close cannot race the swap. */
 static int open_port(void)
 {
     char port[SHIM_PORT_MAX], path[SHIM_PORT_MAX + 8];
-    HANDLE h;
+    char was[SHIM_PORT_MAX];
+    HANDLE h, old;
     DCB dcb;
 
     if (!shim_select_port(port, sizeof(port))) {
@@ -426,19 +438,21 @@ static int open_port(void)
     }
     sprintf_s(path, sizeof(path), "\\\\.\\%s", port);
 
+    AcquireSRWLockExclusive(&g_close_lock);
     AcquireSRWLockExclusive(&g_port_lock);
-    if (g_port != INVALID_HANDLE_VALUE) {
-        ReleaseSRWLockExclusive(&g_port_lock);
-        return 1;
-    }
+    old = g_port;
     h = CreateFileA(path, GENERIC_READ | GENERIC_WRITE, 0, NULL,
                     OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
     if (h == INVALID_HANDLE_VALUE) {
         DWORD err = GetLastError();
         ReleaseSRWLockExclusive(&g_port_lock);
+        ReleaseSRWLockExclusive(&g_close_lock);
+        if (old != INVALID_HANDLE_VALUE)
+            return 1;               /* the held handle is the live one */
         shim_log("open %s FAILED err=%lu %s", path, err, shim_err_name(err));
         return 0;
     }
+    strcpy_s(was, sizeof(was), g_port_name);
 
     ZeroMemory(&dcb, sizeof(dcb));
     dcb.DCBlength = sizeof(dcb);
@@ -462,9 +476,18 @@ static int open_port(void)
     PurgeComm(h, PURGE_RXCLEAR | PURGE_TXCLEAR);
 
     g_port = h;
+    strcpy_s(g_port_name, sizeof(g_port_name), port);
     InterlockedIncrement(&g_rx_gen);
     ReleaseSRWLockExclusive(&g_port_lock);
-    shim_log("opened %s", path);
+    ReleaseSRWLockExclusive(&g_close_lock);
+    if (old != INVALID_HANDLE_VALUE) {
+        /* Unpublished under the exclusive lock, which no I/O holds, so
+         * nothing can reach it any more. */
+        CloseHandle(old);
+        shim_log("opened %s, replacing the stale handle held on %s", path, was);
+    } else {
+        shim_log("opened %s", path);
+    }
     return 1;
 }
 
@@ -539,7 +562,13 @@ __declspec(dllexport) DWORD WINAPI SI_GetNumDevices(LPDWORD lpdwNumDevices)
     if (h != INVALID_HANDLE_VALUE)
         CloseHandle(h);
     if (lpdwNumDevices) *lpdwNumDevices = 1;
-    if (h != INVALID_HANDLE_VALUE)
+    if (h != INVALID_HANDLE_VALUE && held)
+        /* The exclusive probe opened, so the handle held here is not on
+         * this port: its device left and came back, or the selection moved.
+         * The next SI_Open replaces it (open_port()). */
+        shim_log("SI_GetNumDevices -> 1 (%s; the handle held here is stale:"
+                 " SI_Open replaces it)", port);
+    else if (h != INVALID_HANDLE_VALUE)
         shim_log("SI_GetNumDevices -> 1 (%s)", port);
     else if (err == ERROR_ACCESS_DENIED)
         shim_log("SI_GetNumDevices -> 1 (%s, already open here)", port);
