@@ -338,7 +338,8 @@ static uint16_t endpoint_used;
 /*
  * The deadband's memory.
  *
- * KEYED ON (source, field_id) AND NOT ON THE ENDPOINT, which looks like the
+ * KEYED ON (source, field_id, field_type) - the endpoint key, see
+ * endpoint_get_or_add() - AND NOT ON THE ENDPOINT, which looks like the
  * long way round until the battery row is considered: a `device_type == 0` row
  * writes its cluster onto the SOURCE'S PRIMARY endpoint, so a strap's battery
  * and that strap's occupancy boolean share one endpoint id. State indexed by
@@ -364,6 +365,7 @@ struct publish_state {
 	bool     valid;   /* this slot is allocated AND has a last value */
 	uint32_t source;
 	uint8_t  field_id;
+	uint8_t  field_type; /* part of the key, as for endpoints */
 	int64_t  last;    /* the last value written, in the cluster's units */
 	uint64_t last_us; /* ...at this sample time */
 };
@@ -447,13 +449,15 @@ const struct radiant_matter_endpoint *radiant_matter_endpoint_at(uint16_t i)
 }
 
 const struct radiant_matter_endpoint *radiant_matter_endpoint_for(uint32_t source,
-								  uint8_t field_id)
+								  uint8_t field_id,
+								  uint8_t field_type)
 {
 	uint16_t i;
 
 	for (i = 0u; i < endpoint_used; i++) {
 		if (endpoints[i].in_use && endpoints[i].source == source &&
-		    endpoints[i].field_id == field_id) {
+		    endpoints[i].field_id == field_id &&
+		    endpoints[i].field_type == field_type) {
 			return &endpoints[i];
 		}
 	}
@@ -479,10 +483,14 @@ static const struct radiant_matter_endpoint *endpoint_primary_for(uint32_t sourc
 }
 
 /*
- * Instantiates on first sight of a (source, field_id) whose type has a row.
- * Keyed on field_id, not field_type (section 8.1): the four derived booleans
- * of section 6 are all type 0x02, and keying on type would collapse them
- * into one contested endpoint instead of four instances of one row.
+ * Instantiates on first sight of a (source, field_id, field_type) whose type
+ * has a row. Keyed on field_id (section 8.1): the four derived booleans of
+ * section 6 are all type 0x02, and keying on type alone would collapse them
+ * into one contested endpoint instead of four instances of one row. And on
+ * field_type as well, because a field_id is unique only within one producer:
+ * an Environment sensor's temperature (field 0) and the WORN rule's output
+ * (field 0) on the same source are two series, and keyed on the id alone the
+ * second one to arrive was written onto the first one's endpoint.
  */
 static const struct radiant_matter_endpoint *endpoint_get_or_add(
 	const struct radiant_sample *s, const struct radiant_matter_type_map *row)
@@ -491,7 +499,7 @@ static const struct radiant_matter_endpoint *endpoint_get_or_add(
 	struct radiant_matter_endpoint *e;
 	uint8_t i;
 
-	found = radiant_matter_endpoint_for(s->source, s->field_id);
+	found = radiant_matter_endpoint_for(s->source, s->field_id, s->field_type);
 	if (found != NULL) {
 		return found;
 	}
@@ -555,6 +563,7 @@ static const struct radiant_matter_endpoint *endpoint_get_or_add(
 	e->field_id = s->field_id;
 	e->field_type = s->field_type;
 	e->device_type = row->device_type;
+	e->derived = (s->flags & RADIANT_SAMPLE_DERIVED) != 0u;
 	e->in_use = true;
 
 	LOG_INF("endpoint %u: source %u field %u type 0x%02x -> devtype 0x%04x "
@@ -613,7 +622,8 @@ static bool deadband_admit(const struct radiant_sample *s,
 
 	for (i = 0u; i < ARRAY_SIZE(published); i++) {
 		if (published[i].valid && published[i].source == s->source &&
-		    published[i].field_id == s->field_id) {
+		    published[i].field_id == s->field_id &&
+		    published[i].field_type == s->field_type) {
 			slot = &published[i];
 			break;
 		}
@@ -632,6 +642,7 @@ static bool deadband_admit(const struct radiant_sample *s,
 		free_slot->valid = true;
 		free_slot->source = s->source;
 		free_slot->field_id = s->field_id;
+		free_slot->field_type = s->field_type;
 		free_slot->last = value;
 		free_slot->last_us = s->t_us;
 		return true;

@@ -230,6 +230,34 @@ static bool dwell_update(bool raw, uint64_t *edge_us, bool *raw_prev,
 	return changed;
 }
 
+/*
+ * ANT+ Environment's device type, spelled here with the citation rather than
+ * by including radiant_profile_env.h, the way FEC_STATE_IN_USE is below: the
+ * bridge sits above the profile decoders. The pairing bit (bit 7) is masked
+ * off before the compare.
+ */
+#define ENV_DEVICE_TYPE 0x19u
+#define DEVTYPE_ID_MASK 0x7Fu
+
+/*
+ * WORN IS NOT A THERMOMETER'S OUTPUT. An Environment sensor posts its page 1
+ * event count as RADIANT_FIELD_EVENT_COUNT (radiant_env_adapter.c), so it
+ * lands in the WORN slot, and since the count steps on every message a
+ * thermometer on a shelf "was worn" two seconds after it was heard - posted on
+ * field_id 0, the id its temperature uses. "Worn" (section 6.1) is a strap on
+ * a body; a sensor counting its own broadcasts has no such state.
+ *
+ * Gated on the BINDING, so an unbound source (every test that posts raw
+ * accumulators) keeps the rule. Only WORN: no Environment series feeds the
+ * ACTIVE slot, and the zone and equipment rules are not driven by this one.
+ */
+static bool worn_excluded(uint32_t source)
+{
+	const struct radiant_binding *b = radiant_binding_get(source);
+
+	return b != NULL && (b->devtype & DEVTYPE_ID_MASK) == ENV_DEVICE_TYPE;
+}
+
 static void eval_activity(uint32_t source, const struct radiant_sample *s)
 {
 	/* The slot, not a member of the slot: see the block comment on
@@ -244,6 +272,10 @@ static void eval_activity(uint32_t source, const struct radiant_sample *s)
 	bool     stale = (s->flags & RADIANT_SAMPLE_STALE) != 0u;
 	uint64_t t = s->t_us;
 	bool     desired;
+
+	if (slot == ACTIVITY_SLOT_WORN && worn_excluded(source)) {
+		return;
+	}
 
 	a->tracked = true;
 

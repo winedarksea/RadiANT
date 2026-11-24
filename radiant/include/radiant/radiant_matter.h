@@ -249,15 +249,31 @@ struct radiant_matter_endpoint {
 	uint8_t  field_type;
 	uint16_t device_type;
 	bool     in_use;
+	/* Created from a RADIANT_SAMPLE_DERIVED sample (a radiant_rules.c
+	 * output) rather than a measurement. The glue keeps a derived
+	 * endpoint's persisted UniqueID in its original form and adds the
+	 * field type to a measured one's - see ant_bridge.cpp. */
+	bool     derived;
 };
 
 uint16_t radiant_matter_endpoint_count(void);
 const struct radiant_matter_endpoint *radiant_matter_endpoint_at(uint16_t i);
 
-/* Finds the endpoint carrying one (source, field_id), or NULL. Endpoint
- * numbers are assigned, not derived from any fixed identity. */
+/*
+ * Finds the endpoint carrying one (source, field_id, field_type), or NULL.
+ * Endpoint numbers are assigned, not derived from any fixed identity.
+ *
+ * THE TYPE IS PART OF THE KEY. A field_id is unique per source only within
+ * one producer: radiant_rules.c posts its derived booleans on the same source
+ * from id 0 (RADIANT_RULE_FIELD_WORN), over the profile adapter's block, and
+ * an Environment sensor's temperature is field 0 too. Keyed on
+ * (source, field_id) alone, WORN on a thermometer was written to the
+ * temperature endpoint, or turned it into an occupancy sensor when WORN
+ * arrived first.
+ */
 const struct radiant_matter_endpoint *radiant_matter_endpoint_for(uint32_t source,
-								  uint8_t field_id);
+								  uint8_t field_id,
+								  uint8_t field_type);
 
 /* The seam a real Matter stack plugs into. Weak, so tests and a stack-free
  * build get a no-op that still exercises everything above it; an image with

@@ -19,6 +19,7 @@
 #include <zephyr/ztest.h>
 
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "bridge_storage_codec.h"
@@ -1307,6 +1308,140 @@ ZTEST(matter_storage, test_label_persist_one_charge_per_rename_event_per_source)
 	b.Pass("Indoor Bike 2 Speed", 5);
 	zassert_equal(b.writes, ModelSource::kRows, "a busy source spent another source's budget");
 	zassert_equal(b.budget.used, 1);
+}
+
+/* ---- UniqueID forms (TODO 2026-11-24) ----------------------------------- */
+
+namespace
+{
+constexpr uint64_t kKey = 0x3f2a91c40e77b212ULL;
+constexpr uint8_t kTypeTemperature = 0x10; /* RADIANT_FIELD_TEMPERATURE */
+constexpr uint8_t kTypeOccupancy = 0x02;   /* RADIANT_FIELD_OCCUPANCY */
+} /* namespace */
+
+ZTEST(matter_storage, test_unique_id_derived_is_the_old_form_byte_for_byte)
+{
+	static const uint64_t keys[] = { kKey, 0, UINT64_MAX, 0x00000001ffffffffULL, 0xabcdef0000000000ULL };
+	static const uint8_t ids[] = { 0, 1, 4, 0x26, 0xff };
+	char got[kUniqueIDSize + 1];
+	char old[kUniqueIDSize + 1];
+
+	/* A known vector, then the formatter ant_bridge.cpp used before. */
+	zassert_equal(UniqueId::Format(got, sizeof(got), kKey, 5, kTypeOccupancy, true), 18u);
+	zassert_mem_equal(got, "3f2a91c40e77b21205", 19);
+
+	for (size_t k = 0; k < ARRAY_SIZE(keys); k++) {
+		for (size_t i = 0; i < ARRAY_SIZE(ids); i++) {
+			snprintf(old, sizeof(old), "%08x%08x%02x", static_cast<unsigned int>(keys[k] >> 32),
+				 static_cast<unsigned int>(keys[k] & 0xFFFFFFFFu), ids[i]);
+			/* The field type does not enter a derived id. */
+			zassert_equal(UniqueId::Format(got, sizeof(got), keys[k], ids[i], kTypeTemperature, true),
+				      UniqueId::kDerivedLength);
+			zassert_mem_equal(got, old, UniqueId::kDerivedLength + 1, "key %u/%u id %u", (unsigned)k,
+					  (unsigned)i, ids[i]);
+		}
+	}
+}
+
+ZTEST(matter_storage, test_unique_id_measured_carries_the_field_type)
+{
+	char temp[kUniqueIDSize + 1];
+	char other[kUniqueIDSize + 1];
+	char derived[kUniqueIDSize + 1];
+
+	zassert_equal(UniqueId::Format(temp, sizeof(temp), kKey, 0, kTypeTemperature, false), 21u);
+	zassert_mem_equal(temp, "3f2a91c40e77b21200t10", 22);
+	zassert_equal(strlen(temp), UniqueId::kMeasuredLength);
+
+	/* Within Matter's 32 and a stored record's 31 plus NUL. */
+	zassert_true(UniqueId::kMeasuredLength <= UniqueId::kMatterMaxLength);
+	zassert_true(UniqueId::kMeasuredLength < kUniqueIDSize);
+
+	/* Same sensor and field id: another type, or the rule output on that id,
+	 * is another device. */
+	zassert_equal(UniqueId::Format(other, sizeof(other), kKey, 0, kTypeOccupancy, false), 21u);
+	zassert_true(strcmp(temp, other) != 0);
+	zassert_equal(UniqueId::Format(derived, sizeof(derived), kKey, 0, kTypeTemperature, true), 18u);
+	zassert_true(strcmp(temp, derived) != 0);
+	/* And the measured form is the derived one plus the suffix, so the stored
+	 * prefix still reads as the sensor's key and field. */
+	zassert_mem_equal(temp, derived, UniqueId::kDerivedLength);
+	zassert_mem_equal(temp + UniqueId::kDerivedLength, "t10", 4);
+}
+
+ZTEST(matter_storage, test_unique_id_refuses_a_buffer_without_room_for_the_nul)
+{
+	char buf[kUniqueIDSize + 1];
+
+	memset(buf, 'x', sizeof(buf));
+	zassert_equal(UniqueId::Format(buf, UniqueId::kMeasuredLength, kKey, 0, kTypeTemperature, false), 0u);
+	zassert_equal(buf[0], '\0');
+	zassert_equal(buf[1], 'x', "wrote past the refusal");
+	zassert_equal(UniqueId::Format(buf, UniqueId::kMeasuredLength + 1, kKey, 0, kTypeTemperature, false),
+		      UniqueId::kMeasuredLength);
+	zassert_equal(buf[UniqueId::kMeasuredLength], '\0');
+
+	zassert_equal(UniqueId::Format(buf, UniqueId::kDerivedLength, kKey, 0, 0, true), 0u);
+	zassert_equal(UniqueId::Format(buf, UniqueId::kDerivedLength + 1, kKey, 0, 0, true),
+		      UniqueId::kDerivedLength);
+	zassert_equal(UniqueId::Format(nullptr, 64, kKey, 0, 0, true), 0u);
+	zassert_equal(UniqueId::Format(buf, 0, kKey, 0, 0, true), 0u);
+}
+
+/* ---- orphan collection (TODO 2026-11-24) -------------------------------- */
+
+namespace
+{
+/* ant_bridge.cpp's RestoredDevice, as far as the policy reads it. */
+struct ModelRestored {
+	bool used;
+	bool claimed;
+};
+} /* namespace */
+
+ZTEST(matter_storage, test_orphan_collected_only_when_the_bridge_is_full)
+{
+	zassert_false(Orphans::Needed(0, 16));
+	zassert_false(Orphans::Needed(15, 16));
+	zassert_true(Orphans::Needed(16, 16));
+	zassert_true(Orphans::Needed(17, 16));
+}
+
+ZTEST(matter_storage, test_orphan_pick_is_the_oldest_unclaimed)
+{
+	/* Creation order: 0 claimed, 1 a skipped (unreadable) record, 2 and 3
+	 * unclaimed. 2 is the oldest orphan. */
+	ModelRestored r[] = { { true, true }, { false, false }, { true, false }, { true, false } };
+
+	zassert_equal(Orphans::PickOldest(r, ARRAY_SIZE(r)), 2);
+
+	/* Collected (ant_bridge.cpp clears `used`): the next one is 3. */
+	r[2].used = false;
+	zassert_equal(Orphans::PickOldest(r, ARRAY_SIZE(r)), 3);
+
+	/* A claim before collection takes it out of the running. */
+	r[3].claimed = true;
+	zassert_equal(Orphans::PickOldest(r, ARRAY_SIZE(r)), Orphans::kNone);
+}
+
+ZTEST(matter_storage, test_orphan_none_when_every_restored_endpoint_is_claimed)
+{
+	ModelRestored all[16];
+
+	for (size_t i = 0; i < ARRAY_SIZE(all); i++) {
+		all[i].used = true;
+		all[i].claimed = true;
+	}
+	zassert_equal(Orphans::PickOldest(all, ARRAY_SIZE(all)), Orphans::kNone);
+
+	ModelRestored none[4] = {};
+
+	zassert_equal(Orphans::PickOldest(none, ARRAY_SIZE(none)), Orphans::kNone);
+	zassert_equal(Orphans::PickOldest(static_cast<const ModelRestored *>(nullptr), 4), Orphans::kNone);
+
+	/* The last entry alone. */
+	all[15].claimed = false;
+	zassert_equal(Orphans::PickOldest(all, ARRAY_SIZE(all)), 15);
 }
 
 /* ---- lengths near SIZE_MAX: `counter + length` wraps ------------------- */

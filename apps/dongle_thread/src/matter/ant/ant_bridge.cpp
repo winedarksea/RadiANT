@@ -62,7 +62,11 @@
  *
  * What IS stable across a reboot is the sensor's ANT channel identity, so the
  * key persisted here is a 64-bit FNV-1a hash of (devnum, devtype, trans_type),
- * paired with the field_id. Two consequences, stated because neither is free:
+ * paired with the field_id - and, for a measured field, the field type too,
+ * since radiant_matter.c keys endpoints on (source, field_id, field_type)
+ * (bridge_storage_codec.h's UniqueId has both forms). Unclaimed restored
+ * endpoints are collected only when the bridge is full (Orphans, same
+ * header). Two consequences, stated because neither is free:
  *
  *   - radiant_binding.h opens with "nothing downstream may key on an ANT
  *     device number", and this is downstream and does key on one. The rule is
@@ -180,6 +184,9 @@ struct Row {
 	 * deviceType inside ComposeLabel(); see that function. */
 	uint8_t fieldType;
 	uint16_t deviceType;
+	/* A rule output (struct radiant_matter_endpoint::derived): picks the
+	 * UniqueID form, see RowUniqueID(). */
+	bool derived;
 
 	/* Filled in on the CHIP thread when the device is created or adopted
 	 * from storage. kInvalidEndpointId until then. */
@@ -244,7 +251,10 @@ constexpr size_t kStoredLabelMax = Nrf::MatterBridgedDevice::kNodeLabelSize - 1;
  * Devices loaded from persistent storage at boot. They already exist as CHIP
  * endpoints by the time anything below runs - RestoreBridgedDevices() creates
  * them inside BridgeManager::Init() - and sit here unclaimed until a sample
- * from the matching sensor arrives and adopts one.
+ * from the matching sensor arrives and adopts one, or until the bridge runs
+ * out of device slots and the oldest unclaimed one is collected
+ * (CollectOrphanIfFull()). In stored index order, which is creation order
+ * (bridge_storage_codec.h's Orphans). CHIP thread only.
  */
 struct RestoredDevice {
 	bool used;
@@ -298,12 +308,23 @@ uint64_t StableKey(const struct radiant_binding *b)
 	return h;
 }
 
-void FormatUniqueID(char *out, size_t len, uint64_t key, uint8_t fieldId)
+/*
+ * The row's UniqueID: bridge_storage_codec.h's UniqueId, where both forms are
+ * stated and tested. A derived row (a rule output) keeps the 18-character form
+ * every endpoint had before 2026-11-24, so the occupancy endpoints a
+ * controller already knows are adopted unchanged; a measured row adds its
+ * field type, matching radiant_matter.c's (source, field_id, field_type) key.
+ * Fixed width either way, so a truncated compare can never match the wrong
+ * device.
+ */
+static_assert(RadiantMatter::UniqueId::kMeasuredLength < Nrf::MatterBridgedDevice::kUniqueIDSize,
+	      "a measured UniqueID must fit a stored record with its NUL");
+static_assert(Nrf::MatterBridgedDevice::kUniqueIDSize <= RadiantMatter::UniqueId::kMatterMaxLength,
+	      "UniqueID is at most 32 characters in Matter");
+
+void RowUniqueID(char *out, size_t len, uint64_t key, const Row &row)
 {
-	/* 18 characters plus a NUL, against kUniqueIDSize = 32. Fixed width so
-	 * that a truncated compare can never match the wrong device. */
-	snprintf(out, len, "%08x%08x%02x", static_cast<unsigned int>(key >> 32),
-		 static_cast<unsigned int>(key & 0xFFFFFFFFu), fieldId);
+	(void)RadiantMatter::UniqueId::Format(out, len, key, row.fieldId, row.fieldType, row.derived);
 }
 
 /*
@@ -437,6 +458,7 @@ Row *AllocRow(uint16_t radiantEndpoint)
 		r.fieldId = e->field_id;
 		r.fieldType = e->field_type;
 		r.deviceType = e->device_type;
+		r.derived = e->derived;
 		r.chipEndpoint = kInvalidEndpointId;
 		r.needCreate = true;
 		return &r;
@@ -495,6 +517,66 @@ void PersistIndexes()
 }
 
 /*
+ * Removes a restored, unclaimed endpoint and its stored record: the removal
+ * sequence RemoveEndpointForRow() uses. BridgeManager frees the device and its
+ * provider with the pair, so the entry's provider pointer goes too. CHIP
+ * thread. False, with the entry left as it was, if BridgeManager would not
+ * remove it; the caller then creates nothing this pass and the 1 Hz retry
+ * asks again.
+ */
+bool RetireRestored(RestoredDevice &rd, const char *why)
+{
+	uint8_t pairIndex = 0;
+
+	if (Nrf::BridgeManager::Instance().RemoveBridgedDevice(rd.endpointId, pairIndex) != CHIP_NO_ERROR) {
+		LOG_ERR("matter: cannot remove stored endpoint %u (%s)", rd.endpointId, why);
+		return false;
+	}
+	Nrf::BridgeStorageManager::Instance().RemoveBridgedDevice(pairIndex);
+	PersistIndexes();
+	LOG_INF("matter: removed stored endpoint %u (%s, type 0x%04x): %s", rd.endpointId, rd.uniqueID,
+		rd.deviceType, why);
+	rd.used = false;
+	rd.provider = nullptr;
+	return true;
+}
+
+/*
+ * THE ORPHAN COLLECTOR (bridge_storage_codec.h's Orphans). Called by
+ * CreateEndpointForRow() just before it creates, so it runs only when a row
+ * actually needs a device. It removes the oldest unclaimed restored endpoint,
+ * and only when the bridge has no free device slot: a sensor that is merely
+ * away keeps its endpoint while there is room.
+ *
+ * HOW THE 1 Hz RETRY REACHES IT. A row whose creation failed keeps needCreate
+ * set (FlushHandler), AnythingDirty() reports needCreate, and the pacer then
+ * schedules a flush, which calls CreateEndpointForRow() and so this - every
+ * second, for as long as the row waits. One orphan per attempt, and the
+ * attempt that collects one creates in the slot it freed.
+ *
+ * False if an orphan was found but could not be removed.
+ */
+bool CollectOrphanIfFull()
+{
+	uint8_t indexes[Nrf::BridgeManager::kMaxBridgedDevices];
+	uint8_t inUse = 0;
+
+	if (Nrf::BridgeManager::Instance().GetDevicesIndexes(indexes, sizeof(indexes), inUse) != CHIP_NO_ERROR ||
+	    !RadiantMatter::Orphans::Needed(inUse, Nrf::BridgeManager::kMaxBridgedDevices)) {
+		return true;
+	}
+
+	const int pick = RadiantMatter::Orphans::PickOldest(sRestored, ARRAY_SIZE(sRestored));
+
+	if (pick == RadiantMatter::Orphans::kNone) {
+		/* Full of live endpoints: nothing to collect, and the create
+		 * below fails as it always did (create_failures). */
+		return true;
+	}
+	return RetireRestored(sRestored[pick], "orphan collected, bridge full");
+}
+
+/*
  * Creates the CHIP endpoint for a shadow row, or adopts the one a previous
  * boot left behind. Runs on the CHIP thread. Returns true when it ADOPTED a
  * stored endpoint (built unreachable at boot): the flush then makes this pass
@@ -511,7 +593,7 @@ bool CreateEndpointForRow(Row &row)
 	k_mutex_lock(&sShadowLock, K_FOREVER);
 	deviceType = row.deviceType;
 	key = sSources[row.source].key;
-	FormatUniqueID(uniqueID, sizeof(uniqueID), key, row.fieldId);
+	RowUniqueID(uniqueID, sizeof(uniqueID), key, row);
 	k_mutex_unlock(&sShadowLock);
 
 	ComposeLabel(nodeLabel, row);
@@ -527,9 +609,17 @@ bool CreateEndpointForRow(Row &row)
 			/* Same sensor and field, different Matter device type.
 			 * Matter forbids reusing an endpoint id for a
 			 * different device, so the stored one is retired
-			 * rather than repurposed. */
+			 * rather than repurposed - and RETIRED NOW, before the
+			 * new endpoint exists. It used to be left in place, so
+			 * the bridge then carried two endpoints with one
+			 * UniqueID, which the spec forbids (UniqueID is unique
+			 * per bridged device), until the next reboot restored
+			 * both again. */
 			LOG_WRN("matter: stored endpoint %u was device type 0x%04x, now 0x%04x - not reused",
 				rd.endpointId, rd.deviceType, deviceType);
+			if (!RetireRestored(rd, "device type changed")) {
+				return false;
+			}
 			continue;
 		}
 		rd.claimed = true;
@@ -561,6 +651,13 @@ bool CreateEndpointForRow(Row &row)
 		k_mutex_unlock(&sShadowLock);
 		LOG_INF("matter: adopted stored endpoint %u for %s", rd.endpointId, uniqueID);
 		return true;
+	}
+
+	/* Room first: on a full bridge the oldest unclaimed restored endpoint
+	 * gives up its slot. See CollectOrphanIfFull(). */
+	if (!CollectOrphanIfFull()) {
+		sCreateFailures++;
+		return false;
 	}
 
 	auto *provider = chip::Platform::New<RadiantMatter::AntDataProvider>(Nrf::BridgeManager::HandleUpdate,
@@ -670,7 +767,7 @@ bool PersistRowLabel(const Row &row, const char *nodeLabel)
 	key = sSources[row.source].key;
 	k_mutex_unlock(&sShadowLock);
 
-	FormatUniqueID(uniqueID, sizeof(uniqueID), key, row.fieldId);
+	RowUniqueID(uniqueID, sizeof(uniqueID), key, row);
 
 	stored.mEndpointId = row.chipEndpoint;
 	stored.mDeviceType = row.deviceType;

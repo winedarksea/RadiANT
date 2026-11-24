@@ -1743,10 +1743,20 @@ first was ever announced to Home Assistant. The derived samples are the ones
 that do not own the id space, so they are the ones that move; every other topic
 is unchanged.
 
-**The Matter plane needs no equivalent and does not get one.** `radiant_matter.c`
-maps only OCCUPANCY, TEMPERATURE, HUMIDITY, PRESSURE and BATTERY_SOC, so no
-endpoint is ever created for a profile-block id and `(source, field_id)` really
-is unique there — which is why persisted endpoint identities are untouched.
+**The Matter plane had the same collision.** This section used to say it could
+not, because `radiant_matter.c` maps only OCCUPANCY, TEMPERATURE, HUMIDITY,
+PRESSURE and BATTERY_SOC. But an Environment sensor's temperature is
+profile-block id 0, the id WORN is posted on, so WORN was written to the
+temperature endpoint, or turned it into an occupancy sensor when it arrived
+first. Since 2026-11-24 the Matter plane keys endpoints and deadbands on
+`(source, field_id, field_type)`, the WORN rule skips a source bound as
+Environment (device type 0x19), and a measured endpoint's persisted UniqueID
+carries its field type (`<key><id>t<type>`, 21 characters). Derived endpoints
+keep the 18-character `<key><id>` form, so the occupancy endpoints a controller
+already knows are adopted unchanged. A measured endpoint stored by an older
+build is not adopted. It stays as an orphan until the bridge runs out of device
+slots, and then the oldest unclaimed restored endpoint is removed first
+(`ant_bridge.cpp`, `CollectOrphanIfFull()`).
 
 ### 9.2 Discovery is the descriptor, transcribed
 

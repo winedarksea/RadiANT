@@ -977,6 +977,58 @@ ZTEST(radiant_rules, test_an_equipment_type_alone_asserts_nothing)
 	zassert_equal(cap_n, 0u);
 }
 
+/*
+ * WORN and an Environment sensor (TODO 2026-11-24). Its event count is
+ * RADIANT_FIELD_EVENT_COUNT and steps on every message, so it drove the WORN
+ * slot - posted on field 0, the field its temperature is, which the Matter
+ * plane then merged. WORN is skipped for a source BOUND as device type 0x19;
+ * an unbound source, which carries no device type at all, keeps the rule.
+ */
+static uint32_t worn_after_steady_count(uint32_t source)
+{
+	uint32_t i;
+
+	/* One step a second for five seconds: well past the 2 s assert. */
+	for (i = 0u; i <= 5u; i++) {
+		post_beats(source, (int64_t)i, (uint64_t)i * US_PER_S);
+	}
+	return count_with(RADIANT_RULE_FIELD_WORN);
+}
+
+ZTEST(radiant_rules, test_worn_is_not_produced_for_a_bound_environment_sensor)
+{
+	uint32_t source = RADIANT_BINDING_NONE;
+
+	zassert_equal(radiant_binding_bind(4321u, 0x19u, 5u, NULL, &source), 0);
+	zassert_equal(worn_after_steady_count(source), 0u);
+	zassert_equal(cap_n, 0u);
+}
+
+ZTEST(radiant_rules, test_worn_skip_ignores_the_pairing_bit)
+{
+	uint32_t source = RADIANT_BINDING_NONE;
+
+	zassert_equal(radiant_binding_bind(4321u, 0x99u, 5u, NULL, &source), 0);
+	zassert_equal(worn_after_steady_count(source), 0u);
+}
+
+ZTEST(radiant_rules, test_worn_is_kept_for_an_unbound_source_and_a_bound_strap)
+{
+	uint32_t strap = RADIANT_BINDING_NONE;
+
+	/* Unbound: no device type to judge by, so the rule runs as it always
+	 * has (every other case in this file depends on that). */
+	zassert_true(radiant_binding_get(5u) == NULL);
+	zassert_equal(worn_after_steady_count(5u), 1u);
+	zassert_equal(last_with(RADIANT_RULE_FIELD_WORN)->source, 5u);
+
+	cap_n = 0u;
+	zassert_equal(radiant_binding_bind(1234u, 0x78u, 1u, NULL, &strap), 0);
+	zassert_not_equal(strap, 5u);
+	zassert_equal(worn_after_steady_count(strap), 1u);
+	zassert_equal(last_with(RADIANT_RULE_FIELD_WORN)->raw, 1);
+}
+
 static void *rules_setup(void)
 {
 	return NULL;

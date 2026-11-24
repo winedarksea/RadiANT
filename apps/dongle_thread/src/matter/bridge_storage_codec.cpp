@@ -245,4 +245,49 @@ void Persisted(Stored &stored, uint32_t newHash)
 }
 
 } /* namespace LabelPersist */
+
+namespace UniqueId
+{
+
+namespace
+{
+/* `digits` lowercase hex digits of v, most significant first, zero-padded:
+ * what printf's %0<digits>x writes for a value that fits. */
+char *PutHex(char *p, uint64_t v, unsigned digits)
+{
+	static const char kHex[] = "0123456789abcdef";
+
+	for (unsigned i = digits; i > 0; i--) {
+		p[i - 1] = kHex[v & 0xFu];
+		v >>= 4;
+	}
+	return p + digits;
+}
+} /* namespace */
+
+size_t Format(char *out, size_t len, uint64_t key, uint8_t fieldId, uint8_t fieldType, bool derived)
+{
+	const size_t want = derived ? kDerivedLength : kMeasuredLength;
+	char *p = out;
+
+	if (out == nullptr || len == 0) {
+		return 0;
+	}
+	if (want > len - 1) {
+		out[0] = '\0';
+		return 0;
+	}
+
+	/* "%08x%08x" over the two halves is the 16 digits of the whole key. */
+	p = PutHex(p, key, 16);
+	p = PutHex(p, fieldId, 2);
+	if (!derived) {
+		*p++ = 't';
+		p = PutHex(p, fieldType, 2);
+	}
+	*p = '\0';
+	return want;
+}
+
+} /* namespace UniqueId */
 } /* namespace RadiantMatter */

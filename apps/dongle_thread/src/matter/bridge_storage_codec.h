@@ -368,4 +368,87 @@ Decision Decide(const Stored &stored, uint32_t newHash, Budget &budget, uint32_t
 void Persisted(Stored &stored, uint32_t newHash);
 
 } /* namespace LabelPersist */
+
+/*
+ * A bridged endpoint's UniqueID (the Matter core spec's Bridged Device Basic
+ * Information cluster: unique per bridged device, persistent, at most 32
+ * characters). It is what ant_bridge.cpp stores with each endpoint
+ * and matches at boot to adopt a restored one, so a change to it re-identifies
+ * the endpoint: the old record becomes an orphan (see Orphans below) and the
+ * controller sees a new device.
+ *
+ * `key` is the 64-bit hash of the sensor's ANT channel identity (TRAP 8 in
+ * ant_bridge.cpp); fieldId and fieldType are radiant_matter.c's endpoint key.
+ *
+ *   DERIVED  "%08x%08x%02x" over (key, fieldId): 18 characters, the form every
+ *            endpoint had before 2026-11-24, kept byte for byte so the HR and
+ *            FE-C occupancy endpoints a controller already knows are adopted
+ *            unchanged. The rule outputs own their ids (one producer), so the
+ *            id alone is unique among them.
+ *   MEASURED the same 18, then 't' and the field type in two hex digits: 21
+ *            characters. A measurement's field_id is unique only within its
+ *            producer, and radiant_matter.c keys on the type as well, so the
+ *            UniqueID has to: an Environment sensor's temperature and a WORN
+ *            output on field 0 of one source would otherwise share one.
+ *
+ * The two forms never collide: a derived id is 18 hex digits, a measured one
+ * is 21 characters with a 't'. Lowercase hex, zero-padded, as printf's %x.
+ */
+namespace UniqueId
+{
+
+constexpr size_t kDerivedLength = 18;
+constexpr size_t kMeasuredLength = 21;
+/* Matter's ceiling for the attribute. Both forms are well inside it and inside
+ * the stored record's 31 characters plus NUL. */
+constexpr size_t kMatterMaxLength = 32;
+
+/* Writes the NUL-terminated UniqueID into out[len] and returns its length, or
+ * 0 (and an empty string when len > 0) if it does not fit with its NUL. */
+size_t Format(char *out, size_t len, uint64_t key, uint8_t fieldId, uint8_t fieldType, bool derived);
+
+} /* namespace UniqueId */
+
+/*
+ * Restored endpoints nobody claims (TODO 2026-11-24). Every endpoint a
+ * previous boot stored is re-created at boot and waits, unreachable, for its
+ * sensor to adopt it. One whose sensor never comes back - a replaced sensor,
+ * a UniqueID scheme that changed, a device type the row no longer has - used
+ * to stay forever, and sixteen of them fill CHIP's dynamic endpoint table:
+ * every new row then failed to create, retried each second for good.
+ *
+ * The rule: an orphan is collected ONLY when the bridge has no free device
+ * slot (a sensor that is merely away keeps its endpoint while there is room),
+ * and then the OLDEST unclaimed one. ant_bridge.cpp's restored list is in the
+ * stored index order, which is BridgeManager's insertion order (it appends
+ * and closes gaps on removal), i.e. creation order, so the first unclaimed
+ * entry is the oldest.
+ */
+namespace Orphans
+{
+
+constexpr int kNone = -1;
+
+/* True when no device can be added without removing one first. */
+inline bool Needed(size_t devicesInUse, size_t maxDevices)
+{
+	return devicesInUse >= maxDevices;
+}
+
+/* The index of the oldest restored entry that is in use and unclaimed, or
+ * kNone. T has `used` and `claimed` (ant_bridge.cpp's RestoredDevice). */
+template <class T> int PickOldest(const T *restored, size_t count)
+{
+	if (restored == nullptr) {
+		return kNone;
+	}
+	for (size_t i = 0; i < count; i++) {
+		if (restored[i].used && !restored[i].claimed) {
+			return static_cast<int>(i);
+		}
+	}
+	return kNone;
+}
+
+} /* namespace Orphans */
 } /* namespace RadiantMatter */

@@ -12,8 +12,12 @@
 #include <zephyr/ztest.h>
 #include <string.h>
 
+#include <radiant/radiant_binding.h>
 #include <radiant/radiant_bridge.h>
+#include <radiant/radiant_env_adapter.h>
+#include <radiant/radiant_hr_adapter.h>
 #include <radiant/radiant_matter.h>
+#include <radiant/radiant_rules.h>
 
 /* ---------------------------------------------------------------------------
  * The seam, captured
@@ -281,7 +285,7 @@ ZTEST(radiant_matter, test_four_derived_booleans_are_four_endpoints_not_one)
 		s.flags = RADIANT_SAMPLE_DERIVED;
 		zassert_not_null(radiant_matter_row(s.field_type));
 		/* publish through the sink's own path */
-		e = radiant_matter_endpoint_for(s.source, s.field_id);
+		e = radiant_matter_endpoint_for(s.source, s.field_id, s.field_type);
 		zassert_is_null(e);
 	}
 }
@@ -299,7 +303,7 @@ ZTEST(radiant_matter, test_endpoints_are_assigned_on_first_sample_and_are_stable
 	radiant_bridge_drain();
 
 	zassert_equal(radiant_matter_endpoint_count(), 1u);
-	a = radiant_matter_endpoint_for(3u, 0u);
+	a = radiant_matter_endpoint_for(3u, 0u, RADIANT_FIELD_TEMPERATURE);
 	zassert_not_null(a);
 	zassert_not_equal(a->endpoint_id, 0u);
 	first_id = a->endpoint_id;
@@ -312,7 +316,7 @@ ZTEST(radiant_matter, test_endpoints_are_assigned_on_first_sample_and_are_stable
 	s = mk(3u, 0u, RADIANT_FIELD_TEMPERATURE, 29915, -2);
 	radiant_bridge_post(&s);
 	radiant_bridge_drain();
-	b = radiant_matter_endpoint_for(3u, 0u);
+	b = radiant_matter_endpoint_for(3u, 0u, RADIANT_FIELD_TEMPERATURE);
 	zassert_not_null(b);
 	zassert_equal(b->endpoint_id, first_id);
 	zassert_equal(radiant_matter_endpoint_count(), 1u);
@@ -333,8 +337,8 @@ ZTEST(radiant_matter, test_the_same_field_id_on_two_sources_is_two_endpoints)
 	radiant_bridge_drain();
 
 	zassert_equal(radiant_matter_endpoint_count(), 2u);
-	zassert_not_equal(radiant_matter_endpoint_for(1u, 0u)->endpoint_id,
-			  radiant_matter_endpoint_for(2u, 0u)->endpoint_id);
+	zassert_not_equal(radiant_matter_endpoint_for(1u, 0u, RADIANT_FIELD_OCCUPANCY)->endpoint_id,
+			  radiant_matter_endpoint_for(2u, 0u, RADIANT_FIELD_OCCUPANCY)->endpoint_id);
 }
 
 ZTEST(radiant_matter, test_a_declined_type_never_reaches_the_seam)
@@ -539,7 +543,7 @@ ZTEST(radiant_matter, test_a_battery_does_not_become_its_own_phantom_entity)
 	radiant_bridge_post(&s);
 	radiant_bridge_drain();
 	zassert_equal(radiant_matter_endpoint_count(), 1u);
-	primary = radiant_matter_endpoint_for(2u, 0u);
+	primary = radiant_matter_endpoint_for(2u, 0u, RADIANT_FIELD_OCCUPANCY);
 	zassert_not_null(primary);
 
 	s = mk(2u, 1u, RADIANT_FIELD_BATTERY_SOC, 80, 0);
@@ -851,8 +855,9 @@ ZTEST(radiant_matter, test_the_endpoint_ceiling_announces_itself)
 	}
 
 	zassert_equal(radiant_matter_endpoint_count(), RADIANT_MATTER_MAX_ENDPOINTS);
-	zassert_not_null(radiant_matter_endpoint_for(1u, 0u));
-	zassert_is_null(radiant_matter_endpoint_for(1u, (uint8_t)RADIANT_MATTER_MAX_ENDPOINTS));
+	zassert_not_null(radiant_matter_endpoint_for(1u, 0u, RADIANT_FIELD_OCCUPANCY));
+	zassert_is_null(radiant_matter_endpoint_for(1u, (uint8_t)RADIANT_MATTER_MAX_ENDPOINTS,
+						   RADIANT_FIELD_OCCUPANCY));
 }
 
 /*
@@ -881,8 +886,8 @@ ZTEST(radiant_matter, test_a_forgotten_source_releases_its_endpoints_for_reuse)
 	radiant_bridge_post(&s);
 	radiant_bridge_drain();
 
-	zassert_not_null(radiant_matter_endpoint_for(1u, 40u));
-	zassert_is_null(radiant_matter_endpoint_for(1u, 0u));
+	zassert_not_null(radiant_matter_endpoint_for(1u, 40u, RADIANT_FIELD_TEMPERATURE));
+	zassert_is_null(radiant_matter_endpoint_for(1u, 0u, RADIANT_FIELD_OCCUPANCY));
 	zassert_equal(radiant_matter_endpoint_count(), RADIANT_MATTER_MAX_ENDPOINTS);
 
 	/* And a rebound field starts with no deadband memory: the old sensor's
@@ -912,14 +917,14 @@ ZTEST(radiant_matter, test_a_forgotten_source_creates_nothing_until_admitted)
 	s.flags = RADIANT_SAMPLE_DERIVED;
 	radiant_bridge_post(&s);
 	radiant_bridge_drain();
-	zassert_not_null(radiant_matter_endpoint_for(3u, 0u));
+	zassert_not_null(radiant_matter_endpoint_for(3u, 0u, RADIANT_FIELD_OCCUPANCY));
 
 	/* Released, and the old sensor's last sample is drained after it. */
 	radiant_matter_forget_source(3u);
 	n_writes = 0u;
 	radiant_bridge_post(&s);
 	radiant_bridge_drain();
-	zassert_is_null(radiant_matter_endpoint_for(3u, 0u));
+	zassert_is_null(radiant_matter_endpoint_for(3u, 0u, RADIANT_FIELD_OCCUPANCY));
 	zassert_equal(n_writes, 0u);
 
 	/* The next sensor bound to the index: a fresh endpoint, constants and
@@ -927,10 +932,275 @@ ZTEST(radiant_matter, test_a_forgotten_source_creates_nothing_until_admitted)
 	radiant_matter_admit_source(3u);
 	radiant_bridge_post(&s);
 	radiant_bridge_drain();
-	zassert_not_null(radiant_matter_endpoint_for(3u, 0u));
+	zassert_not_null(radiant_matter_endpoint_for(3u, 0u, RADIANT_FIELD_OCCUPANCY));
 	zassert_equal(find_write(RADIANT_MATTER_CLUSTER_OCCUPANCY_SENSING,
 				 RADIANT_MATTER_ATTR_OCCUPANCY_SENSOR_TYPE, &v, NULL),
 		      1);
+	zassert_equal(v, RADIANT_MATTER_OCCUPANCY_TYPE_PHYSICAL_CONTACT);
+}
+
+/* ---------------------------------------------------------------------------
+ * One field_id, two series (TODO 2026-11-24)
+ *
+ * A field_id is unique per source only within one producer. An Environment
+ * sensor's temperature is field 0 (radiant_env_adapter.h) and the WORN rule
+ * posts field 0 as OCCUPANCY (radiant_rules.h), and both types have rows. Keyed
+ * on (source, field_id) the second series to arrive was written onto the first
+ * one's endpoint: WORN refused by a temperature endpoint, or, WORN first, an
+ * occupancy sensor where the temperature should be.
+ *
+ * These cases look endpoints up by enumeration rather than through
+ * radiant_matter_endpoint_for(), so that they say the same thing whatever the
+ * lookup's key is.
+ * ---------------------------------------------------------------------------
+ */
+
+static const struct radiant_matter_endpoint *find_endpoint(uint32_t source, uint8_t field_id,
+							   uint16_t device_type)
+{
+	uint16_t i;
+
+	for (i = 0u; i < radiant_matter_endpoint_count(); i++) {
+		const struct radiant_matter_endpoint *e = radiant_matter_endpoint_at(i);
+
+		if (e != NULL && e->in_use && e->source == source && e->field_id == field_id &&
+		    e->device_type == device_type) {
+			return e;
+		}
+	}
+	return NULL;
+}
+
+/* Writes of one attribute onto one endpoint. */
+static uint32_t writes_on(uint16_t endpoint_id, uint32_t cluster, uint32_t attribute)
+{
+	uint32_t i;
+	uint32_t n = 0u;
+
+	for (i = 0u; i < n_writes; i++) {
+		if (writes[i].endpoint_id == endpoint_id && writes[i].cluster == cluster &&
+		    writes[i].attribute == attribute) {
+			n++;
+		}
+	}
+	return n;
+}
+
+static void post_worn(uint32_t source, bool worn, uint64_t t_us)
+{
+	struct radiant_sample s = mk_at(source, 0u, RADIANT_FIELD_OCCUPANCY, worn ? 1 : 0, 0, t_us);
+
+	s.flags = RADIANT_SAMPLE_DERIVED;
+	post_drain(&s);
+}
+
+/* Both endpoints exist, carry their own device types, and each got its own
+ * series - nothing written across. */
+static void assert_temperature_and_worn_apart(uint32_t source)
+{
+	const struct radiant_matter_endpoint *temp =
+		find_endpoint(source, 0u, RADIANT_MATTER_DEVTYPE_TEMPERATURE_SENSOR);
+	const struct radiant_matter_endpoint *worn =
+		find_endpoint(source, 0u, RADIANT_MATTER_DEVTYPE_OCCUPANCY_SENSOR);
+
+	zassert_equal(radiant_matter_endpoint_count(), 2u, "got %u",
+		      (unsigned int)radiant_matter_endpoint_count());
+	zassert_not_null(temp, "no temperature endpoint");
+	zassert_not_null(worn, "no occupancy endpoint");
+	zassert_not_equal(temp->endpoint_id, worn->endpoint_id);
+
+	zassert_equal(writes_on(temp->endpoint_id, RADIANT_MATTER_CLUSTER_TEMP_MEASUREMENT,
+				RADIANT_MATTER_ATTR_MEASURED_VALUE),
+		      1u);
+	zassert_equal(writes_on(temp->endpoint_id, RADIANT_MATTER_CLUSTER_OCCUPANCY_SENSING,
+				RADIANT_MATTER_ATTR_OCCUPANCY),
+		      0u);
+	zassert_equal(writes_on(worn->endpoint_id, RADIANT_MATTER_CLUSTER_OCCUPANCY_SENSING,
+				RADIANT_MATTER_ATTR_OCCUPANCY),
+		      1u);
+	zassert_equal(writes_on(worn->endpoint_id, RADIANT_MATTER_CLUSTER_TEMP_MEASUREMENT,
+				RADIANT_MATTER_ATTR_MEASURED_VALUE),
+		      0u);
+	/* The occupancy endpoint's constants went to the occupancy endpoint. */
+	zassert_equal(writes_on(worn->endpoint_id, RADIANT_MATTER_CLUSTER_OCCUPANCY_SENSING,
+				RADIANT_MATTER_ATTR_OCCUPANCY_SENSOR_TYPE),
+		      1u);
+}
+
+ZTEST(radiant_matter, test_temperature_then_worn_on_one_field_id_are_two_endpoints)
+{
+	struct radiant_sample s;
+
+	s = mk_at(15u, 0u, RADIANT_FIELD_TEMPERATURE, 29815, -2, 1000000u);
+	post_drain(&s);
+	post_worn(15u, true, 2000000u);
+
+	assert_temperature_and_worn_apart(15u);
+}
+
+ZTEST(radiant_matter, test_worn_then_temperature_on_one_field_id_are_two_endpoints)
+{
+	struct radiant_sample s;
+
+	post_worn(15u, true, 1000000u);
+	s = mk_at(15u, 0u, RADIANT_FIELD_TEMPERATURE, 29815, -2, 2000000u);
+	post_drain(&s);
+
+	assert_temperature_and_worn_apart(15u);
+}
+
+ZTEST(radiant_matter, test_temperature_and_worn_on_one_field_id_deadband_apart)
+{
+	struct radiant_sample s;
+
+	/* 25.00 C, then WORN up and down. */
+	s = mk_at(16u, 0u, RADIANT_FIELD_TEMPERATURE, 29815, -2, 1000000u);
+	post_drain(&s);
+	post_worn(16u, true, 1100000u);
+	post_worn(16u, false, 1200000u);
+	zassert_equal(find_write(RADIANT_MATTER_CLUSTER_OCCUPANCY_SENSING, RADIANT_MATTER_ATTR_OCCUPANCY,
+				 NULL, NULL),
+		      2);
+
+	/* 25.20 C is inside the temperature's 0.5 C deadband measured from
+	 * 2500 - not from WORN's last 0, which would let it through. */
+	s = mk_at(16u, 0u, RADIANT_FIELD_TEMPERATURE, 29835, -2, 1300000u);
+	post_drain(&s);
+	zassert_equal(find_write(RADIANT_MATTER_CLUSTER_TEMP_MEASUREMENT,
+				 RADIANT_MATTER_ATTR_MEASURED_VALUE, NULL, NULL),
+		      1);
+
+	/* And WORN still moves on its own change, not against 2500. */
+	post_worn(16u, false, 1400000u);
+	zassert_equal(find_write(RADIANT_MATTER_CLUSTER_OCCUPANCY_SENSING, RADIANT_MATTER_ATTR_OCCUPANCY,
+				 NULL, NULL),
+		      2);
+	post_worn(16u, true, 1500000u);
+	zassert_equal(find_write(RADIANT_MATTER_CLUSTER_OCCUPANCY_SENSING, RADIANT_MATTER_ATTR_OCCUPANCY,
+				 NULL, NULL),
+		      3);
+}
+
+/* What the glue picks a UniqueID form from (ant_bridge.cpp RowUniqueID()). */
+ZTEST(radiant_matter, test_an_endpoint_records_whether_a_rule_made_it)
+{
+	struct radiant_sample s;
+
+	s = mk_at(17u, 0u, RADIANT_FIELD_TEMPERATURE, 29815, -2, 1000000u);
+	post_drain(&s);
+	post_worn(17u, true, 2000000u);
+
+	zassert_false(radiant_matter_endpoint_for(17u, 0u, RADIANT_FIELD_TEMPERATURE)->derived);
+	zassert_true(radiant_matter_endpoint_for(17u, 0u, RADIANT_FIELD_OCCUPANCY)->derived);
+	zassert_is_null(radiant_matter_endpoint_for(17u, 0u, RADIANT_FIELD_HUMIDITY));
+}
+
+/* ---------------------------------------------------------------------------
+ * The whole path: profile adapter -> rules -> Matter sink
+ *
+ * Every sink is live in every drain (RADIANT_SINK_DEFINE is a link-time array),
+ * so a sample an adapter posts reaches radiant_rules.c, whose derived output
+ * is posted back onto the bus and delivered to radiant_matter.c in the same
+ * radiant_bridge_drain(). The bus, the bindings, the rules and the Matter
+ * table are reset before each case, and again after it, so no binding this
+ * suite makes is seen by another suite.
+ * ---------------------------------------------------------------------------
+ */
+
+static void combo_reset(void *f)
+{
+	ARG_UNUSED(f);
+	radiant_bridge_reset();
+	radiant_binding_init();
+	radiant_rules_reset();
+	matter_before(NULL);
+}
+
+ZTEST_SUITE(radiant_matter_combo, NULL, NULL, combo_reset, combo_reset, NULL);
+
+/* Environment page 0x01 (radiant_profile_env.h): event count in byte 2, the
+ * 24-hour statistics invalid, the current temperature in 0.01 degC LE. */
+static void env_page1(uint8_t body[8], uint8_t event_count, int16_t centi_c)
+{
+	body[0] = RADIANT_PROFILE_ENV_PAGE_TEMPERATURE;
+	body[1] = 0xFFu;
+	body[2] = event_count;
+	body[3] = 0x00u;
+	body[4] = 0x80u; /* low 24 h 0x800: invalid */
+	body[5] = 0x80u; /* high 24 h 0x800: invalid */
+	body[6] = (uint8_t)((uint16_t)centi_c & 0xFFu);
+	body[7] = (uint8_t)(((uint16_t)centi_c >> 8) & 0xFFu);
+}
+
+ZTEST(radiant_matter_combo, test_a_bound_thermometer_gets_a_temperature_and_no_worn)
+{
+	struct radiant_env_adapter a;
+	uint8_t body[8];
+	uint32_t source = RADIANT_BINDING_NONE;
+	uint8_t i;
+	const struct radiant_matter_endpoint *temp;
+
+	zassert_equal(radiant_binding_bind(4321u, 0x19u, 5u, NULL, &source), 0);
+	radiant_env_adapter_init(&a);
+
+	/* Six messages a second apart: the event count steps on every one, which
+	 * is an advancing accumulator for well over the 2 s WORN dwell. */
+	for (i = 0u; i < 6u; i++) {
+		env_page1(body, i, 2150);
+		(void)radiant_env_adapter_decode(&a, source, body, (uint64_t)i * 1000000u);
+		radiant_bridge_drain();
+	}
+
+	temp = find_endpoint(source, RADIANT_ENV_FIELD_TEMPERATURE,
+			     RADIANT_MATTER_DEVTYPE_TEMPERATURE_SENSOR);
+	zassert_not_null(temp, "no temperature endpoint");
+	zassert_equal(find_write(RADIANT_MATTER_CLUSTER_OCCUPANCY_SENSING, RADIANT_MATTER_ATTR_OCCUPANCY,
+				 NULL, NULL),
+		      0, "WORN reached the Matter sink");
+	zassert_is_null(find_endpoint(source, RADIANT_RULE_FIELD_WORN,
+				      RADIANT_MATTER_DEVTYPE_OCCUPANCY_SENSOR));
+	zassert_equal(radiant_matter_endpoint_count(), 1u, "got %u",
+		      (unsigned int)radiant_matter_endpoint_count());
+	/* 21.50 C, written once (the rest are inside the deadband). */
+	zassert_equal(writes_on(temp->endpoint_id, RADIANT_MATTER_CLUSTER_TEMP_MEASUREMENT,
+				RADIANT_MATTER_ATTR_MEASURED_VALUE),
+		      1u);
+	zassert_equal(last.value, 2150);
+}
+
+ZTEST(radiant_matter_combo, test_a_bound_heart_rate_strap_still_gets_worn)
+{
+	struct radiant_hr_adapter a;
+	uint8_t body[8] = { 0 };
+	uint32_t source = RADIANT_BINDING_NONE;
+	uint8_t i;
+	const struct radiant_matter_endpoint *worn;
+	int64_t v = -1;
+
+	zassert_equal(radiant_binding_bind(1234u, 0x78u, 1u, NULL, &source), 0);
+	radiant_hr_adapter_init(&a);
+
+	/* Page 0, one beat a second at 60 bpm: beat time (1/1024 s) in bytes
+	 * 4-5, beat count in byte 6, computed bpm in byte 7. */
+	for (i = 0u; i < 6u; i++) {
+		uint16_t beat_time = (uint16_t)(i * 1024u);
+
+		body[0] = 0x00u;
+		body[4] = (uint8_t)(beat_time & 0xFFu);
+		body[5] = (uint8_t)(beat_time >> 8);
+		body[6] = i;
+		body[7] = 60u;
+		(void)radiant_hr_adapter_decode(&a, source, body, (uint64_t)i * 1000000u);
+		radiant_bridge_drain();
+	}
+
+	worn = find_endpoint(source, RADIANT_RULE_FIELD_WORN, RADIANT_MATTER_DEVTYPE_OCCUPANCY_SENSOR);
+	zassert_not_null(worn, "no WORN endpoint for a strap");
+	zassert_equal(writes_on(worn->endpoint_id, RADIANT_MATTER_CLUSTER_OCCUPANCY_SENSING,
+				RADIANT_MATTER_ATTR_OCCUPANCY),
+		      1u);
+	zassert_true(find_write(RADIANT_MATTER_CLUSTER_OCCUPANCY_SENSING,
+				RADIANT_MATTER_ATTR_OCCUPANCY_SENSOR_TYPE, &v, NULL) >= 1);
 	zassert_equal(v, RADIANT_MATTER_OCCUPANCY_TYPE_PHYSICAL_CONTACT);
 }
 
