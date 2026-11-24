@@ -95,6 +95,7 @@ captures/zwift-20261115-214118.pcap
 tools/zwift_shim/out/
 tools/zwift_shim/obj_a/
 tools/zwift_shim/obj_b/
+tools/zwift_shim/obj_t/
 tools/zwift_shim/build.bat
 
 # Gate G4 raw per-leg output stays on the bench machine (README says so).

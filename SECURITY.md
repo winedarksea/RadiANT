@@ -83,6 +83,25 @@ the bootloader's downgrade check compared 1 against 1 — inert, with no symptom
 Packages built after that date carry a real version; **packages published
 before it do not, and no downgrade protection should be assumed for them.**
 
+## The Zwift shim
+
+`tools/zwift_shim/` (two DLLs that let Zwift's `ANT_DLL.dll` reach a dongle on
+a COM port) is **always built locally**, from your checkout, with your own
+MSVC, by `scripts/zwift_ant_shim.ps1`. It is **not a release artifact**: no
+release carries it, no CI job builds it for distribution, and a copy from
+anywhere else should not be trusted. It runs inside Zwift's process and
+forwards every host write, Zwift's ANT+ network key included, so:
+
+- it drives only the port you select (`-Port` / `-Device`, kept as
+  `RADIANT_ANT_COM` / `RADIANT_ANT_DEVICE`) and reports no device when there
+  is no selection or it is ambiguous; it never guesses a port;
+- it is built with `/W4 /WX /sdl /guard:cf` and accepts only `COM1`..`COM999`
+  as a port name;
+- its log masks key material in reads and writes (`tools/zwift_shim/README.md`);
+- the installer replaces or deletes a file in the Zwift directory only if it
+  carries the shim's version resource (or is the one earlier build it knows by
+  hash), and runs no Python unless you name the interpreter.
+
 ## On-air security
 
 RadiANT's own link encryption is specified in `docs/radiant-security.md` and is

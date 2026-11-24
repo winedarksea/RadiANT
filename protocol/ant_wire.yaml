@@ -681,6 +681,17 @@ messages:
     source: "bridge, rev5.1 sec 9.5"
     verify: sdk-ant-shim
 
+  - name: MESG_SET_128BIT_NETWORK_KEY_ID
+    id: 0x76
+    direction: h2d
+    payload_len: 17
+    bridged: false
+    desc: "[network number, key[16]]. Not bridged, and listed because it
+           carries a key: the host trace, the parser-buffer wipe and the
+           Zwift shim's log mask everything after the network number. Rev 5.1
+           sec 9.5.2.25 (ANT_Set128BitNetworkKey)."
+    source: "rev5.1 sec 9.5.2.25"
+
   - name: MESG_HIGH_DUTY_SEARCH_MODE_ID
     id: 0x77
     direction: h2d
@@ -846,6 +857,19 @@ messages:
     desc: "[channel, cycles]."
     source: "bridge, rev5.1 sec 9.5"
     verify: sdk-ant-shim
+
+  - name: MESG_CRYPTO_KEY_NVM_OP_ID
+    id: 0x83
+    direction: h2d
+    payload_len: "3..18"
+    bridged: false
+    desc: "[operation, NVM key index, volatile key index] to load (operation
+           0x00), [operation, NVM key index, key[16]] to store (0x01). Not
+           bridged, and listed because a store carries a key: the host trace,
+           the parser-buffer wipe and the Zwift shim's log mask everything
+           after the NVM key index, whatever the operation byte says. Rev 5.1
+           sec 9.5.2.36 (System_CryptoKeyNVMOp)."
+    source: "rev5.1 sec 9.5.2.36"
 
   - name: MESG_ECS_ENABLE_ID
     id: 0x89

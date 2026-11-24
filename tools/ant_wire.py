@@ -314,6 +314,12 @@ MESG_EVENT_BUFFERING_CONFIG_ID = 0x74
 # [channel, priority]. [bridge, rev5.1 sec 9.5 + verify:sdk-ant-shim]
 MESG_SET_SEARCH_CH_PRIORITY_ID = 0x75
 
+# [network number, key[16]]. Not bridged, and listed because it carries a key:
+# the host trace, the parser-buffer wipe and the Zwift shim's log mask
+# everything after the network number. Rev 5.1 sec 9.5.2.25
+# (ANT_Set128BitNetworkKey). [rev5.1 sec 9.5.2.25]
+MESG_SET_128BIT_NETWORK_KEY_ID = 0x76
+
 # Advertised in the capabilities reply and deliberately not bridged: sdk-ant
 # has no single-chip API for it. Clearing the bit instead would make this
 # dongle report something no ANTUSB-m reports. [tools, readme]
@@ -400,6 +406,14 @@ MESG_SET_ENCRYPT_INFO_ID = 0x7F
 
 # [channel, cycles]. [bridge, rev5.1 sec 9.5 + verify:sdk-ant-shim]
 MESG_ACTIVE_SEARCH_SHARING_ID = 0x81
+
+# [operation, NVM key index, volatile key index] to load (operation 0x00),
+# [operation, NVM key index, key[16]] to store (0x01). Not bridged, and listed
+# because a store carries a key: the host trace, the parser-buffer wipe and the
+# Zwift shim's log mask everything after the NVM key index, whatever the
+# operation byte says. Rev 5.1 sec 9.5.2.36 (System_CryptoKeyNVMOp). [rev5.1
+# sec 9.5.2.36]
+MESG_CRYPTO_KEY_NVM_OP_ID = 0x83
 
 # [filler, enable]. Enhanced channel spacing. A Nordic extension: not in Rev
 # 5.1, and no witness inside this repository - the id was recovered by the Wave
@@ -1967,6 +1981,13 @@ MESSAGES = {
         "bridged": True,
         "desc": '[channel, priority].',
     },
+    0x76: {
+        "name": 'MESG_SET_128BIT_NETWORK_KEY_ID',
+        "direction": 'h2d',
+        "payload_len": 17,
+        "bridged": False,
+        "desc": "[network number, key[16]]. Not bridged, and listed because it carries a key: the host trace, the parser-buffer wipe and the Zwift shim's log mask everything after the network number. Rev 5.1 sec 9.5.2.25 (ANT_Set128BitNetworkKey).",
+    },
     0x77: {
         "name": 'MESG_HIGH_DUTY_SEARCH_MODE_ID',
         "direction": 'h2d',
@@ -2070,6 +2091,13 @@ MESSAGES = {
         "payload_len": 2,
         "bridged": True,
         "desc": '[channel, cycles].',
+    },
+    0x83: {
+        "name": 'MESG_CRYPTO_KEY_NVM_OP_ID',
+        "direction": 'h2d',
+        "payload_len": '3..18',
+        "bridged": False,
+        "desc": "[operation, NVM key index, volatile key index] to load (operation 0x00), [operation, NVM key index, key[16]] to store (0x01). Not bridged, and listed because a store carries a key: the host trace, the parser-buffer wipe and the Zwift shim's log mask everything after the NVM key index, whatever the operation byte says. Rev 5.1 sec 9.5.2.36 (System_CryptoKeyNVMOp).",
     },
     0x89: {
         "name": 'MESG_ECS_ENABLE_ID',

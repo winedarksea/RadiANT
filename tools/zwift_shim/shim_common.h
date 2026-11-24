@@ -55,8 +55,8 @@ void shim_log_loaded(const char *dll);
 /* RADIANT_SHIM_LOG_LEVEL, read once (default 1):
  *   0  setup/identity calls, errors, the "absent" reason
  *   1  + timed I/O lines (SI_Read/SI_Write, empty-read runs)
- *   2  + hex payload of every read and write (keys in a write masked), and
- *        SI_CheckRXQueue */
+ *   2  + hex payload of every read and write (keys masked, and only whole
+ *        frames whose checksum holds shown), and SI_CheckRXQueue */
 int shim_log_level(void);
 int shim_log_on(int level);          /* logging enabled at least at `level` */
 
@@ -70,6 +70,22 @@ const char *shim_err_name(DWORD err);
 LONGLONG shim_ticks(void);
 double shim_ms(LONGLONG from, LONGLONG to);
 
-const char *shim_port(void);
+/* Room for any port name shim_select_port() returns, with its NUL. */
+#define SHIM_PORT_MAX 72
+
+/* The port the user selected, in out ("COM11"), and 1; or 0 when there is no
+ * usable selection, with the reason logged once per change. Never a guess:
+ *   RADIANT_ANT_COM     a port name, COM1..COM999
+ *   RADIANT_ANT_DEVICE  a USB serial number, or a device instance id, of the
+ *                       port or of a device above it; it must name exactly
+ *                       one present COM port
+ * When both are set they must agree. Resolves afresh on every call (the
+ * device form survives a renumbered port), so never call it from DllMain:
+ * the device form walks the device tree. In shim_port.c, linked into the
+ * USBXpress DLL only. */
+int shim_select_port(char *out, size_t cap);
+
+/* "COM" and 1-3 digits, any case. */
+int shim_port_name_ok(const char *s);
 
 #endif /* SHIM_COMMON_H */

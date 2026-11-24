@@ -74,3 +74,18 @@ ZTEST(bridge_trace_sec, test_a_crypto_id_info_is_traced_whole_and_kept)
 {
 	check_crypto_id_info_whole();
 }
+
+ZTEST(bridge_trace_sec, test_a_128_bit_network_key_shows_only_its_network_number)
+{
+	check_network_key_128_masked();
+}
+
+ZTEST(bridge_trace_sec, test_an_nvm_crypto_key_op_shows_only_operation_and_index)
+{
+	check_crypto_key_nvm_masked();
+}
+
+ZTEST(bridge_trace_sec, test_a_checksum_error_logs_the_id_not_the_checksum)
+{
+	check_checksum_error_line_holds_no_checksum();
+}

@@ -249,6 +249,9 @@ def main() -> int:
     print("    ANT_DLL accepts only those two and ignores the product ID.")
     print("  * for the CC2652P stick, are the USBXpress shims installed?")
     print("    scripts\\zwift_ant_shim.ps1")
+    print("  * is a port selected for the shim (RADIANT_ANT_COM or")
+    print("    RADIANT_ANT_DEVICE)? With none it reports no device; the")
+    print("    RADIANT_SHIM_LOG log says why. scripts\\zwift_ant_shim.ps1 -ListDevices")
     return 1
 
 

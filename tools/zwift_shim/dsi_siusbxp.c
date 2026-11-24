@@ -22,10 +22,39 @@ static HANDLE g_port = INVALID_HANDLE_VALUE;
 static DWORD g_read_timeout = 1000;
 static DWORD g_write_timeout = 1000;
 
+/* Guards g_port. ANT_DLL reads on one thread and writes on another, and any
+ * thread may call SI_Close. Every call that uses the handle holds this SHARED
+ * for the whole call, I/O included, so a close can neither free the handle
+ * under a pending read or write nor let a write reach a reused handle value.
+ * Opening and closing take it EXCLUSIVE, and a new handle is published only
+ * once it is configured. Shared holders never wait for each other, so a read
+ * pending for its whole timeout still does not hold up a write; close_port()
+ * cancels pending I/O before it waits for the exclusive side. */
+static SRWLOCK g_port_lock = SRWLOCK_INIT;
+
+/* Set while close_port() runs: port_get() then refuses new I/O, so a read
+ * thread that re-enters SI_Read straight after its read was cancelled
+ * cannot start another one and make the close (and, with SRW queueing new
+ * shared requests behind the waiting exclusive one, every write) wait out
+ * its timeout. g_close_lock keeps two closers apart. */
+static volatile LONG g_closing;
+static SRWLOCK g_close_lock = SRWLOCK_INIT;
+
 /* ANT_DLL writes from more than one thread. The synchronous handle this shim
  * used to open kept each write's bytes together; with overlapped I/O this lock
- * does that for writers, without making a write wait for a pending read. */
+ * does that for writers, without making a write wait for a pending read.
+ * Taken inside g_port_lock (shared), never the other way round. */
 static SRWLOCK g_write_lock = SRWLOCK_INIT;
+
+/* The smallest read timeout SI_SetTimeouts accepts. 0 leaves COMMTIMEOUTS
+ * with no total timeout, so a read waits for a first byte forever, and the
+ * shim's backstop treats 0 as infinite too. */
+#define SHIM_MIN_READ_TIMEOUT_MS 1
+
+/* And the largest: a read longer than this returns empty and the caller
+ * reads again, which is all an "infinite" timeout needs, and nothing waits
+ * on a single read for longer. ANT_DLL asks for 1000. */
+#define SHIM_MAX_READ_TIMEOUT_MS 60000
 
 /* One manual-reset event per thread for its overlapped reads and writes,
  * created on first use and closed when the thread (or the DLL) goes. */
@@ -88,61 +117,189 @@ static void ant_ids(const unsigned char *b, DWORD n, char *out, size_t cap)
 
 /* -1 for a message that carries no key; for one that does, how many leading
  * body bytes are not key and may be logged: the network number of a network
- * key (0x46, which in a Zwift session is the licensed ANT+ key), the key
- * number of an encryption key (0x7E), the info type of an encryption-info
- * message setting the RNG seed (0x7F type 0x02), the channel and key length
- * of a RadiANT root key (0xF2), nothing of a pairing message (0xF5, whose
- * sub-command 0x02 is a private X25519 scalar). f is a whole frame. Mirrors
- * key_msg_keep() in apps/common/ant_serial_bridge.c. */
+ * key (0x46, which in a Zwift session is the licensed ANT+ key, and 0x76, its
+ * 128-bit form, Rev 5.1 sec 9.5.2.25), the key number of an encryption key
+ * (0x7E), the operation and NVM index of an NVM crypto key operation (0x83,
+ * whose store form carries a key, Rev 5.1 sec 9.5.2.36; the operation byte
+ * is not trusted to say which form it is), the info type of an
+ * encryption-info message setting the RNG seed (0x7F type 0x02), the channel
+ * and key length of a RadiANT root key (0xF2), nothing of a pairing message
+ * (0xF5, whose sub-command 0x02 is a private X25519 scalar). f is a whole
+ * frame. Mirrors key_msg_keep() in apps/common/ant_serial_bridge.c. */
 static int key_keep(const unsigned char *f)
 {
     switch (f[2]) {
-    case 0x46: case 0x7E: return 1;
+    case 0x46: case 0x76: case 0x7E: return 1;
     case 0x7F:            return f[1] >= 1 && f[3] == 0x02 ? 1 : -1;
-    case 0xF2:            return 2;
+    case 0x83: case 0xF2: return 2;
     case 0xF5:            return 0;
     default:              return -1;
     }
 }
 
-#define WRITE_DUMP_MAX 256          /* bytes; longer writes end in " ..." */
+#define FRAME_DUMP_MAX 256          /* bytes shown; more ends the line in " ..." */
 
-/* The level-2 hex of a write, with each key and its checksum (the XOR of the
- * key bytes once the header is known) shown as "..". Walks whole 0xA4 frames
- * that pass frame_ok() from the start of the buffer; from the first byte that
- * does not, only the count of what is left is logged, since no frame boundary
- * is known past it. Stateless: Zwift writes whole frames, so that tail is
- * empty in practice. */
+/* A level-2 dump being built: hex of whole frames, keys masked, and counts
+ * of bytes that were not part of one. */
+typedef struct {
+    char buf[FRAME_DUMP_MAX * 3 + 64];
+    char *o;
+    DWORD shown;
+    int full;
+} dump_t;
+
+static void dump_start(dump_t *d)
+{
+    d->o = d->buf;
+    d->buf[0] = '\0';
+    d->shown = 0;
+    d->full = 0;
+}
+
+#define DUMP_RESERVE 8              /* always room for " ..." and its NUL */
+
+/* Ends the dump with " ..." once it is full. */
+static void dump_close(dump_t *d)
+{
+    if (!d->full) {
+        memcpy(d->o, d->o == d->buf ? "..." : " ...", d->o == d->buf ? 4 : 5);
+        d->o += d->o == d->buf ? 3 : 4;
+        d->full = 1;
+    }
+}
+
+static size_t dump_room(const dump_t *d)
+{
+    return sizeof(d->buf) - (size_t)(d->o - d->buf);
+}
+
+static void dump_text(dump_t *d, const char *s)
+{
+    size_t need = strlen(s) + 2;    /* separator and NUL */
+
+    if (d->full)
+        return;
+    if (need + DUMP_RESERVE > dump_room(d)) {
+        dump_close(d);
+        return;
+    }
+    if (d->o != d->buf)
+        *d->o++ = ' ';
+    memcpy(d->o, s, need - 1);      /* with its NUL */
+    d->o += need - 2;
+}
+
+static void dump_unframed(dump_t *d, DWORD n)
+{
+    char t[48];
+
+    if (!n)
+        return;
+    sprintf_s(t, sizeof(t), "(+%lu bytes not whole frames)", n);
+    dump_text(d, t);
+}
+
+/* One whole frame that passed frame_ok(), with its key and checksum (the
+ * XOR of the key bytes once the header is known) shown as "..". */
+static void dump_frame(dump_t *d, const unsigned char *f, DWORD flen)
+{
+    static const char digits[] = "0123456789ABCDEF";
+    int keep = key_keep(f);
+    DWORD k;
+
+    for (k = 0; k < flen && !d->full; k++) {
+        int mask = keep >= 0 && k >= 3 + (DWORD)keep;
+        if (d->shown++ == FRAME_DUMP_MAX || dump_room(d) < 3 + DUMP_RESERVE) {
+            dump_close(d);
+            break;
+        }
+        if (d->o != d->buf)
+            *d->o++ = ' ';
+        *d->o++ = mask ? '.' : digits[f[k] >> 4];
+        *d->o++ = mask ? '.' : digits[f[k] & 15];
+        *d->o = '\0';
+    }
+}
+
+/* The level-2 hex of a write. Walks whole 0xA4 frames that pass frame_ok()
+ * from the start of the buffer; from the first byte that does not, only the
+ * count of what is left is logged, since no frame boundary is known past it.
+ * Stateless: Zwift writes whole frames, so that tail is empty in practice. */
 static const char *write_dump(const unsigned char *b, DWORD n)
 {
-    static __declspec(thread) char buf[WRITE_DUMP_MAX * 3 + 48];
-    static const char digits[] = "0123456789ABCDEF";
-    DWORD i = 0, k, shown = 0;
-    char *o = buf;
+    static __declspec(thread) dump_t d;
+    DWORD i = 0, flen;
 
-    DWORD flen;
-
+    dump_start(&d);
     while ((flen = frame_ok(b, n, i)) != 0) {
-        int keep = key_keep(b + i);
-        for (k = 0; k < flen; k++) {
-            int mask = keep >= 0 && k >= 3 + (DWORD)keep;
-            if (shown++ == WRITE_DUMP_MAX) {
-                memcpy(o, " ...", 5);       /* with its NUL */
-                return buf;
-            }
-            if (o != buf)
-                *o++ = ' ';
-            *o++ = mask ? '.' : digits[b[i + k] >> 4];
-            *o++ = mask ? '.' : digits[b[i + k] & 15];
-        }
+        dump_frame(&d, b + i, flen);
         i += flen;
     }
-    *o = '\0';
-    if (i < n)
-        sprintf_s(o, sizeof(buf) - (size_t)(o - buf),
-                  "%s(+%lu bytes not whole frames)", o == buf ? "" : " ",
-                  n - i);
-    return buf;
+    dump_unframed(&d, n - i);
+    return d.buf;
+}
+
+/* Reads are reassembled, since ANT_DLL reads one byte per SI_Read (60432 of
+ * them in the 2026-11-23 ride): a per-read dump would never see a frame. The
+ * reading thread keeps the frame it is in the middle of here, and the read
+ * that completes a frame logs it, masked like a write: a device that echoes
+ * (a console on another port, say) must not put a host's key in the log.
+ * Nothing inside a frame that fails its checksum is shown: its whole claimed
+ * length is counted and dropped, so key bytes cannot be re-read as a frame
+ * that happens to check. A LEN above RX_LEN_MAX drops only the sync byte.
+ * g_rx_gen moves on every open and receive flush, which discards a partial
+ * frame left from before. */
+#define RX_LEN_MAX 64               /* > RADIANT_WIRE_MAX_SIZE_VALUE (38) */
+static volatile LONG g_rx_gen;
+static __declspec(thread) unsigned char t_rx[RX_LEN_MAX + 4];
+static __declspec(thread) DWORD t_rx_n;
+static __declspec(thread) LONG t_rx_gen;
+
+/* The frames this read completed, or "" when it completed none and dropped
+ * nothing. */
+static const char *read_dump(const unsigned char *b, DWORD n)
+{
+    static __declspec(thread) dump_t d;
+    LONG gen = g_rx_gen;
+    DWORD i, drop = 0;
+
+    dump_start(&d);
+    if (t_rx_gen != gen) {
+        t_rx_gen = gen;
+        SecureZeroMemory(t_rx, sizeof(t_rx));
+        t_rx_n = 0;
+    }
+    for (i = 0; i < n; i++) {
+        unsigned char c = b[i];
+        if (t_rx_n == 0 && c != 0xA4) {
+            drop++;
+            continue;
+        }
+        t_rx[t_rx_n++] = c;
+        if (t_rx_n == 2 && t_rx[1] > RX_LEN_MAX) {
+            drop++;                 /* the sync byte; LEN may be one */
+            SecureZeroMemory(t_rx, sizeof(t_rx));
+            t_rx_n = 0;
+            if (c == 0xA4)
+                t_rx[t_rx_n++] = c;
+            else
+                drop++;
+            continue;
+        }
+        if (t_rx_n >= 2 && t_rx_n == (DWORD)t_rx[1] + 4) {
+            if (frame_ok(t_rx, t_rx_n, 0)) {
+                dump_unframed(&d, drop);
+                drop = 0;
+                dump_frame(&d, t_rx, t_rx_n);
+            } else {
+                drop += t_rx_n;
+            }
+            SecureZeroMemory(t_rx, t_rx_n);
+            t_rx_n = 0;
+        }
+    }
+    dump_unframed(&d, drop);
+    return d.buf;
 }
 
 /* Extra time past the read or write timeout before port_io() cancels an I/O
@@ -160,18 +317,18 @@ static DWORD io_backstop(DWORD timeout_ms)
     return timeout_ms + IO_BACKSTOP_MS;
 }
 
-/* One read or write on g_port, waited for here so callers keep blocking
- * semantics. The port is opened FILE_FLAG_OVERLAPPED because Windows runs
+/* One read or write on h, waited for here so callers keep blocking
+ * semantics. The caller holds g_port_lock shared, which keeps h open until
+ * this returns. The port is opened FILE_FLAG_OVERLAPPED because Windows runs
  * synchronous I/O on one handle one call at a time: a write then waits for
  * ANT_DLL's pending 1-byte read, which on a quiet radio lasts the whole read
  * timeout (89 of 250 writes held >=50 ms, up to 1348 ms, in the 2026-11-23
  * TI/Zwift session). A wait that passes backstop_ms cancels the I/O and
  * returns what arrived as success. On failure, GetLastError() holds the
- * I/O's error. */
-static BOOL port_io(BOOL write, void *buf, DWORD n, DWORD *done,
+ * I/O's error: ERROR_OPERATION_ABORTED when close_port() cancelled it. */
+static BOOL port_io(HANDLE h, BOOL write, void *buf, DWORD n, DWORD *done,
                     DWORD backstop_ms)
 {
-    HANDLE h = g_port;
     OVERLAPPED ov;
     BOOL ok;
     DWORD err;
@@ -212,31 +369,80 @@ static void close_thread_event(void)
     }
 }
 
+/* The handle under g_port_lock (shared), or INVALID_HANDLE_VALUE with the
+ * lock not held. Pair a valid return with port_put(). */
+static HANDLE port_get(void)
+{
+    HANDLE h;
+
+    AcquireSRWLockShared(&g_port_lock);
+    h = g_closing ? INVALID_HANDLE_VALUE : g_port;
+    if (h == INVALID_HANDLE_VALUE)
+        ReleaseSRWLockShared(&g_port_lock);
+    return h;
+}
+
+static void port_put(void)
+{
+    ReleaseSRWLockShared(&g_port_lock);
+}
+
+/* COMMTIMEOUTS for the current read and write timeouts. */
+static void port_set_timeouts(HANDLE h)
+{
+    COMMTIMEOUTS to;
+
+    to.ReadIntervalTimeout = 10;
+    to.ReadTotalTimeoutMultiplier = 0;
+    to.ReadTotalTimeoutConstant = g_read_timeout;
+    to.WriteTotalTimeoutMultiplier = 0;
+    to.WriteTotalTimeoutConstant = g_write_timeout;
+    SetCommTimeouts(h, &to);
+}
+
 /* A handle value ANT_DLL can hold that is obviously ours and never a real
  * kernel handle it might accidentally pass elsewhere. */
 #define SHIM_HANDLE ((HANDLE)(ULONG_PTR)0x51D0BEEF)
 
+/* Opens the selected port into a local handle and publishes it in g_port
+ * only once it is configured, all under the exclusive lock: a second
+ * SI_Open, or one racing another, finds the first caller's handle and keeps
+ * it, and a failed open never touches it. The selection is resolved before
+ * the lock is taken, since it may walk the device tree. */
 static int open_port(void)
 {
-    char path[64];
+    char port[SHIM_PORT_MAX], path[SHIM_PORT_MAX + 8];
+    HANDLE h;
     DCB dcb;
-    COMMTIMEOUTS to;
 
-    if (g_port != INVALID_HANDLE_VALUE)
+    if (!shim_select_port(port, sizeof(port))) {
+        AcquireSRWLockShared(&g_port_lock);
+        h = g_port;
+        ReleaseSRWLockShared(&g_port_lock);
+        if (h != INVALID_HANDLE_VALUE)
+            return 1;               /* already open; see SI_GetNumDevices */
+        shim_log("open: no port selected");
+        return 0;
+    }
+    sprintf_s(path, sizeof(path), "\\\\.\\%s", port);
+
+    AcquireSRWLockExclusive(&g_port_lock);
+    if (g_port != INVALID_HANDLE_VALUE) {
+        ReleaseSRWLockExclusive(&g_port_lock);
         return 1;
-
-    sprintf_s(path, sizeof(path), "\\\\.\\%s", shim_port());
-    g_port = CreateFileA(path, GENERIC_READ | GENERIC_WRITE, 0, NULL,
-                         OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
-    if (g_port == INVALID_HANDLE_VALUE) {
+    }
+    h = CreateFileA(path, GENERIC_READ | GENERIC_WRITE, 0, NULL,
+                    OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
+    if (h == INVALID_HANDLE_VALUE) {
         DWORD err = GetLastError();
+        ReleaseSRWLockExclusive(&g_port_lock);
         shim_log("open %s FAILED err=%lu %s", path, err, shim_err_name(err));
         return 0;
     }
 
     ZeroMemory(&dcb, sizeof(dcb));
     dcb.DCBlength = sizeof(dcb);
-    if (!GetCommState(g_port, &dcb)) {
+    if (!GetCommState(h, &dcb)) {
         shim_log("GetCommState failed err=%lu", GetLastError());
     }
     dcb.BaudRate = 57600;
@@ -251,45 +457,82 @@ static int open_port(void)
     dcb.fRtsControl = RTS_CONTROL_ENABLE;
     dcb.fOutX = FALSE;
     dcb.fInX = FALSE;
-    SetCommState(g_port, &dcb);
+    SetCommState(h, &dcb);
+    port_set_timeouts(h);
+    PurgeComm(h, PURGE_RXCLEAR | PURGE_TXCLEAR);
 
-    to.ReadIntervalTimeout = 10;
-    to.ReadTotalTimeoutMultiplier = 0;
-    to.ReadTotalTimeoutConstant = g_read_timeout;
-    to.WriteTotalTimeoutMultiplier = 0;
-    to.WriteTotalTimeoutConstant = g_write_timeout;
-    SetCommTimeouts(g_port, &to);
-
-    PurgeComm(g_port, PURGE_RXCLEAR | PURGE_TXCLEAR);
+    g_port = h;
+    InterlockedIncrement(&g_rx_gen);
+    ReleaseSRWLockExclusive(&g_port_lock);
     shim_log("opened %s", path);
     return 1;
 }
 
+/* Cancels whatever is pending on the port first: a read holds the shared
+ * lock for up to its timeout, and the exclusive side would otherwise wait it
+ * out. Then unpublishes the handle under the exclusive lock, which no I/O
+ * can hold, and closes it once nothing can reach it. */
 static void close_port(void)
 {
-    if (g_port != INVALID_HANDLE_VALUE) {
-        CloseHandle(g_port);
-        g_port = INVALID_HANDLE_VALUE;
-        shim_log("closed port");
+    HANDLE h;
+
+    AcquireSRWLockExclusive(&g_close_lock);
+    AcquireSRWLockShared(&g_port_lock);
+    h = g_port;
+    ReleaseSRWLockShared(&g_port_lock);
+    if (h == INVALID_HANDLE_VALUE) {
+        ReleaseSRWLockExclusive(&g_close_lock);
+        return;
     }
+    /* No new I/O from here; cancel whatever is pending until the last
+     * holder has gone. h stays open: only a closer, and g_close_lock
+     * admits one, closes it (DllMain's detach takes g_close_lock too). */
+    InterlockedExchange(&g_closing, 1);
+    while (CancelIoEx(h, NULL), !TryAcquireSRWLockExclusive(&g_port_lock))
+        Sleep(1);
+    g_port = INVALID_HANDLE_VALUE;
+    InterlockedExchange(&g_closing, 0);
+    ReleaseSRWLockExclusive(&g_port_lock);
+    ReleaseSRWLockExclusive(&g_close_lock);
+    CloseHandle(h);
+    shim_log("closed port");
 }
 
 /* ---- the USBXpress host API ------------------------------------------- */
 
 __declspec(dllexport) DWORD WINAPI SI_GetNumDevices(LPDWORD lpdwNumDevices)
 {
-    char path[64];
+    char port[SHIM_PORT_MAX], path[SHIM_PORT_MAX + 8];
     HANDLE h;
     DWORD err;
-    sprintf_s(path, sizeof(path), "\\\\.\\%s", shim_port());
+    int held;
+
+    AcquireSRWLockShared(&g_port_lock);
+    held = g_port != INVALID_HANDLE_VALUE;
+    ReleaseSRWLockShared(&g_port_lock);
+
+    /* No selection, an unusable one, or one that names no single present
+     * port: no device, the way ANT_DLL would see no stick plugged in. The
+     * reason is logged by shim_select_port() when it changes. */
+    if (!shim_select_port(port, sizeof(port))) {
+        if (lpdwNumDevices) *lpdwNumDevices = held ? 1 : 0;
+        if (held)
+            shim_log("SI_GetNumDevices -> 1 (open here, but the selection no"
+                     " longer resolves: port may be gone)");
+        else
+            shim_log("SI_GetNumDevices -> 0 (no port selected)");
+        return SI_SUCCESS;
+    }
+
+    sprintf_s(path, sizeof(path), "\\\\.\\%s", port);
     /* Report a device only if the port is really there, so ANT_DLL fails the
      * way it would with no stick plugged in rather than opening a ghost. */
     h = CreateFileA(path, GENERIC_READ | GENERIC_WRITE, 0, NULL,
                     OPEN_EXISTING, 0, NULL);
     err = GetLastError();
-    if (h == INVALID_HANDLE_VALUE && g_port == INVALID_HANDLE_VALUE) {
+    if (h == INVALID_HANDLE_VALUE && !held) {
         if (lpdwNumDevices) *lpdwNumDevices = 0;
-        shim_log("SI_GetNumDevices -> 0 (%s absent, err=%lu %s)", shim_port(),
+        shim_log("SI_GetNumDevices -> 0 (%s absent, err=%lu %s)", port,
                  err, shim_err_name(err));
         return SI_SUCCESS;
     }
@@ -297,16 +540,16 @@ __declspec(dllexport) DWORD WINAPI SI_GetNumDevices(LPDWORD lpdwNumDevices)
         CloseHandle(h);
     if (lpdwNumDevices) *lpdwNumDevices = 1;
     if (h != INVALID_HANDLE_VALUE)
-        shim_log("SI_GetNumDevices -> 1 (%s)", shim_port());
+        shim_log("SI_GetNumDevices -> 1 (%s)", port);
     else if (err == ERROR_ACCESS_DENIED)
-        shim_log("SI_GetNumDevices -> 1 (%s, already open here)", shim_port());
+        shim_log("SI_GetNumDevices -> 1 (%s, already open here)", port);
     else
         /* The probe's error is not "held by us", so the port this shim holds
          * may have left USB. The answer stays 1 (ANT_DLL behaves as before);
          * the line is evidence: the XDS110 left at 18:47:06 on 2026-11-23
          * and the old "already open here" line hid it. */
         shim_log("SI_GetNumDevices -> 1 (%s open here, but probe err=%lu %s: "
-                 "port may be gone)", shim_port(), err, shim_err_name(err));
+                 "port may be gone)", port, err, shim_err_name(err));
     return SI_SUCCESS;
 }
 
@@ -371,19 +614,25 @@ __declspec(dllexport) DWORD WINAPI SI_Read(HANDLE cyHandle, LPVOID lpBuffer,
                                            LPDWORD lpdwBytesReturned,
                                            OVERLAPPED *o)
 {
-    DWORD got = 0;
+    DWORD got = 0, err = 0;
     LONGLONG t0, t1;
+    HANDLE h;
     BOOL ok;
     (void)cyHandle; (void)o;
     if (lpdwBytesReturned) *lpdwBytesReturned = 0;
-    if (g_port == INVALID_HANDLE_VALUE || !lpBuffer)
+    if (!lpBuffer)
+        return SI_INVALID_HANDLE;
+    h = port_get();
+    if (h == INVALID_HANDLE_VALUE)
         return SI_INVALID_HANDLE;
     t0 = shim_ticks();
-    ok = port_io(FALSE, lpBuffer, dwBytesToRead, &got,
+    ok = port_io(h, FALSE, lpBuffer, dwBytesToRead, &got,
                  io_backstop(g_read_timeout));
+    if (!ok)
+        err = GetLastError();
     t1 = shim_ticks();
+    port_put();
     if (!ok) {
-        DWORD err = GetLastError();
         flush_zero_run();
         shim_log("SI_Read err=%lu %s after %.3f ms", err, shim_err_name(err),
                  shim_ms(t0, t1));
@@ -401,10 +650,11 @@ __declspec(dllexport) DWORD WINAPI SI_Read(HANDLE cyHandle, LPVOID lpBuffer,
         return SI_SUCCESS;
     }
     flush_zero_run();
-    if (shim_log_on(2))
-        shim_log("SI_Read %lu/%lu in %.3f ms: %s", got, dwBytesToRead,
-                 shim_ms(t0, t1), shim_hex(lpBuffer, got));
-    else if (shim_log_on(1))
+    if (shim_log_on(2)) {
+        const char *dump = read_dump((const unsigned char *)lpBuffer, got);
+        shim_log("SI_Read %lu/%lu in %.3f ms%s%s", got, dwBytesToRead,
+                 shim_ms(t0, t1), *dump ? ": " : "", dump);
+    } else if (shim_log_on(1))
         shim_log("SI_Read %lu/%lu in %.3f ms", got, dwBytesToRead,
                  shim_ms(t0, t1));
     return SI_SUCCESS;
@@ -415,23 +665,29 @@ __declspec(dllexport) DWORD WINAPI SI_Write(HANDLE cyHandle, LPVOID lpBuffer,
                                             LPDWORD lpdwBytesWritten,
                                             OVERLAPPED *o)
 {
-    DWORD put = 0;
+    DWORD put = 0, err = 0;
     LONGLONG t0, t1;
+    HANDLE h;
     BOOL ok;
     char ids[64];
     (void)cyHandle; (void)o;
     if (lpdwBytesWritten) *lpdwBytesWritten = 0;
-    if (g_port == INVALID_HANDLE_VALUE || !lpBuffer)
+    if (!lpBuffer)
+        return SI_INVALID_HANDLE;
+    h = port_get();
+    if (h == INVALID_HANDLE_VALUE)
         return SI_INVALID_HANDLE;
     AcquireSRWLockExclusive(&g_write_lock);
     t0 = shim_ticks();
-    ok = port_io(TRUE, lpBuffer, dwBytesToWrite, &put,
+    ok = port_io(h, TRUE, lpBuffer, dwBytesToWrite, &put,
                  io_backstop(g_write_timeout));
+    if (!ok)
+        err = GetLastError();
     t1 = shim_ticks();
     ReleaseSRWLockExclusive(&g_write_lock);
+    port_put();
     ant_ids((const unsigned char *)lpBuffer, dwBytesToWrite, ids, sizeof(ids));
     if (!ok) {
-        DWORD err = GetLastError();
         shim_log("SI_Write err=%lu %s after %.3f ms %s", err,
                  shim_err_name(err), shim_ms(t0, t1), ids);
         return SI_WRITE_ERROR;
@@ -453,12 +709,17 @@ __declspec(dllexport) DWORD WINAPI SI_CheckRXQueue(HANDLE cyHandle,
 {
     COMSTAT st;
     DWORD errs = 0;
+    HANDLE h;
+    BOOL ok;
     (void)cyHandle;
     if (lpdwNumBytesInQueue) *lpdwNumBytesInQueue = 0;
     if (lpdwQueueStatus) *lpdwQueueStatus = 0;
-    if (g_port == INVALID_HANDLE_VALUE)
+    h = port_get();
+    if (h == INVALID_HANDLE_VALUE)
         return SI_INVALID_HANDLE;
-    if (!ClearCommError(g_port, &errs, &st)) {
+    ok = ClearCommError(h, &errs, &st);
+    port_put();
+    if (!ok) {
         DWORD err = GetLastError();
         shim_log("SI_CheckRXQueue err=%lu %s", err, shim_err_name(err));
         return SI_READ_ERROR;
@@ -474,11 +735,16 @@ __declspec(dllexport) DWORD WINAPI SI_FlushBuffers(HANDLE cyHandle,
                                                    BYTE FlushTransmit,
                                                    BYTE FlushReceive)
 {
+    HANDLE h;
     (void)cyHandle;
-    if (g_port == INVALID_HANDLE_VALUE)
+    h = port_get();
+    if (h == INVALID_HANDLE_VALUE)
         return SI_INVALID_HANDLE;
-    PurgeComm(g_port, (FlushTransmit ? PURGE_TXCLEAR : 0)
-                    | (FlushReceive ? PURGE_RXCLEAR : 0));
+    PurgeComm(h, (FlushTransmit ? PURGE_TXCLEAR : 0)
+               | (FlushReceive ? PURGE_RXCLEAR : 0));
+    if (FlushReceive)
+        InterlockedIncrement(&g_rx_gen);
+    port_put();
     shim_log("SI_FlushBuffers tx=%d rx=%d", FlushTransmit, FlushReceive);
     return SI_SUCCESS;
 }
@@ -486,18 +752,26 @@ __declspec(dllexport) DWORD WINAPI SI_FlushBuffers(HANDLE cyHandle,
 __declspec(dllexport) DWORD WINAPI SI_SetTimeouts(DWORD dwReadTimeout,
                                                   DWORD dwWriteTimeout)
 {
-    COMMTIMEOUTS to;
-    g_read_timeout = dwReadTimeout;
+    HANDLE h;
+    DWORD r = dwReadTimeout < SHIM_MIN_READ_TIMEOUT_MS
+                  ? SHIM_MIN_READ_TIMEOUT_MS
+                  : dwReadTimeout > SHIM_MAX_READ_TIMEOUT_MS
+                  ? SHIM_MAX_READ_TIMEOUT_MS : dwReadTimeout;
+
+    g_read_timeout = r;
     g_write_timeout = dwWriteTimeout;
-    if (g_port != INVALID_HANDLE_VALUE) {
-        to.ReadIntervalTimeout = 10;
-        to.ReadTotalTimeoutMultiplier = 0;
-        to.ReadTotalTimeoutConstant = dwReadTimeout;
-        to.WriteTotalTimeoutMultiplier = 0;
-        to.WriteTotalTimeoutConstant = dwWriteTimeout;
-        SetCommTimeouts(g_port, &to);
+    h = port_get();
+    if (h != INVALID_HANDLE_VALUE) {
+        port_set_timeouts(h);
+        port_put();
     }
-    shim_log("SI_SetTimeouts r=%lu w=%lu", dwReadTimeout, dwWriteTimeout);
+    if (r != dwReadTimeout)
+        shim_log("SI_SetTimeouts r=%lu (clamped to %lu-%lu ms, so no read"
+                 " waits forever) w=%lu -> r=%lu", dwReadTimeout,
+                 (DWORD)SHIM_MIN_READ_TIMEOUT_MS,
+                 (DWORD)SHIM_MAX_READ_TIMEOUT_MS, dwWriteTimeout, r);
+    else
+        shim_log("SI_SetTimeouts r=%lu w=%lu", dwReadTimeout, dwWriteTimeout);
     return SI_SUCCESS;
 }
 
@@ -513,15 +787,18 @@ __declspec(dllexport) DWORD WINAPI SI_SetBaudRate(HANDLE cyHandle,
                                                   DWORD dwBaudRate)
 {
     DCB dcb;
+    HANDLE h;
     (void)cyHandle;
-    if (g_port == INVALID_HANDLE_VALUE)
+    h = port_get();
+    if (h == INVALID_HANDLE_VALUE)
         return SI_INVALID_HANDLE;
     ZeroMemory(&dcb, sizeof(dcb));
     dcb.DCBlength = sizeof(dcb);
-    if (GetCommState(g_port, &dcb)) {
+    if (GetCommState(h, &dcb)) {
         dcb.BaudRate = dwBaudRate;
-        SetCommState(g_port, &dcb);
+        SetCommState(h, &dcb);
     }
+    port_put();
     shim_log("SI_SetBaudRate %lu", dwBaudRate);
     return SI_SUCCESS;
 }
@@ -563,17 +840,33 @@ __declspec(dllexport) DWORD WINAPI SI_GetDriverVersion(DWORD *hi, DWORD *lo)
 
 BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID reserved)
 {
-    (void)h; (void)reserved;
+    (void)h;
     if (reason == DLL_PROCESS_ATTACH) {
+        /* The port is resolved on first use, not here: resolving may walk
+         * the device tree, which must not happen under the loader lock. */
         shim_log_loaded("DSI_SiUSBXp_3_1");
-        shim_port();                /* logs where the port came from */
     } else if (reason == DLL_THREAD_DETACH) {
         flush_zero_run();
         close_thread_event();
     } else if (reason == DLL_PROCESS_DETACH) {
         flush_zero_run();
         close_thread_event();
-        close_port();
+        /* At process exit (reserved != NULL) the other threads are already
+         * gone, possibly while holding g_port_lock shared, and the system
+         * closes the handle anyway. On FreeLibrary, close only if nothing
+         * holds the lock: a loader-lock wait must never be unbounded. */
+        if (!reserved && TryAcquireSRWLockExclusive(&g_close_lock)) {
+            if (TryAcquireSRWLockExclusive(&g_port_lock)) {
+                HANDLE p = g_port;
+                g_port = INVALID_HANDLE_VALUE;
+                ReleaseSRWLockExclusive(&g_port_lock);
+                if (p != INVALID_HANDLE_VALUE) {
+                    CloseHandle(p);
+                    shim_log("closed port");
+                }
+            }
+            ReleaseSRWLockExclusive(&g_close_lock);
+        }
     }
     return TRUE;
 }

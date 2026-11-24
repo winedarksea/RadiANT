@@ -1,10 +1,9 @@
 /* SPDX-License-Identifier: Apache-2.0
  *
- * Logging and COM-port discovery, compiled into BOTH shim DLLs so neither
- * depends on the other. They append to the same file, which is what makes the
- * log readable as one conversation: ANT_DLL interleaves identity queries
- * (CP210x_*) with transport calls (SI_*), and the order is the interesting
- * part.
+ * Logging, compiled into BOTH shim DLLs so neither depends on the other.
+ * They append to the same file, which is what makes the log readable as one
+ * conversation: ANT_DLL interleaves identity queries (CP210x_*) with
+ * transport calls (SI_*), and the order is the interesting part.
  *
  * Each DLL links its OWN copy of this file, so the statics below exist twice
  * and no lock taken here could serialise one DLL against the other. Lines are
@@ -16,6 +15,7 @@
  * is on disk the moment its call returns, so a crash loses nothing.
  */
 #include "shim_common.h"
+#include "shim_version.h"
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
@@ -129,7 +129,7 @@ void shim_log_loaded(const char *dll)
     u.LowPart = lft.dwLowDateTime;
     u.HighPart = lft.dwHighDateTime;
     shim_log("=== %s shim loaded: pid %lu, wall %04u-%02u-%02uT%02u:%02u:%02u.%06llu"
-             " local, log level %d ===",
+             " local, log level %d, version " SHIM_VERSION_STR " ===",
              dll, GetCurrentProcessId(), st.wYear, st.wMonth, st.wDay,
              st.wHour, st.wMinute, st.wSecond, (u.QuadPart / 10) % 1000000ULL,
              shim_log_level());
@@ -170,58 +170,4 @@ const char *shim_err_name(DWORD err)
     case ERROR_OPERATION_ABORTED:     return "OPERATION_ABORTED: purged or unplugged";
     default:                          return "see winerror.h";
     }
-}
-
-/* RADIANT_ANT_COM wins; otherwise ask the registry which port the CP2102N was
- * given, so this survives the port number changing. The source is logged once,
- * on first resolution, because "COMn absent" means little without knowing
- * whether COMn came from the user, the registry or the fallback. */
-const char *shim_port(void)
-{
-    static char port[64];
-    HKEY parent, child;
-    char sub[256];
-    DWORD i, len, type, cb;
-
-    if (port[0])
-        return port;
-
-    len = GetEnvironmentVariableA("RADIANT_ANT_COM", port, sizeof(port));
-    if (len > 0 && len < sizeof(port)) {
-        shim_log("port %s (from RADIANT_ANT_COM)", port);
-        return port;
-    }
-    port[0] = '\0';
-
-    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE,
-                      "SYSTEM\\CurrentControlSet\\Enum\\USB\\VID_10C4&PID_EA60",
-                      0, KEY_READ, &parent) == ERROR_SUCCESS) {
-        for (i = 0; ; i++) {
-            cb = sizeof(sub);
-            if (RegEnumKeyExA(parent, i, sub, &cb, NULL, NULL, NULL, NULL)
-                != ERROR_SUCCESS)
-                break;
-            strcat_s(sub, sizeof(sub), "\\Device Parameters");
-            if (RegOpenKeyExA(parent, sub, 0, KEY_READ, &child)
-                != ERROR_SUCCESS)
-                continue;
-            cb = sizeof(port);
-            if (RegQueryValueExA(child, "PortName", NULL, &type,
-                                 (LPBYTE)port, &cb) == ERROR_SUCCESS
-                && type == REG_SZ) {
-                RegCloseKey(child);
-                RegCloseKey(parent);
-                shim_log("port %s (from registry: CP2102N VID_10C4&PID_EA60\\%s)",
-                         port, sub);
-                return port;
-            }
-            port[0] = '\0';
-            RegCloseKey(child);
-        }
-        RegCloseKey(parent);
-    }
-    strcpy_s(port, sizeof(port), "COM15");
-    shim_log("port %s (fallback: RADIANT_ANT_COM unset and no CP2102N PortName"
-             " in the registry)", port);
-    return port;
 }

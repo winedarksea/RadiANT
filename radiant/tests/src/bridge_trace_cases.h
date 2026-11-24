@@ -16,6 +16,7 @@
  * through ANT_BRIDGE_TRACE_EMIT instead of logged.
  */
 
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -31,8 +32,10 @@
 #define ANT_BRIDGE_PARSER_ONLY 1
 #define CONFIG_ANT_DONGLE_HOST_TRACE 1
 #define ANT_BRIDGE_TRACE_EMIT(dir, line) trace_emit((dir), (line))
+#define ANT_BRIDGE_CSUM_WRN(...) csum_emit(__VA_ARGS__)
 
 static void trace_emit(const char *dir, const char *line);
+static void csum_emit(const char *fmt, ...);
 static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len);
 
 #include "../../../apps/common/ant_serial_bridge.c"
@@ -40,11 +43,24 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len);
 static char trace_line[4 * RADIANT_WIRE_MAX_FRAME_SIZE + 8];
 static unsigned int n_trace;
 static unsigned int n_dispatched;
+static char csum_line[96];
+static unsigned int n_csum;
 
 static void trace_emit(const char *dir, const char *line)
 {
 	n_trace++;
 	snprintf(trace_line, sizeof(trace_line), "%s %s", dir, line);
+}
+
+/* The checksum-error log line, captured instead of logged. */
+static void csum_emit(const char *fmt, ...)
+{
+	va_list ap;
+
+	n_csum++;
+	va_start(ap, fmt);
+	vsnprintf(csum_line, sizeof(csum_line), fmt, ap);
+	va_end(ap);
 }
 
 static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
@@ -62,6 +78,8 @@ static void trace_before(void *f)
 	n_trace = 0;
 	n_dispatched = 0;
 	trace_line[0] = '\0';
+	n_csum = 0;
+	csum_line[0] = '\0';
 }
 
 /* A4 len id body... xor */
@@ -151,6 +169,89 @@ static void check_encrypt_key_masked(void)
 	expect_line("H>", f, 4, 16 + 1);
 }
 
+/* 0x76 [net, key 16] (Rev 5.1 sec 9.5.2.25): the network number shows. */
+static void check_network_key_128_masked(void)
+{
+	uint8_t body[17], f[24];
+	size_t n;
+
+	body[0] = 0x01;
+	fill_key(&body[1], 16);
+	n = trace_frame_build(f, RADIANT_WIRE_MESG_SET_128BIT_NETWORK_KEY_ID, body,
+			      sizeof(body));
+	trace_feed(f, n);
+	zassert_equal(1u, n_trace);
+	expect_line("H>", f, 4, 16 + 1);
+	zassert_true(body_is_zero(), "a 128-bit network key was kept");
+}
+
+/* 0x83 store [0x01, NVM index, key 16] (Rev 5.1 sec 9.5.2.36): the operation
+ * and the NVM index show. A load [0x00, NVM index, volatile index] is masked
+ * the same way: the operation byte does not get to decide. */
+static void check_crypto_key_nvm_masked(void)
+{
+	uint8_t body[18], f[24];
+	const uint8_t load[] = {0x00, 0x01, 0x00};
+	size_t n;
+
+	body[0] = 0x01;
+	body[1] = 0x02;
+	fill_key(&body[2], 16);
+	n = trace_frame_build(f, RADIANT_WIRE_MESG_CRYPTO_KEY_NVM_OP_ID, body,
+			      sizeof(body));
+	trace_feed(f, n);
+	zassert_equal(1u, n_trace);
+	expect_line("H>", f, 5, 16 + 1);
+	zassert_true(body_is_zero(), "an NVM crypto key was kept");
+
+	n = trace_frame_build(f, RADIANT_WIRE_MESG_CRYPTO_KEY_NVM_OP_ID, load,
+			      sizeof(load));
+	trace_feed(f, n);
+	zassert_equal(2u, n_trace);
+	expect_line("H>", f, 5, 1 + 1);
+}
+
+/* The checksum-error log line names the message and nothing of its body:
+ * with the header known, the expected checksum is the XOR of the key bytes,
+ * and the received one differs from it by the line error, so neither may be
+ * logged. Covers a key frame, a frame whose id byte was lost (the key number
+ * read as the id), and a plain frame, whose line has the same shape. */
+static void check_checksum_error_line_holds_no_checksum(void)
+{
+	uint8_t body[17], f[24];
+	size_t n;
+
+	body[0] = 0x00;
+	fill_key(&body[1], 16);
+	n = trace_frame_build(f, RADIANT_WIRE_MESG_SET_ENCRYPT_KEY_ID, body,
+			      sizeof(body));
+	f[n - 1] ^= 0x01;
+	trace_feed(f, n);
+	zassert_equal(0u, n_dispatched);
+	zassert_equal(1u, n_csum);
+	zassert_str_equal("Checksum err: id 0x7E len 17", csum_line, "\"%s\"",
+			  csum_line);
+
+	body[0] = 0x03;
+	n = trace_frame_build(f, RADIANT_WIRE_MESG_SET_ENCRYPT_KEY_ID, body,
+			      sizeof(body));
+	memmove(&f[2], &f[3], n - 3);
+	trace_feed(f, n - 1);
+	trace_feed((const uint8_t[]){0x00}, 1);
+	zassert_equal(2u, n_csum);
+	zassert_str_equal("Checksum err: id 0x03 len 17", csum_line, "\"%s\"",
+			  csum_line);
+
+	n = trace_frame_build(f, RADIANT_WIRE_MESG_CHANNEL_RADIO_FREQ_ID,
+			      (const uint8_t[]){0x00, 0x39}, 2);
+	f[n - 1] ^= 0x01;
+	trace_feed(f, n);
+	zassert_equal(3u, n_csum);
+	zassert_str_equal("Checksum err: id 0x45 len 2", csum_line, "\"%s\"",
+			  csum_line);
+	zassert_equal(0u, n_dispatched);
+}
+
 /* 0xF2 [channel, key bits, key 16]: channel and key length show. */
 static void check_radiant_key_masked(void)
 {
@@ -221,6 +322,8 @@ static void check_key_bodies_wiped(void)
 		RADIANT_WIRE_MESG_SET_ENCRYPT_KEY_ID,
 		RADIANT_WIRE_MESG_RADIANT_SET_KEY_ID,
 		RADIANT_WIRE_MESG_RADIANT_PAIRING_ID,
+		RADIANT_WIRE_MESG_SET_128BIT_NETWORK_KEY_ID,
+		RADIANT_WIRE_MESG_CRYPTO_KEY_NVM_OP_ID,
 	};
 
 	for (size_t k = 0; k < ARRAY_SIZE(ids); k++) {

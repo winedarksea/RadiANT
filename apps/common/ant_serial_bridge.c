@@ -63,19 +63,29 @@ LOG_MODULE_REGISTER(ant_bridge, LOG_LEVEL_INF);
 
 #define KEY_MSG_NONE 0xFFU
 
+/* Where the checksum-error line goes; the trace test captures it. */
+#ifndef ANT_BRIDGE_CSUM_WRN
+#define ANT_BRIDGE_CSUM_WRN(...) LOG_WRN(__VA_ARGS__)
+#endif
+
 /*
  * KEY_MSG_NONE for a message that carries no key material. For one that does,
  * how many leading body bytes are not key and may be shown: the network
- * number of a network key (0x46), the key number of an encryption key (0x7E),
- * the channel and key length of a RadiANT root key (0xF2), the info type of
- * an encryption-info message that sets the RNG seed (0x7F type 0x02; other
- * 0x7F types are not secret), and nothing of a pairing message (0xF5), whose
- * sub-command 0x02 carries the host's private X25519 scalar. 0xF5 is judged
- * by id alone, so no sub-command can leak by being classified wrongly.
+ * number of a network key (0x46, and 0x76, its 128-bit form: Rev 5.1 sec
+ * 9.5.2.25), the key number of an encryption key (0x7E), the operation and
+ * NVM index of an NVM crypto key operation (0x83, Rev 5.1 sec 9.5.2.36: a
+ * store carries a key, and its operation byte is not trusted to say which
+ * form a frame is), the channel and key length of a RadiANT root key
+ * (0xF2), the info type of an encryption-info message that sets the RNG
+ * seed (0x7F type 0x02; other 0x7F types are not secret), and nothing of a
+ * pairing message (0xF5), whose sub-command 0x02 carries the host's private
+ * X25519 scalar. 0xF5 is judged by id alone, so no sub-command can leak by
+ * being classified wrongly.
  *
  * Deliberately independent of the build's configuration: a 0xF2 or 0x7E sent
  * to a build that refuses it still crossed the parser buffer and the trace
- * byte for byte. Used by the host trace and by the parser-buffer wipe.
+ * byte for byte; 0x76 and 0x83 are never bridged at all, for the same
+ * reason. Used by the host trace and by the parser-buffer wipe.
  * `body`/`len` are the message body (channel or type byte first).
  *
  * Not inline: inlined, the parser grew by 188 B of text on the Pro Micro
@@ -86,11 +96,13 @@ static __noinline uint8_t key_msg_keep(uint8_t id, const uint8_t *body,
 {
 	switch (id) {
 	case RADIANT_WIRE_MESG_NETWORK_KEY_ID:
+	case RADIANT_WIRE_MESG_SET_128BIT_NETWORK_KEY_ID:
 	case RADIANT_WIRE_MESG_SET_ENCRYPT_KEY_ID:
 		return 1;
 	case RADIANT_WIRE_MESG_SET_ENCRYPT_INFO_ID:
 		return (len >= 1 && body[0] == RADIANT_WIRE_ENCRYPTION_INFO_SET_RNG_SEED)
 			? 1 : KEY_MSG_NONE;
+	case RADIANT_WIRE_MESG_CRYPTO_KEY_NVM_OP_ID:
 	case RADIANT_WIRE_MESG_RADIANT_SET_KEY_ID:
 		return 2;
 	case RADIANT_WIRE_MESG_RADIANT_PAIRING_ID:
@@ -1909,8 +1921,17 @@ static void process_byte(uint8_t b)
 				 MIN(parser.msg_len,
 				     (uint8_t)sizeof(parser.msg_body)));
 		} else {
-			LOG_WRN("Checksum err: got 0x%02X exp 0x%02X", b,
-				parser.running_xor);
+			/*
+			 * The id and length only, never the checksums: with
+			 * the header known, the expected one is the XOR of
+			 * the body, so for a key message it is the XOR of
+			 * the key, and the received one differs from it only
+			 * by the line error. The host trace masks the
+			 * checksum of a key frame for the same reason.
+			 */
+			ANT_BRIDGE_CSUM_WRN("Checksum err: id 0x%02X len %u",
+					    parser.msg_id,
+					    (unsigned int)parser.msg_len);
 			ant_health_note(ANT_HEALTH_HOST_CSUM);
 		}
 		if (b != parser.running_xor
@@ -1920,11 +1941,11 @@ static void process_byte(uint8_t b)
 		       != KEY_MSG_NONE) {
 			/*
 			 * Every key-carrying message (key_msg_keep(): 0x46,
-			 * 0x7E, 0x7F's RNG seed, 0xF2, and 0xF5 by id alone,
-			 * since its sub-command 0x02 carries the host's
-			 * private X25519 scalar), in every configuration: a
-			 * key sent to a build that refuses the message still
-			 * crossed this buffer.
+			 * 0x76, 0x7E, 0x7F's RNG seed, 0x83, 0xF2, and 0xF5
+			 * by id alone, since its sub-command 0x02 carries the
+			 * host's private X25519 scalar), in every
+			 * configuration: a key sent to a build that refuses
+			 * the message still crossed this buffer.
 			 *
 			 * And every frame that failed its checksum, whatever
 			 * its id: one that lost its id byte (a UART overrun)

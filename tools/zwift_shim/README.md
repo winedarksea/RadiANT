@@ -29,16 +29,24 @@ supply them, backed by the COM port:
 **ANT_DLL accepts a device on its vendor ID alone** — `0x0FCF` or `0x1915`,
 with no product-id comparison anywhere in its binary. So the identity DLL
 answering `0x0FCF` is sufficient, and **the dongle is never touched**: no
-VID/PID reprogramming, no driver change, no elevation, and COM15 keeps working
-for every tool in `tools/`.
+VID/PID reprogramming, no driver change, no elevation, and the COM port keeps
+working for every tool in `tools/`.
 
 ## Why this is additive, not a modification of Zwift
 
 Both filenames are **absent** from a stock Zwift install. Nothing of Zwift's is
 replaced or shadowed — ANT_DLL simply gains a transport it did not have.
 `scripts/zwift_ant_shim.ps1 -Uninstall` deletes the two files and the install is
-completely undone. The installer also refuses to overwrite a file of a
-different size, so if a genuine Silicon Labs DLL ever appears it wins.
+completely undone. Both DLLs carry a version resource (ProductName `RadiANT
+Zwift ANT shim`, `shim_version.h`), and the installer replaces, and
+`-Uninstall` deletes, only a file that has it, or the one earlier build it
+knows by SHA-256 (903718a, installed 2026-11-23, which predates the resource).
+So if a genuine Silicon Labs DLL ever appears it wins, and an older shim can
+still be upgraded in place. Until 2026-11-24 "ours" meant "same file size",
+which refused every rebuild and let `-Uninstall` delete by name.
+
+The shim is always built here, from this checkout, with `/W4 /WX /sdl
+/guard:cf`; it is not a release artifact (`SECURITY.md`).
 
 No elevation is needed: Zwift self-updates, so `BUILTIN\Users` has Modify on
 its directory.
@@ -71,10 +79,31 @@ the COM transport directly, where the device number **is** the COM port number.
 
 ## Choosing the port
 
-By default the shim reads the CP2102N's port from
-`HKLM\SYSTEM\CurrentControlSet\Enum\USB\VID_10C4&PID_EA60\…\Device Parameters\PortName`
-at run time, so a renumbered port keeps working. `RADIANT_ANT_COM` overrides it
-(`scripts/zwift_ant_shim.ps1 -Port COM15` pins it for your user).
+The shim forwards every host write to its port, Zwift's ANT+ network key
+included, so **it drives only the port you select and never guesses**. With
+no selection, or one that is unusable or ambiguous, `SI_GetNumDevices`
+answers 0 and Zwift sees no device; the log says why. Two variables, pinned
+for your user by the installer:
+
+| variable | installer | value |
+|---|---|---|
+| `RADIANT_ANT_COM` | `-Port COM11` | a port name, `COM1`..`COM999` (any case); nothing else is accepted |
+| `RADIANT_ANT_DEVICE` | `-Device L1100TY2` | a USB serial number, or a device instance id, of the port or of a USB device above it |
+
+The device form survives the port being renumbered, and is resolved against
+**present** ports each time ANT_DLL enumerates. It must name exactly one: an
+XDS110 has two ports (application and auxiliary UART) under one serial
+number, so `-Device L1100TY2` is ambiguous and the log lists both ports with
+their instance ids; give the instance id of the one you want
+(`USB\VID_0451&PID_BEF3&MI_00\...`). Serial-number parts Windows made up
+(they contain `&`) never match. With both variables set they must name the
+same port. `scripts/zwift_ant_shim.ps1 -ListDevices` prints every present
+port with its serial number and instance id.
+
+Until 2026-11-24 the shim took the first CP2102N `PortName` in the registry
+(present or not) and fell back to `COM15`, so it could send the network key
+to whatever else was on that port.
+
 `RADIANT_SHIM_LOG` names a file to log every call to — that log is how the
 call sequence above was established, and it is off unless the variable is set.
 
@@ -87,7 +116,7 @@ call sequence above was established, and it is off unless the variable is set.
 |---|---|
 | `0` | setup and identity calls, errors, and why the port is absent. Use it for long rides. |
 | `1` (default) | level 0, plus one timed line per non-empty read and per write, and runs of empty reads folded into one line |
-| `2` | level 1, plus the hex of every read and write, and `SI_CheckRXQueue` calls, so the log can be re-framed like a pcap. Key material in a write (0x46, 0x7E, 0x7F RNG seed, 0xF2, 0xF5 bodies and their checksums) shows as `..`. Only whole 0xA4 frames whose checksum holds are shown or named; past the first one that is not, a write logs only its byte count (`unframed` when no frame passed) |
+| `2` | level 1, plus the hex of every read and write, and `SI_CheckRXQueue` calls, so the log can be re-framed like a pcap. Key material in a read or a write (0x46, 0x76, 0x7E, 0x7F RNG seed, 0x83, 0xF2, 0xF5 bodies and their checksums) shows as `..`. Only whole 0xA4 frames whose checksum holds are shown or named; past the first one that is not, only the byte count of the rest is logged (`unframed` on a write when no frame passed). Reads are not cut on frame boundaries, so a frame split across two reads shows as two counts: the price of not trusting a device that echoes |
 
 Every line has the same prefix:
 
@@ -122,15 +151,25 @@ Reading it:
 * **`id=`** lists the ANT message id of each `0xA4` frame in a write.
 * **`absent, err=N`** on `SI_GetNumDevices` says why the port could not be
   opened: `2` not present, `5` held by another process (close `ant_scan` and
-  friends), `31` device error. The line before it says where the port name
-  came from: `RADIANT_ANT_COM`, the registry, or the `COM15` fallback.
+  friends), `31` device error. A `port COMn (from ...)` line says where the
+  port came from (`RADIANT_ANT_COM` or `RADIANT_ANT_DEVICE`) whenever the
+  selection changes; `SI_GetNumDevices -> 0 (no port selected)` follows a
+  `no port: ...` line giving the reason.
 * **`already open here`** on `SI_GetNumDevices` means this shim holds the port
   (the probe got `5`). **`open here, but probe err=N … port may be gone`**
   means the probe failed some other way while the shim holds the port, as
   when the dongle has left USB. The call still answers 1 either way.
 
 `tools/zwift_shim/test_shim_log.py` checks the line format under 8 threads
-calling both DLLs at once, key redaction, and (on a named pipe) that a write is
-not held behind a pending read. With `RADIANT_SHIM_TEST_COM=COMn` it also runs
-that check on a dongle. Build first with
-`scripts/zwift_ant_shim.ps1 -BuildOnly`.
+calling both DLLs at once; key redaction in reads and writes; that no
+selection means no device and only `COMn` is a port name; and, on a named
+pipe, that a write is not held behind a pending read, that racing `SI_Open`s
+keep the winner's handle, that a close does not wait out a pending read, and
+that a zero read timeout cannot hang a read. The pipe tests load
+`out/test/DSI_SiUSBXp_3_1.DLL`, built with `SHIM_TEST_PIPES` so it also opens
+`pipe\radiant_shim_*`; that build is never installed. With
+`RADIANT_SHIM_TEST_COM=COMn` it also runs the pending-read check on a dongle.
+Build first with `scripts/zwift_ant_shim.ps1 -BuildOnly`: the tests refuse to
+run when a source file is newer than `out/` or a DLL lacks the version
+resource, since a stale `out/` once let them pass on a build without the key
+masking.

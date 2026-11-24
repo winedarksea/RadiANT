@@ -5,7 +5,10 @@ change to the dongle, no driver change, no reprogramming and no elevation.
 
 The fix is two small DLLs supplying ANT_DLL's USBXpress backend, backed by the
 COM port the dongle is already on: `scripts/zwift_ant_shim.ps1` builds and
-installs them, `-Uninstall` removes them. Verified end to end:
+installs them, `-Uninstall` removes them. The shim drives only the port you
+pin with `-Port` or `-Device` and reports no device otherwise (since
+2026-11-24; it used to guess the CP2102N's port from the registry and fall
+back to COM15): see `tools/zwift_shim/README.md`. Verified end to end:
 
     ANT_Init(0, 57600, port_type=0, framer=0) -> True
     ANT_ResetSystem -> True          (7-byte 0xA4 frame out, replies read back)
