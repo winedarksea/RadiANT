@@ -431,7 +431,8 @@ config ANT_DONGLE_MSOS_DESCRIPTORS
 
 config ANT_DONGLE_UF2_REBOOT_REQUEST
 	bool "Reboot into the UF2 bootloader on a USB vendor request"
-	depends on ANT_DONGLE_TRANSPORT_USB_LEGACY || ANT_DONGLE_TRANSPORT_USB_NEXT
+	depends on ANT_DONGLE_TRANSPORT_USB_LEGACY || \
+		   (ANT_DONGLE_TRANSPORT_USB_NEXT && USBD_VREQ_SUPPORT)
 	depends on SOC_NRF52840
 	help
 	  Answer one vendor control request - bmRequestType 0x40, bRequest

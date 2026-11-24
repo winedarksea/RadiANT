@@ -337,6 +337,17 @@ def _sysfs_write(path: str, value: str) -> None:
         handle.write(value)
 
 
+def same_device(dev, port, serial) -> bool:
+    """True if `dev` sits on `port` ((bus, port_numbers)) and reports `serial`.
+
+    The reopen filters on --serial at most, which is optional and a suffix;
+    the sysfs power files being watched belong to one port. A different
+    stick answering would make the test pass on the wrong device.
+    """
+    return ((dev.bus, tuple(dev.port_numbers or ())) == port
+            and _serial_of(dev) == serial)
+
+
 def find_without_set_configuration(serial: str | None, wait_s: float):
     """Find and take the dongle, WITHOUT the SET_CONFIGURATION open_device() sends.
 
@@ -400,6 +411,43 @@ def read_kernel_log() -> str | None:
     except (OSError, subprocess.SubprocessError):
         return None
     return done.stdout
+
+
+class KernelLogCursor:
+    """The kernel log lines added since the last read, or None once coverage is lost.
+
+    dmesg is a ring buffer, so comparing total counts between reads misses a
+    reset whenever an older reset line falls out as a new one comes in. This
+    anchors on the last line seen instead (dmesg's timestamps make it
+    unique) and hands back only what follows it. If a read fails, or the
+    anchor has scrolled out of the buffer, lines in between may be gone, so
+    the cursor reports the gap rather than guessing.
+    """
+
+    def __init__(self, baseline: str):
+        lines = baseline.splitlines()
+        self.anchor = lines[-1] if lines else None
+        self.lost = None  # why coverage was lost, or None
+
+    def advance(self, text: str | None) -> list[str] | None:
+        if self.lost is not None:
+            return None
+        if text is None:
+            self.lost = "dmesg could not be read"
+            return None
+        lines = text.splitlines()
+        if self.anchor is None:
+            new = lines
+        else:
+            try:
+                at = len(lines) - 1 - lines[::-1].index(self.anchor)
+            except ValueError:
+                self.lost = "the kernel ring buffer wrapped past the last line seen"
+                return None
+            new = lines[at + 1:]
+        if lines:
+            self.anchor = lines[-1]
+        return new
 
 
 def wait_runtime_status(path: str, want: str, timeout_s: float):
@@ -475,6 +523,7 @@ def run_suspend_cycles(args) -> int:
     if dev is None:
         sys.exit("No ANT device found")
     name = sysfs_usb_name(dev.bus, dev.port_numbers)
+    port, serial = (dev.bus, tuple(dev.port_numbers)), _serial_of(dev)
     sysdir = os.path.join(SYSFS_USB_DEVICES, name)
     power = os.path.join(sysdir, "power")
     print(f"Device {name} ({sysdir}), serial {_serial_of(dev)}")
@@ -507,12 +556,10 @@ def run_suspend_cycles(args) -> int:
     log = read_kernel_log()
     if log is None:
         sys.exit(NEED_ROOT)
-    # A count, not a diff of the text: if the kernel ring buffer wraps
-    # during the run, old reset lines can fall out as new ones come in and
-    # the count can stay level - a false negative. A 40-cycle run logs a few
-    # lines per reset at most, so on a quiet host it does not, but a host
-    # spamming its kernel log could hide a reset.
-    resets0 = resets_seen = count_resets(log, name)
+    # Only lines logged after this point count, and losing sight of any of
+    # them (a failed read, or the ring buffer wrapping) fails the check.
+    kmsg = KernelLogCursor(log)
+    resets = 0
     suspended_ms0 = parse_sysfs_int(_sysfs_read(suspended_time_path))
     try:
         _sysfs_write(delay_path, str(args.autosuspend_ms))
@@ -525,6 +572,12 @@ def run_suspend_cycles(args) -> int:
             reached, state = wait_runtime_status(status_path, "suspended",
                                                  args.suspend_timeout)
             dev = find_without_set_configuration(args.serial, 5.0)
+            if dev is not None and not same_device(dev, port, serial):
+                print(f"  cycle {cycle}: a different device answered "
+                      f"({sysfs_usb_name(dev.bus, dev.port_numbers)}, "
+                      f"serial {_serial_of(dev)}), stopping")
+                close_device(dev)
+                dev = None
             if dev is None:
                 print(f"  cycle {cycle}: device gone after suspend")
                 results["cycles"].append({"cycle": cycle, "suspended": reached,
@@ -532,9 +585,14 @@ def run_suspend_cycles(args) -> int:
                 first_failure = first_failure or cycle
                 break
             rtt = capabilities_round_trip(dev, args.resume_timeout)
-            now = count_resets(read_kernel_log() or "", name)
-            reset = now > resets_seen
-            resets_seen = max(now, resets_seen)
+            was_lost = kmsg.lost
+            found = count_resets("\n".join(kmsg.advance(read_kernel_log())
+                                           or []), name)
+            if kmsg.lost is not None and was_lost is None:
+                print(f"  cycle {cycle}: kernel log coverage lost "
+                      f"({kmsg.lost}); the reset check will fail")
+            reset = found > 0
+            resets += found
             results["cycles"].append({"cycle": cycle, "suspended": reached,
                                       "round_trip_s": rtt, "reset": reset})
             tag = "suspended" if reached else f"NOT suspended ({state})"
@@ -560,8 +618,8 @@ def run_suspend_cycles(args) -> int:
             after = read_health(dev, FrameReader(dev), "after")
         # Once more after the flood and the final 0xF6 read: a reset the
         # host issued during those counts too.
-        resets_seen = max(resets_seen,
-                          count_resets(read_kernel_log() or "", name))
+        resets += count_resets("\n".join(kmsg.advance(read_kernel_log())
+                                         or []), name)
     finally:
         try:
             _sysfs_write(control_path, old_control)
@@ -576,9 +634,8 @@ def run_suspend_cycles(args) -> int:
     done = results["cycles"]
     suspended = sum(1 for c in done if c["suspended"])
     answered = sum(1 for c in done if c["round_trip_s"] is not None)
-    resets = resets_seen - resets0
     results.update({
-        "bus_resets": resets,
+        "bus_resets": resets, "kernel_log_lost": kmsg.lost,
         "cycles_run": len(done), "cycles_suspended": suspended,
         "cycles_answered": answered, "first_failure": first_failure,
         "suspended_ms": suspended_ms, "flood_written": written,
@@ -598,7 +655,9 @@ def run_suspend_cycles(args) -> int:
          + (f", first failure at cycle {first_failure}"
             if first_failure else "")),
         ("no bus reset during the cycles (no reset-resume)",
-         resets == 0, f"{resets} reset(s)"
+         resets == 0 and kmsg.lost is None,
+         f"coverage lost: {kmsg.lost}" if kmsg.lost is not None
+         else f"{resets} reset(s)"
          + (f", first at cycle {first_failure}" if resets else "")),
         ("every flood request answered",
          written == replies == args.flood, f"{replies}/{args.flood}"),

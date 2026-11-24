@@ -113,6 +113,55 @@ class CountResets(unittest.TestCase):
         self.assertEqual(b.count_resets("", "5-1"), 0)
 
 
+class KernelLogCursor(unittest.TestCase):
+    RESET = "[ 200.1] usb 5-1: reset full-speed USB device number 24 using xhci_hcd"
+
+    def test_only_new_lines_count(self):
+        cur = b.KernelLogCursor("[ 1.0] a\n" + self.RESET + "\n[ 2.0] b\n")
+        self.assertEqual(cur.advance("[ 1.0] a\n" + self.RESET + "\n[ 2.0] b\n"
+                                     "[ 3.0] c\n"), ["[ 3.0] c"])
+        self.assertEqual(cur.advance("[ 2.0] b\n[ 3.0] c\n"), [])
+        self.assertIsNone(cur.lost)
+
+    def test_wrap_that_keeps_the_count_level_is_caught(self):
+        # An old reset falls out while a new one comes in: a count-based
+        # comparison saw 1 then 1 and passed.
+        cur = b.KernelLogCursor(self.RESET + "\n[ 210.0] x\n")
+        new = cur.advance("[ 210.0] x\n" + self.RESET.replace("200.1", "300.1"))
+        self.assertEqual(b.count_resets("\n".join(new), "5-1"), 1)
+
+    def test_buffer_wrapped_past_anchor_loses_coverage(self):
+        cur = b.KernelLogCursor("[ 1.0] a\n")
+        self.assertIsNone(cur.advance("[ 9.0] z\n"))
+        self.assertIsNotNone(cur.lost)
+        self.assertIsNone(cur.advance("[ 9.0] z\n[ 9.1] y\n"))
+
+    def test_failed_read_loses_coverage(self):
+        cur = b.KernelLogCursor("[ 1.0] a\n")
+        self.assertIsNone(cur.advance(None))
+        self.assertIsNotNone(cur.lost)
+
+    def test_empty_baseline_takes_everything(self):
+        cur = b.KernelLogCursor("")
+        self.assertEqual(cur.advance(self.RESET), [self.RESET])
+
+
+class SameDevice(unittest.TestCase):
+    class Dev:
+        def __init__(self, bus, ports):
+            self.bus, self.port_numbers = bus, ports
+
+    def test_port_and_serial_must_both_match(self):
+        orig = b._serial_of
+        try:
+            b._serial_of = lambda d: "ABC123"
+            self.assertTrue(b.same_device(self.Dev(5, [1]), (5, (1,)), "ABC123"))
+            self.assertFalse(b.same_device(self.Dev(5, [2]), (5, (1,)), "ABC123"))
+            self.assertFalse(b.same_device(self.Dev(5, [1]), (5, (1,)), "XYZ"))
+        finally:
+            b._serial_of = orig
+
+
 class WaitRuntimeStatus(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
