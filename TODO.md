@@ -209,15 +209,24 @@ noticeably degrade primary functionality, such as receiving a heart rate strap.
   old root is destroyed** (sec review 2026-11-14 item 7b). Fail-closed by
   reading. Test it when an opaque (PSA) backend lands; the portable backend
   cannot reach the branch.
-- [ ] **A device-number change keeps queued ciphertext** (latent; reviewer,
+- [x] **A device-number change keeps queued ciphertext** (latent; reviewer,
   2026-11-22). `radiant_sec_try_devnum()` (`radiant_sec.c`) changes the device
   number, which is part of the nonce, and resets the verify state, but does not
   purge the receive queue. A page queued under the old number would be
   decrypted with the new one and delivered as garbage. Nothing in production
   calls it yet. Fix: `q_purge(ch)` there, with a red test like the 2026-11-21
   epoch/policy purge tests.
-- [ ] **`rx_process()` returns silently when `advance_epoch()` fails** (headroom
+  *Done 2026-11-24 (wip/s24-sec-host-api):* `radiant_sec_try_devnum()` purges the queue;
+  red test `test_a_new_devnum_candidate_drops_ciphertext_still_queued`. The
+  2026-11-21 "deliberately not purged" had no recorded reason (that item named
+  epoch and policy only, with 32 B of text left); try_devnum already dropped
+  the held windows, so the queue was the inconsistency. Costs 0 B in the
+  dongle: nothing in production calls it.
+- [x] **`rx_process()` returns silently when `advance_epoch()` fails** (headroom
   or ceiling; low; sec review 2026-11-17 item 3). Nothing is counted.
+  *Done 2026-11-24 (wip/s24-sec-host-api):* counted in `dropped_replay`, the
+  "time-inconsistent" half of 0xF4 [18..19] (+4 B in `radiant_sec_pump`); test
+  `test_a_wrap_the_receiver_cannot_take_is_counted`.
 - [ ] **Host Tier I announcement check** (low, host tool; sec review 2026-11-17
   item 6). The host checks an announcement at the last verified Tier I counter,
   but the firmware tags at the clock's interval index. An announcement whose
@@ -529,6 +538,9 @@ group.
   6cb4e1d). Security text 7828/7856 B (+4 since 7824), compat object
   4768/5120 B (+112 since 4656), compat linked 188/288 B. Not traced; the
   next security change should measure before and after.
+  2026-11-24 (wip/s24-sec-host-api): the review 2026-11-22 host-API fixes
+  measured 7828 -> 8036 B text (+208, breakdown in release.yml), ceiling
+  raised to 8068 (32 B left); bss 6979/7168; compat object unchanged.
 
 ## Low
 
@@ -567,7 +579,7 @@ group.
   coin-cell receiver armed indefinitely. The 2026-11-20 fix bounded banking,
   not this. Fix: top up on a fresh accept and on the first one or two
   duplicates of a sequence only.
-- [ ] **"Period before epoch" is documented as a refusal and is not enforced.**
+- [x] **"Period before epoch" is documented as a refusal and is not enforced.**
   `radiant_ant_sec_epoch_set()` (`radiant_ant_sec.c` ~:193) only checks
   `radiant_channel_period_get()`, which cannot fail for a valid channel; there
   is no period-set flag, so an unset period binds as the default 8182.
@@ -579,7 +591,16 @@ group.
   (~:1144) and the header of `test_api_sec_host.c` all claim the refusal. Fix:
   a `CHF_PERIOD_SET` flag checked by 0xF3, and refuse a 0x43 that changes the
   period while the channel has an epoch. Add both tests.
-- [ ] **Re-numbering a keyed master keeps the old device number in the keys and
+  *Done 2026-11-24 (wip/s24-sec-host-api):* `struct chan`'s flags byte is full, so the flag
+  is `radiant_ant_sec_period_mask` (bit per channel, set by an accepted 0x43,
+  cleared on assign). 0xF3 without it is CHANNEL_IN_WRONG_STATE; a 0x43 that
+  changes the period under an epoch is refused the same way (same period, a new
+  root or an unassign lifts it), in `radiant_ant_sec_rebind()` under api_lock.
+  The only host tool sending 0xF3 (`ant_features.py` keyed scan check) now sends
+  0x43 first. Docs 9, `radiant_ant.h`, the test header and the 0xF3 wire text
+  updated. Tests `test_sec_host_an_epoch_needs_the_period_set_first`,
+  `test_sec_host_a_period_change_is_refused_under_an_epoch`.
+- [x] **Re-numbering a keyed master keeps the old device number in the keys and
   nonce.** `radiant_sec_set_key()` stores `base_devnum` once (`radiant_sec.c`
   ~:647); `radiant_ant_channel_id_set()` is a bare forward, and 0xF4 reports neither
   number. After close, 0x51, open, the master is on air under the new number
@@ -588,7 +609,11 @@ group.
   0x51 whose device number differs from `base_devnum`, or report the bound
   number in 0xF4. (A receiver re-wildcard keeping its key is intended and
   tested.)
-- [ ] **The 0xF3 monotonic gate is cleared by SYSTEM_RESET, unassign, and a
+  *Done 2026-11-24 (wip/s24-sec-host-api):* the refusal - a keyed master's 0x51 to any
+  other number (0 included) is CHANNEL_IN_WRONG_STATE; the same number with new
+  device/transmission types is accepted; receivers are not checked. Test
+  `test_sec_host_a_keyed_master_refuses_a_new_device_number`.
+- [x] **The 0xF3 monotonic gate is cleared by SYSTEM_RESET, unassign, and a
   0xF2 with a different root or number.** Root A -> B -> A, or number X -> Y ->
   X, then accepts an epoch already used under A. The comment at
   `radiant_sec.c` (~:653) says any epoch is safe after a new root "because no
@@ -597,6 +622,11 @@ group.
   persist its last epoch covers it. Fix: correct the comments and 3.5;
   optionally keep a small RAM table of {key check value, number, highest
   epoch} across those three events.
+  *Done 2026-11-24 (wip/s24-sec-host-api):* comments (`radiant_sec.c` set_key and
+  set_epoch, `radiant_sec.h`, `radiant_ant.c` reset) and docs 3.5 now say the
+  gate holds only while a channel keeps its root and number, and that the
+  authority's persisted floor is the guarantee. No RAM table (not wanted this
+  round).
 - [ ] **Compat Tier I, locked receiver: an unauthenticated page moves `wraps`,
   the epoch and `K_auth` before its MAC is checked** (library).
   `rx_tier1()` (`radiant_sec_compat.c` ~:1053) calls `apply_wraps()` on the
@@ -753,13 +783,18 @@ group.
   :1984, :2058, :4470, :4550), so type 0x41 reads back as RX-only and refuses
   broadcasts yet acknowledges and accepts acked data and bursts. Fix:
   normalise once at assign.
-- [ ] **A failed re-import during 0xF2 on a secured master would fail open**
+- [x] **A failed re-import during 0xF2 on a secured master would fail open**
   (latent; needs an opaque key backend). After the old root is destroyed, a
   failing import releases the context (`radiant_sec.c` ~:621-640), and an
   unkeyed channel transmits untouched (~:1209), so secured-range pages would
   go out in clear after a 0xF2 that only returned an error. The compat twin
   above is fail-closed; this one is not. Fix: import into a temporary before
   destroying the old root.
+  *Done 2026-11-24 (wip/s24-sec-host-api):* `radiant_sec_set_key()` imports into a stack
+  temporary, then takes back, destroys the old root and moves the handle in
+  (wiped, not destroyed); a failure leaves the old root, epoch and windows. Test
+  `test_a_failed_rekey_import_keeps_the_old_root` via a CONFIG_ZTEST-only
+  import-failure seam in `radiant_sec_aes.c`. The compat twin is unchanged.
 - [ ] **Lock assertions miss most users of the shared AES schedule.**
   `RADIANT_SEC_ASSERT_LOCKED` is absent from `radiant_sec_compat.c` and from
   the primitives that `radiant_profile_command.c`, `radiant_profile_telemetry.c`,
