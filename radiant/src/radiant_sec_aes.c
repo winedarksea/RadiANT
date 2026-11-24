@@ -133,6 +133,9 @@ static uint32_t sched[AES128_WORDS];
 static uint32_t sched_serial;   /* 0 = nothing cached */
 static uint32_t import_serial;  /* monotone; 32 bits so it cannot wrap into a
 				 * serial that is still live */
+#if defined(CONFIG_ZTEST)
+uint8_t radiant_sec_test_import_fail_in;
+#endif
 
 static void key_expand(const uint8_t key[16])
 {
@@ -233,6 +236,15 @@ int radiant_sec_key_import(struct radiant_sec_key *k, const uint8_t *raw,
 		 * both AES-128. Refuse loudly rather than truncate silently. */
 		return RADIANT_SEC_ENOTSUP;
 	}
+#if defined(CONFIG_ZTEST)
+	/* Test seam: an opaque backend's import can fail on a valid key (a
+	 * full key store), this one cannot. Counts down; the call that takes
+	 * it to 0 fails. Tests only: no shipping image defines CONFIG_ZTEST. */
+	if (radiant_sec_test_import_fail_in != 0u &&
+	    --radiant_sec_test_import_fail_in == 0u) {
+		return RADIANT_SEC_ENOTSUP;
+	}
+#endif
 
 	memset(k, 0, sizeof(*k));
 	memcpy(k->b, raw, 16);
