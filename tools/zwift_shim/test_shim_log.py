@@ -380,10 +380,14 @@ def child_zero_timeout():
     r0 = time.perf_counter()
     rc = xp.SI_Read(h, b, 1, ctypes.byref(n), None)
     read_ms = (time.perf_counter() - r0) * 1000
+    xp.SI_SetTimeouts(0xFFFFFFFF, 200)
+    big = ctypes.c_ulong()
+    xp.SI_GetTimeouts(ctypes.byref(big), ctypes.byref(w))
     xp.SI_Close(h)
     k32.CloseHandle(ctypes.wintypes.HANDLE(pipe))
     sys.stdout.write(json.dumps({'r': r.value, 'w': w.value, 'rc': rc,
-                                 'n': n.value, 'read_ms': read_ms}))
+                                 'n': n.value, 'read_ms': read_ms,
+                                 'r_big': big.value}))
 
 
 def child_open_race():
@@ -468,6 +472,61 @@ def child_close_under_read():
     sys.stdout.write(json.dumps({'close_ms': close_ms, 'read_rc': got.get('rc'),
                                  'read_ms': got.get('read_ms'),
                                  'write_after_close_rc': wrc}))
+
+
+def child_close_under_read_loop():
+    """Run in the subprocess: like child_close_under_read, but the reader
+    re-enters SI_Read at once after each return, as ANT_DLL's read thread
+    does, and a writer keeps writing. A close that cancels once and then
+    waits for the exclusive lock lets the re-entered read pend for its whole
+    timeout, with the writes queued behind it. Prints JSON."""
+    import time
+    k32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    pipe = make_pipe(k32)
+    xp = ctypes.WinDLL(XP_TEST_DLL)
+    h = ctypes.c_void_p()
+    if xp.SI_Open(0, ctypes.byref(h)) != 0:
+        raise RuntimeError('SI_Open failed')
+    xp.SI_SetTimeouts(3000, 3000)
+    stop = threading.Event()
+    writes = []
+
+    def reader():
+        b = ctypes.create_string_buffer(1)
+        n = ctypes.c_ulong()
+        while xp.SI_Read(h, b, 1, ctypes.byref(n), None) == 0:
+            pass
+
+    def writer():
+        put = ctypes.c_ulong()
+        buf = ctypes.create_string_buffer(OPEN, len(OPEN))
+        while not stop.is_set():
+            w0 = time.perf_counter()
+            rc = xp.SI_Write(h, buf, len(OPEN), ctypes.byref(put), None)
+            writes.append(((time.perf_counter() - w0) * 1000, rc))
+            time.sleep(0.005)
+
+    def drain():
+        chunk = ctypes.create_string_buffer(4096)
+        n = ctypes.wintypes.DWORD()
+        while k32.ReadFile(pipe, chunk, 4096, ctypes.byref(n), None):
+            pass
+
+    ts = [threading.Thread(target=f, daemon=True)
+          for f in (reader, writer, drain)]
+    for t in ts:
+        t.start()
+    time.sleep(0.3)
+    c0 = time.perf_counter()
+    xp.SI_Close(h)
+    close_ms = (time.perf_counter() - c0) * 1000
+    stop.set()
+    ts[0].join(10)
+    ts[1].join(10)
+    k32.CloseHandle(ctypes.wintypes.HANDLE(pipe))
+    sys.stdout.write(json.dumps({
+        'close_ms': close_ms, 'reader_done': not ts[0].is_alive(),
+        'max_write_ms': max(w for w, _ in writes) if writes else None}))
 
 
 def child_hw_capabilities():
@@ -932,6 +991,13 @@ class ShimLockTest(unittest.TestCase):
         self.assertLess(out['read_ms'], 1000.0, out)
         self.assertEqual(out['write_after_close_rc'], 1, out)  # INVALID_HANDLE
 
+    def test_close_with_a_reader_that_reenters(self):
+        out, _ = run_child('--child-close-under-read-loop', self.pipe('crl'),
+                           timeout=60, level='0')
+        self.assertTrue(out['reader_done'], out)
+        self.assertLess(out['close_ms'], 500.0, out)
+        self.assertLess(out['max_write_ms'], 500.0, out)
+
     def test_zero_read_timeout_is_clamped(self):
         try:
             out, lines = run_child('--child-zero-timeout', self.pipe('zt'),
@@ -939,6 +1005,7 @@ class ShimLockTest(unittest.TestCase):
         except subprocess.TimeoutExpired:
             self.fail('SI_Read with a zero read timeout never returned')
         self.assertEqual((out['r'], out['w']), (1, 200), out)
+        self.assertEqual(out['r_big'], 60000, out)   # "infinite" is capped
         self.assertEqual((out['rc'], out['n']), (0, 0), out)
         self.assertLess(out['read_ms'], 2000.0, out)
         self.assertTrue([l for l in lines if 'SI_SetTimeouts r=0 (clamped to 1'
@@ -981,6 +1048,8 @@ if __name__ == '__main__':
         child_zero_timeout()
     elif sys.argv[1:] == ['--child-open-race']:
         child_open_race()
+    elif sys.argv[1:] == ['--child-close-under-read-loop']:
+        child_close_under_read_loop()
     elif sys.argv[1:] == ['--child-close-under-read']:
         child_close_under_read()
     else:

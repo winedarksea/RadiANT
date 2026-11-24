@@ -32,6 +32,14 @@ static DWORD g_write_timeout = 1000;
  * cancels pending I/O before it waits for the exclusive side. */
 static SRWLOCK g_port_lock = SRWLOCK_INIT;
 
+/* Set while close_port() runs: port_get() then refuses new I/O, so a read
+ * thread that re-enters SI_Read straight after its read was cancelled
+ * cannot start another one and make the close (and, with SRW queueing new
+ * shared requests behind the waiting exclusive one, every write) wait out
+ * its timeout. g_close_lock keeps two closers apart. */
+static volatile LONG g_closing;
+static SRWLOCK g_close_lock = SRWLOCK_INIT;
+
 /* ANT_DLL writes from more than one thread. The synchronous handle this shim
  * used to open kept each write's bytes together; with overlapped I/O this lock
  * does that for writers, without making a write wait for a pending read.
@@ -42,6 +50,11 @@ static SRWLOCK g_write_lock = SRWLOCK_INIT;
  * with no total timeout, so a read waits for a first byte forever, and the
  * shim's backstop treats 0 as infinite too. */
 #define SHIM_MIN_READ_TIMEOUT_MS 1
+
+/* And the largest: a read longer than this returns empty and the caller
+ * reads again, which is all an "infinite" timeout needs, and nothing waits
+ * on a single read for longer. ANT_DLL asks for 1000. */
+#define SHIM_MAX_READ_TIMEOUT_MS 60000
 
 /* One manual-reset event per thread for its overlapped reads and writes,
  * created on first use and closed when the thread (or the DLL) goes. */
@@ -253,6 +266,7 @@ static const char *read_dump(const unsigned char *b, DWORD n)
     dump_start(&d);
     if (t_rx_gen != gen) {
         t_rx_gen = gen;
+        SecureZeroMemory(t_rx, sizeof(t_rx));
         t_rx_n = 0;
     }
     for (i = 0; i < n; i++) {
@@ -264,6 +278,7 @@ static const char *read_dump(const unsigned char *b, DWORD n)
         t_rx[t_rx_n++] = c;
         if (t_rx_n == 2 && t_rx[1] > RX_LEN_MAX) {
             drop++;                 /* the sync byte; LEN may be one */
+            SecureZeroMemory(t_rx, sizeof(t_rx));
             t_rx_n = 0;
             if (c == 0xA4)
                 t_rx[t_rx_n++] = c;
@@ -361,7 +376,7 @@ static HANDLE port_get(void)
     HANDLE h;
 
     AcquireSRWLockShared(&g_port_lock);
-    h = g_port;
+    h = g_closing ? INVALID_HANDLE_VALUE : g_port;
     if (h == INVALID_HANDLE_VALUE)
         ReleaseSRWLockShared(&g_port_lock);
     return h;
@@ -459,21 +474,28 @@ static int open_port(void)
  * can hold, and closes it once nothing can reach it. */
 static void close_port(void)
 {
-    HANDLE h = port_get();
+    HANDLE h;
 
-    if (h == INVALID_HANDLE_VALUE)
-        return;
-    CancelIoEx(h, NULL);
-    port_put();
-
-    AcquireSRWLockExclusive(&g_port_lock);
+    AcquireSRWLockExclusive(&g_close_lock);
+    AcquireSRWLockShared(&g_port_lock);
     h = g_port;
-    g_port = INVALID_HANDLE_VALUE;
-    ReleaseSRWLockExclusive(&g_port_lock);
-    if (h != INVALID_HANDLE_VALUE) {
-        CloseHandle(h);
-        shim_log("closed port");
+    ReleaseSRWLockShared(&g_port_lock);
+    if (h == INVALID_HANDLE_VALUE) {
+        ReleaseSRWLockExclusive(&g_close_lock);
+        return;
     }
+    /* No new I/O from here; cancel whatever is pending until the last
+     * holder has gone. h stays open: only a closer, and g_close_lock
+     * admits one, closes it (DllMain's detach takes g_close_lock too). */
+    InterlockedExchange(&g_closing, 1);
+    while (CancelIoEx(h, NULL), !TryAcquireSRWLockExclusive(&g_port_lock))
+        Sleep(1);
+    g_port = INVALID_HANDLE_VALUE;
+    InterlockedExchange(&g_closing, 0);
+    ReleaseSRWLockExclusive(&g_port_lock);
+    ReleaseSRWLockExclusive(&g_close_lock);
+    CloseHandle(h);
+    shim_log("closed port");
 }
 
 /* ---- the USBXpress host API ------------------------------------------- */
@@ -732,7 +754,9 @@ __declspec(dllexport) DWORD WINAPI SI_SetTimeouts(DWORD dwReadTimeout,
 {
     HANDLE h;
     DWORD r = dwReadTimeout < SHIM_MIN_READ_TIMEOUT_MS
-                  ? SHIM_MIN_READ_TIMEOUT_MS : dwReadTimeout;
+                  ? SHIM_MIN_READ_TIMEOUT_MS
+                  : dwReadTimeout > SHIM_MAX_READ_TIMEOUT_MS
+                  ? SHIM_MAX_READ_TIMEOUT_MS : dwReadTimeout;
 
     g_read_timeout = r;
     g_write_timeout = dwWriteTimeout;
@@ -742,8 +766,10 @@ __declspec(dllexport) DWORD WINAPI SI_SetTimeouts(DWORD dwReadTimeout,
         port_put();
     }
     if (r != dwReadTimeout)
-        shim_log("SI_SetTimeouts r=%lu (clamped to %lu: 0 would let a read"
-                 " wait forever) w=%lu", dwReadTimeout, r, dwWriteTimeout);
+        shim_log("SI_SetTimeouts r=%lu (clamped to %lu-%lu ms, so no read"
+                 " waits forever) w=%lu -> r=%lu", dwReadTimeout,
+                 (DWORD)SHIM_MIN_READ_TIMEOUT_MS,
+                 (DWORD)SHIM_MAX_READ_TIMEOUT_MS, dwWriteTimeout, r);
     else
         shim_log("SI_SetTimeouts r=%lu w=%lu", dwReadTimeout, dwWriteTimeout);
     return SI_SUCCESS;
@@ -829,14 +855,17 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID reserved)
          * gone, possibly while holding g_port_lock shared, and the system
          * closes the handle anyway. On FreeLibrary, close only if nothing
          * holds the lock: a loader-lock wait must never be unbounded. */
-        if (!reserved && TryAcquireSRWLockExclusive(&g_port_lock)) {
-            HANDLE p = g_port;
-            g_port = INVALID_HANDLE_VALUE;
-            ReleaseSRWLockExclusive(&g_port_lock);
-            if (p != INVALID_HANDLE_VALUE) {
-                CloseHandle(p);
-                shim_log("closed port");
+        if (!reserved && TryAcquireSRWLockExclusive(&g_close_lock)) {
+            if (TryAcquireSRWLockExclusive(&g_port_lock)) {
+                HANDLE p = g_port;
+                g_port = INVALID_HANDLE_VALUE;
+                ReleaseSRWLockExclusive(&g_port_lock);
+                if (p != INVALID_HANDLE_VALUE) {
+                    CloseHandle(p);
+                    shim_log("closed port");
+                }
             }
+            ReleaseSRWLockExclusive(&g_close_lock);
         }
     }
     return TRUE;

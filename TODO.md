@@ -727,7 +727,10 @@ group.
   (shared holders never block each other, so a pending read still does not
   hold up a write); open configures a local handle and publishes it under
   the exclusive lock; close cancels pending I/O first, then unpublishes
-  under the exclusive lock and closes. DllMain no longer resolves the port
+  under the exclusive lock and closes; while it runs a `g_closing` flag
+  makes `port_get()` refuse new I/O and the cancel repeats until the
+  exclusive lock is taken, so a read thread that re-enters at once cannot
+  make the close or the writes wait out a read. DllMain no longer resolves the port
   and closes on FreeLibrary only via a try-lock. Red on the 903718a build:
   8 racing `SI_Open`s on a one-instance pipe clobbered the winner's handle
   from round 1 (`ShimLockTest`).
@@ -847,8 +850,8 @@ group.
   *Done 2026-11-24 (wip/s24-zwift-shim):* `/W4 /WX /O2 /sdl /guard:cf`,
   linked `/guard:cf /DYNAMICBASE /NXCOMPAT` (dumpbin: CF instrumented), no
   `_CRT_SECURE_NO_WARNINGS`; port names `COM[0-9]{1,3}` from every source,
-  invalid values not echoed; `SI_SetTimeouts` clamps a zero read timeout to
-  1 ms; `SECURITY.md` "The Zwift shim" section. A `SHIM_TEST_PIPES` build in
+  invalid values not echoed; `SI_SetTimeouts` clamps the read timeout to
+  1..60000 ms (0 used to mean forever); `SECURITY.md` "The Zwift shim" section. A `SHIM_TEST_PIPES` build in
   `out/test/` (never installed) keeps the named-pipe tests.
 - [ ] **udev rule.** The driver-unbind line in `host/linux/70-radiant-ant.rules`
   matches vendor 0fcf with no product filter, wider than the three access
