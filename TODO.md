@@ -619,7 +619,7 @@ group.
   cross-check the records at boot (EIO when K_dev is absent but a counter is
   present, or when N is absent with a non-zero boot counter), and gate the
   "older image has no N" migration on a format marker.
-- [ ] **A search record goes live before its filter is written.**
+- [x] **A search record goes live before its filter is written.**
   `begin_common()` (`radiant_search.c` ~:582) sets `active` first and `want`
   last, in thread context with no critical section, and `handle_ok()` (~:1043)
   reads them from the radio interrupt. A zeroed record is a full-wildcard
@@ -628,12 +628,23 @@ group.
   instructions per search start. Fix: build the record in a local and publish
   it inside `radiant_event_crit_enter()` with `active` last; guard the memset
   in `radiant_search_end()` the same way.
-- [ ] **The sweep can offer a frame to a channel that has left SEARCHING.**
+  *Done 2026-11-24 (wip/s24-search-races):* as proposed; `seen_find()` takes
+  the frequency as an argument because begin now asks before the record is
+  published. The torn instant is two plain stores apart, so no single-threaded
+  test reaches it: `test_event.c`'s crit hook now runs a probe at each edge of
+  the section, and `test_begin_publishes_the_record_whole` /
+  `test_end_clears_the_record_whole` offer a frame there and check the record
+  is absent or whole (red before: the probe never ran).
+- [x] **The sweep can offer a frame to a channel that has left SEARCHING.**
   Membership is removed after the state change (`radiant_ant.c` ~:3787
   vs :3797; timeout ~:3239 vs the later pump), and `api_search_acquired()` has
   no state check, so a broadcast can follow CHANNEL_CLOSED and the frame's one
   ACQUIRE claim is spent on a dead channel. Fix: `api_search_permit()` returns
   false unless the channel is SEARCHING.
+  *Done 2026-11-24 (wip/s24-search-races):* as proposed (a scan stays
+  SEARCHING). `test_a_channel_that_left_searching_is_not_offered_a_frame`: a
+  timed-out channel still in the sweep took the frame and posted a broadcast
+  after its timeout while the live searcher behind it stayed SEARCHING.
 - [ ] **Matter: one spoofed common page creates persistent endpoints, and
   restored endpoints that are never claimed are never removed.**
   `endpoint_get_or_add()` (`radiant_matter.c` ~:487) instantiates on first
@@ -745,14 +756,31 @@ group.
   stall returns with it queued, so the next frame follows a fragment and a
   host parser may resynchronise on a `0xA4` inside air payload. Needs a wedged
   UART today (no overlay sets flow control). Fix: all-or-nothing writes.
-- [ ] **0xF1, 0xF2, 0xF3 and 0x46 accept over-long bodies.** `dispatch()`
+- [x] **0xF1, 0xF2, 0xF3 and 0x46 accept over-long bodies.** `dispatch()`
   checks minimum lengths only; `ant_wire.yaml` declares exact ones and 0xF5
   already enforces them. Fix: `len == N`.
-- [ ] **The channel type byte is stored unvalidated and compared two ways.**
+  *Done 2026-11-24 (wip/s24-search-races):* `body_len_ok()` in
+  `ant_serial_bridge.c` gates `dispatch()` (INVALID_MESSAGE, no arm runs);
+  it sits outside `ANT_BRIDGE_PARSER_ONLY` so `test_bridge_parser.c` tests it.
+  ant_wire.yaml's INVALID_MESSAGE text says so. The host tools already send
+  exact lengths. L15 direct diag A/B/A: a 10-byte 0x46 answers NO_ERROR on
+  wd_dir_0fce666 and INVALID_MESSAGE on the fix. Security text 7828 -> 7788 B
+  (release.yml recipe, Feather core, base 92239e9 measured in the same
+  sitting; -40 B, not traced), bss delta unchanged.
+- [x] **The channel type byte is stored unvalidated and compared two ways.**
   Some paths mask it and others compare raw (`radiant_ant.c` ~:1135,
   :1984, :2058, :4470, :4550), so type 0x41 reads back as RX-only and refuses
   broadcasts yet acknowledges and accepts acked data and bursts. Fix:
   normalise once at assign.
+  *Done 2026-11-24 (wip/s24-search-races):* masked, not refused:
+  `radiant_channel_assign()` stores `type & 0xF0`. Refusing is out of
+  contract (assign's permitted error set has no code for a bad type,
+  `radiant_channel.h`), and the status byte never carried the low nibble, so
+  the mask is invisible on the wire. Bits 7:4 are kept as given (0x70 is
+  still accepted, as `test_an_unrecognised_channel_type_is_accepted` pins).
+  0x41 now never transmits, 0x51 never listens (api tests). L15 A/B/A: type
+  0x41 status 0x42 on both, acknowledged data accepted on wd_dir_0fce666 and
+  refused (0x15) on the fix; scan and 8-channel session unchanged.
 - [ ] **A failed re-import during 0xF2 on a secured master would fail open**
   (latent; needs an opaque key backend). After the old root is destroyed, a
   failing import releases the context (`radiant_sec.c` ~:621-640), and an
