@@ -61,7 +61,7 @@ int radiant_ant_sec_key_replace(uint8_t ch, const uint8_t *root, size_t bits,
  * RADIANT_WIRE_CHANNEL_IN_WRONG_STATE when changed, and an accepted 0x43
  * marks the channel in radiant_ant_sec_period_mask (review 2026-11-22).
  * Takes api_lock. */
-radiant_ant_err_t radiant_ant_sec_rebind(uint8_t ch, uint16_t v, int32_t types);
+int radiant_ant_sec_rebind(uint8_t ch, uint16_t v, int32_t types);
 
 /* Bit n: the host set channel n's period with 0x43 since its last assign,
  * which 0xF3 requires. The assign clears it. Under api_lock. */
