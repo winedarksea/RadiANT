@@ -182,6 +182,16 @@ struct radiant_api_stats {
 	 */
 	uint32_t crc_repair_implausible;
 	/*
+	 * Clean tracked frames dropped because body byte 0 (the transmission
+	 * type) differs from the channel's non-zero configured or acquired one:
+	 * another sensor sharing the device number's low 16 bits and the device
+	 * type (ANT+ puts bits 16-19 in that byte's upper nibble). Not posted,
+	 * not ACKed, no re-anchor, and the slot is not counted as heard. Not
+	 * carried by 0xF6 or 0xF7 (page 10 is full); read in tests and the
+	 * debug log.
+	 */
+	uint32_t rx_ttype_mismatch;
+	/*
 	 * Acknowledgements sent from a broadcast buffer the host never wrote,
 	 * i.e. carrying zeros. Normal and expected on a SLAVE, which has no
 	 * reason to own a broadcast buffer at all; on a master it means the

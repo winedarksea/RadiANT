@@ -4603,8 +4603,10 @@ ZTEST(api, test_a_repaired_broadcast_reaches_the_host_short_match)
  * The negative: a repair the sanity checks refute is not delivered. The
  * sender's frame carries transmission type 6 against the 5 the channel
  * acquired. The address match cannot see byte 0 of the body, so a repaired
- * frame whose transmission type disagrees is taken as a mis-repair. (A clean
- * frame like it would go up: on a clean frame it is a fact about the air.)
+ * frame whose transmission type disagrees is taken as a mis-repair, counted
+ * in crc_repair_refuted. (A clean frame like it is dropped too, as another
+ * sensor's, and counted in rx_ttype_mismatch instead: the cases after
+ * air_clean_tt() below.)
  */
 ZTEST(api, test_a_refuted_repair_is_not_delivered)
 {
@@ -4689,6 +4691,219 @@ ZTEST(api, test_a_repaired_acknowledged_frame_is_neither_acked_nor_delivered)
 	end_of_test();
 }
 #endif /* CONFIG_RADIANT_CRC_REPAIR */
+
+/*
+ * One CLEAN frame in the current tracked window: device `dev` of `dev_type`,
+ * control byte `ctrl`, transmission type `trans_type` (body byte 0). Aired a
+ * quarter into the window, off the predicted slot at its centre, so a
+ * re-anchor on it is visible in radiant_channel_next_slot(). Returns its
+ * t_sync once the window and any reply have run.
+ */
+static radiant_time_t air_clean_tt(uint16_t dev, uint8_t dev_type, uint8_t ctrl,
+				   uint8_t trans_type)
+{
+	const struct fake_radio_arm *w;
+	uint8_t                      frame[FAKE_RADIO_AIR_FRAME_MAX];
+	uint8_t                      len;
+	radiant_time_t               t;
+	radiant_time_t               until;
+
+	if (fake_radio_is_idle()) {
+		run_housekeeping();
+	}
+	w = last_arm_of(FAKE_RADIO_ARM_RX);
+	zassert_not_null(w, "setup: no tracked window armed");
+	zassert_false(w->terminated, "setup: the tracked window had already ended");
+
+	len = fake_radio_build_ant_frame(frame, dev, dev_type, trans_type,
+					 peer_payload);
+	frame[6] = ctrl;
+	t = w->t_open + ((w->t_close - w->t_open) / 4u);
+	zassert_equal(RADIANT_RADIO_OK_RC, fake_radio_air_frame(t, frame, len),
+		      "could not put device %u on the air", (unsigned int)dev);
+
+	until = t + RADIANT_TRANSFER_SLOT_REPLY_US + 1000u;
+	if (until < w->t_close + 1000u) {
+		until = w->t_close + 1000u;
+	}
+	fake_radio_advance_to(until);
+	drain();
+	return t;
+}
+
+/*
+ * Hardening (TODO.md): the address match covers device number and type only,
+ * and ANT+ puts device-number bits 16-19 in the transmission type's upper
+ * nibble. A clean frame of type 6 on a channel that acquired its sensor at 5
+ * is another sensor sharing the low 16 bits: it must not reach the host, be
+ * answered on air, or re-anchor the slot, and the slot is a miss. Until
+ * 2026-11-24 only a CRC-repaired frame was checked; this one went up under the
+ * channel's ID. The type-5 frame after it is the control.
+ */
+static void test_a_clean_frame_of_another_transmission_type_is_dropped_run(void)
+{
+	const struct radiant_api_stats *s = radiant_api_stats_get();
+	uint8_t        buf[8];
+	uint16_t       dev;
+	uint32_t       foreign;
+	uint32_t       posted;
+	uint32_t       missed;
+	uint32_t       sent;
+	radiant_time_t t;
+
+	/* Bidirectional, with a host write pending, so a frame taken as the
+	 * master's would be answered with a 0x02 in its reply window. */
+	open_and_acquire_slave_of_type((uint8_t)RADIANT_WIRE_CHANNEL_TYPE_SLAVE, &dev);
+	run_housekeeping();
+	memcpy(buf, bcast_payload, sizeof(buf));
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_broadcast_message_tx(CH, 8u, buf));
+	drain();
+	memset(msglog, 0, sizeof(msglog));
+	n_msg = 0u;
+
+	foreign = s->rx_ttype_mismatch;
+	posted = s->rx_posted;
+	missed = s->slots_missed;
+	sent = count_tx_with_ctrl(RADIANT_CTRL_SLAVE_BROADCAST);
+
+	t = air_clean_tt(dev, 0x0Bu, RADIANT_CTRL_BROADCAST, 6u);
+
+	zassert_equal(0u, count_msgs((uint8_t)RADIANT_WIRE_MESG_BROADCAST_DATA_ID),
+		      "another sensor's frame reached the host under this "
+		      "channel's ID");
+	zassert_equal(posted, s->rx_posted, "the type-6 frame was queued");
+	zassert_equal(sent, count_tx_with_ctrl(RADIANT_CTRL_SLAVE_BROADCAST),
+		      "another sensor's frame was answered on air");
+	zassert_not_equal(t + PERIOD_US, radiant_channel_next_slot(CH),
+			  "another sensor's frame re-anchored the slot clock");
+	zassert_equal(missed + 1u, s->slots_missed,
+		      "a window that heard only another sensor was not a miss");
+	zassert_equal(1u, count_channel_events(CH, (uint8_t)RADIANT_WIRE_EVENT_RX_FAIL),
+		      "the foreign-only window raised no RX_FAIL");
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH));
+	zassert_equal(foreign + 1u, s->rx_ttype_mismatch,
+		      "the type-6 frame was not counted as another sensor's");
+
+	/* Control: the acquired sensor, type 5, in the next window. */
+	t = air_clean_tt(dev, 0x0Bu, RADIANT_CTRL_BROADCAST, 5u);
+
+	zassert_equal(foreign + 1u, s->rx_ttype_mismatch,
+		      "control: the acquired sensor's frame was counted foreign");
+	zassert_equal(1u, count_bcast_from(dev),
+		      "control: the acquired sensor's frame did not reach the host");
+	zassert_equal(sent + 1u, count_tx_with_ctrl(RADIANT_CTRL_SLAVE_BROADCAST),
+		      "control: the slave broadcast did not go out");
+	zassert_equal(t + PERIOD_US, radiant_channel_next_slot(CH),
+		      "control: the acquired sensor's frame did not re-anchor");
+
+	end_of_test();
+}
+
+ZTEST(api, test_a_clean_frame_of_another_transmission_type_is_dropped)
+{
+	api_long_match();
+	test_a_clean_frame_of_another_transmission_type_is_dropped_run();
+}
+
+ZTEST(api, test_a_clean_frame_of_another_transmission_type_is_dropped_short_match)
+{
+	zassert_true(radiant_radio_caps_get()->filter_wildcard_dev);
+	test_a_clean_frame_of_another_transmission_type_is_dropped_run();
+}
+
+/*
+ * The sensor left and a neighbour with the same low 16 bits and device type
+ * stayed: every window hears only the neighbour. Counted as heard, those
+ * frames would hold the channel in TRACKING forever on a sensor that is gone;
+ * as misses, eight of them return it to search (RX_FAIL_GO_TO_SEARCH).
+ */
+ZTEST(api, test_only_another_sensors_frames_send_the_channel_back_to_search)
+{
+	const struct radiant_api_stats *s = radiant_api_stats_get();
+	uint16_t dev;
+	uint32_t foreign;
+	uint32_t i;
+
+	open_and_acquire_slave(&dev);
+	run_housekeeping();
+	memset(msglog, 0, sizeof(msglog));
+	n_msg = 0u;
+	foreign = s->rx_ttype_mismatch;
+
+	for (i = 0u; i < 16u &&
+		     radiant_channel_state_get(CH) == RADIANT_CH_STATE_TRACKING;
+	     i++) {
+		(void)air_clean_tt(dev, 0x0Bu, RADIANT_CTRL_BROADCAST, 6u);
+	}
+
+	zassert_equal(RADIANT_CH_STATE_SEARCHING, radiant_channel_state_get(CH),
+		      "%u windows of another sensor's frames kept the channel "
+		      "tracking", (unsigned int)i);
+	zassert_equal(1u, count_channel_events(CH,
+			(uint8_t)RADIANT_WIRE_EVENT_RX_FAIL_GO_TO_SEARCH));
+	zassert_equal(i, s->rx_ttype_mismatch - foreign,
+		      "a window did not hear exactly the foreign frame");
+	zassert_equal(0u, count_msgs((uint8_t)RADIANT_WIRE_MESG_BROADCAST_DATA_ID),
+		      "another sensor's frame reached the host");
+
+	end_of_test();
+}
+
+/*
+ * Acknowledged data of another transmission type: an ACK on air would end the
+ * other sensor's own failure report for a message this node then drops (or,
+ * before the fix, delivered as this channel's). Type 5 is the control.
+ */
+static void test_a_clean_ack_of_another_transmission_type_is_not_acked_run(void)
+{
+	const struct radiant_api_stats *s = radiant_api_stats_get();
+	uint8_t  reply = radiant_transfer_reply_ctrl(RADIANT_CTRL_BURST_LAST_SEQ0);
+	uint16_t dev;
+	uint32_t foreign;
+	uint32_t replies;
+
+	open_and_acquire_slave_of_type((uint8_t)RADIANT_WIRE_CHANNEL_TYPE_SLAVE, &dev);
+	run_housekeeping();
+	memset(msglog, 0, sizeof(msglog));
+	n_msg = 0u;
+
+	foreign = s->rx_ttype_mismatch;
+	replies = count_tx_with_ctrl(reply);
+	(void)air_clean_tt(dev, 0x0Bu, RADIANT_CTRL_BURST_LAST_SEQ0, 6u);
+
+	zassert_equal(replies, count_tx_with_ctrl(reply),
+		      "another sensor's acknowledged data was ACKed on air");
+	zassert_equal(0u, count_msgs((uint8_t)RADIANT_WIRE_MESG_ACKNOWLEDGED_DATA_ID),
+		      "another sensor's acknowledged data reached the host");
+	zassert_equal(foreign + 1u, s->rx_ttype_mismatch);
+
+	/* Control: the acquired sensor's acknowledged data is ACKed and
+	 * delivered. */
+	(void)air_clean_tt(dev, 0x0Bu, RADIANT_CTRL_BURST_LAST_SEQ0, 5u);
+
+	zassert_equal(replies + 1u, count_tx_with_ctrl(reply),
+		      "control: the acquired sensor's acknowledged data was "
+		      "not ACKed");
+	zassert_equal(1u, count_msgs((uint8_t)RADIANT_WIRE_MESG_ACKNOWLEDGED_DATA_ID),
+		      "control: the acquired sensor's acknowledged data did not "
+		      "reach the host");
+	zassert_equal(foreign + 1u, s->rx_ttype_mismatch);
+
+	end_of_test();
+}
+
+ZTEST(api, test_a_clean_ack_of_another_transmission_type_is_not_acked)
+{
+	api_long_match();
+	test_a_clean_ack_of_another_transmission_type_is_not_acked_run();
+}
+
+ZTEST(api, test_a_clean_ack_of_another_transmission_type_is_not_acked_short_match)
+{
+	zassert_true(radiant_radio_caps_get()->filter_wildcard_dev);
+	test_a_clean_ack_of_another_transmission_type_is_not_acked_run();
+}
 
 /*
  * Kill the window the channel currently has pending and return with its
@@ -5988,6 +6203,70 @@ ZTEST(api, test_fec_slave_with_pinned_identity_completes)
 {
 	api_long_match();
 	fec_success_case(5u, false);
+}
+
+/*
+ * The transmission-type check reads the channel's ID as radiant_channel_id_get()
+ * gives it: the acquired type once a wildcard has resolved, the configured one
+ * otherwise. Zwift's FE-C slave names the device and wildcards the type
+ * (`configured` 0), the self channels' re-pin names all three (5): either
+ * way, once tracking at 5, a type-6 frame is another sensor's. The device is
+ * named, so the sweep never brings it to air_clean_tt() as a wildcard would.
+ */
+static void named_device_drops_another_type_run(uint8_t configured)
+{
+	const struct radiant_api_stats *s = radiant_api_stats_get();
+	uint16_t number = fec_acquire(configured, false);
+	uint16_t dev;
+	uint8_t  dtype;
+	uint8_t  ttype;
+	uint32_t foreign;
+
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_channel_id_get(CH, &dev, &dtype, &ttype));
+	zassert_equal(5u, ttype, "setup: the channel is not tracking at type 5");
+	memset(msglog, 0, sizeof(msglog));
+	n_msg = 0u;
+	foreign = s->rx_ttype_mismatch;
+
+	(void)air_clean_tt(number, 0x11u, RADIANT_CTRL_BROADCAST, 6u);
+	zassert_equal(0u, count_msgs((uint8_t)RADIANT_WIRE_MESG_BROADCAST_DATA_ID),
+		      "configured type %u: another sensor's frame reached the "
+		      "host", (unsigned int)configured);
+	zassert_equal(foreign + 1u, s->rx_ttype_mismatch);
+
+	/* Control. */
+	(void)air_clean_tt(number, 0x11u, RADIANT_CTRL_BROADCAST, 5u);
+	zassert_equal(1u, count_msgs((uint8_t)RADIANT_WIRE_MESG_BROADCAST_DATA_ID),
+		      "configured type %u: control frame not delivered",
+		      (unsigned int)configured);
+	zassert_equal(foreign + 1u, s->rx_ttype_mismatch);
+
+	end_of_test();
+}
+
+ZTEST(api, test_a_wildcard_type_drops_another_type_once_acquired)
+{
+	api_long_match();
+	named_device_drops_another_type_run(0u);
+}
+
+ZTEST(api, test_a_wildcard_type_drops_another_type_once_acquired_short_match)
+{
+	zassert_true(radiant_radio_caps_get()->filter_wildcard_dev);
+	named_device_drops_another_type_run(0u);
+}
+
+ZTEST(api, test_a_configured_type_drops_a_mismatch)
+{
+	api_long_match();
+	named_device_drops_another_type_run(5u);
+}
+
+ZTEST(api, test_a_configured_type_drops_a_mismatch_short_match)
+{
+	zassert_true(radiant_radio_caps_get()->filter_wildcard_dev);
+	named_device_drops_another_type_run(5u);
 }
 
 ZTEST(api, test_fec_slave_no_ack_and_wrong_ack_recover_once)

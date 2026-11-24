@@ -914,7 +914,7 @@ group.
 
 ## Hardening
 
-- [ ] **Tracked channels do not check the transmission type of a clean frame.**
+- [x] **Tracked channels do not check the transmission type of a clean frame.**
   `api_tracked_frame()` (`radiant_ant.c` ~:2455) compares body byte 0
   only for CRC-repaired frames, so a frame with another transmission type
   re-anchors the slot, is ACKed, and goes to the host under the channel's ID.
@@ -922,6 +922,54 @@ group.
   merge in a dense venue. The behaviour is deliberate (`test_api.c` ~:4526).
   Fix: drop a mismatching frame before `radiant_channel_on_slot()` when the
   configured or acquired type is non-zero; at minimum post the frame's own ID.
+  *Assessment 2026-11-24 (before the fix):* the clean-frame exemption came in
+  with CRC repair (0fbbba4, 2026-08-10). Its comment gave two reasons: "a
+  shared channel, or a sensor whose transmission type this host guessed".
+  Neither holds, and no path was found where a tracking channel with a
+  non-zero type legitimately hears another byte 0:
+  - A guessed type never acquires. Search filters the type at acquisition
+    (`radiant_search.c` `id_match()`). A channel that loses its sensor
+    searches again with `radiant_channel_id_get()`, which gives the acquired
+    ID (`api_search_begin()`). A real ANT receiver matches the whole channel
+    ID, so it never hears such a frame either.
+  - Shared channels: bits 0-1 of the type only say how long the shared
+    address is, and the address itself is in payload bytes 1-2. Master and
+    slaves all transmit the one channel ID.
+  - Master channels hearing replies: `radiant_channel_id_get()` gives the
+    configured ID. A slave replies with the channel ID it acquired: ours
+    encodes `id.trans_type` (`radiant_frame.c` encode, asserted by
+    `fec_exchange()`), and so does an ANT slave.
+  - Profile handoff (`radiant_profile_handoff.c`) takes its type from a
+    TRACKING channel's ID, so the receiver applies the type the master
+    actually sends.
+  - Bridge self channels discover with a wildcard and re-pin with the
+    binding's type, which came from the acquired ID.
+  - Keyed channels: XOR and CMAC cover the payload only. Byte 0 stays the
+    plain type (`test_api_sec.c` "the header moved").
+  - Zwift's FE-C slave names the device and wildcards the type. It acquires
+    at the sensor's type, and every later frame from that sensor carries it.
+  A wildcard (0) still checks nothing. The configured ID is never narrowed,
+  so close and reopen searches wide again.
+  *Done 2026-11-24 (wip/s24-ttype):* the check now covers clean frames too.
+  A mismatching clean frame is dropped before `radiant_channel_on_slot()`
+  and counted in the new `api_stats.rx_ttype_mismatch` (not in 0xF6, and
+  0xF7 page 10 is full). A repaired one still counts `crc_repair_refuted`.
+  `api_sched_rx()` still marks `slot_heard` before the frame is processed,
+  and puts back the window's previous value when `api_tracked_frame()`
+  reports the frame was not ours. So a channel whose sensor left while a
+  neighbour stayed keeps missing, and returns to search after eight misses.
+  Nine api cases, in every api scenario: clean broadcast and acknowledged
+  data of type 6 on a channel acquired at 5 (long and short match), back to
+  search on foreign frames only, and a named device with a configured type
+  of 0 or 5 (long and short).
+  Residuals: (1) a frame that reaches a non-idle transfer
+  (`api_sched_rx()`'s non-idle branch, and burst continuations in
+  WAIT_NEXT) goes to the transfer engine without a type check. It still
+  marks the slot heard. A foreign packet in the middle of our own burst
+  could be taken as ours. WAIT_NEXT's broadcast fallback does get the check.
+  (2) The search seen-table and acquisition paths were not changed. They
+  already filter the type. (3) On-air check pending (plan Phase 4: TI
+  receiver, two HR #12345 sources with different upper nibbles).
 - [ ] **Acquisition and re-anchor accept any control byte.** `handle_ok()` and
   `api_search_acquired()` anchor on slave replies, ACKs and non-opener burst
   packets, and the tracked path sets `slot_heard` before discarding ACK types.
