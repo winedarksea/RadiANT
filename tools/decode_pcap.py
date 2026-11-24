@@ -110,6 +110,15 @@ INFER_MIN_SPACINGS = 8
 # Spacings below this are not slot spacings (ANT's fastest useful rate is far
 # slower than 256 ticks, ~7.8 ms).
 INFER_MIN_TICKS = 256
+# Bunched capture timestamps: under host load USBPcap can stamp messages that
+# arrived over half a second with one time (14 messages at 118.269 s in
+# captures/zwift-20261123-184006.pcap, which faked a 535 ms device stall). A
+# run of dev->host messages within BUNCH_WINDOW_S of its first, holding at
+# least BUNCH_MIN_MESSAGES timestamped data messages whose RX ticks span more
+# than BUNCH_MIN_SPAN_MS, is reported. Loss and slots use the ticks already.
+BUNCH_WINDOW_S = 0.001
+BUNCH_MIN_MESSAGES = 6
+BUNCH_MIN_SPAN_MS = 100
 
 # Host messages after which a channel's slot grid does not carry on.
 CHANNEL_BREAK_IDS = (ant_wire.MESG_UNASSIGN_CHANNEL_ID, ant_wire.MESG_ASSIGN_CHANNEL_ID,
@@ -808,6 +817,34 @@ def decode(path: Path, raw: bool = False, only_device: int | None = None,
     bulk_payloads = 0
 
     stream_times = {}
+    # (bus, device) -> [first USB time, [rx ticks...], messages] for the run
+    # of dev->host messages stamped within BUNCH_WINDOW_S of its first.
+    bunches: dict[tuple[int, int], list] = {}
+
+    def end_bunch(bd) -> None:
+        run = bunches.pop(bd, None)
+        if run is None or len(run[1]) < BUNCH_MIN_MESSAGES:
+            return
+        ticks = run[1]
+        # Arrival order; one counter serves every channel and wraps at 2 s.
+        span = sum((b - a) % TICK_WRAP for a, b in zip(ticks, ticks[1:]))
+        span_ms = span * 1000 / TICK_HZ
+        if span_ms > BUNCH_MIN_SPAN_MS:
+            warnings.append(
+                f"warning: {run[0]:.3f}s bus={bd[0]} device={bd[1]}: "
+                f"{run[2]} messages share one capture timestamp but span "
+                f"{span_ms:.0f} ms of receive time (capture lagged; trust RX "
+                f"ticks, not this timeline)")
+
+    def note_bunch(bd, rel, msg_id, body) -> None:
+        run = bunches.get(bd)
+        if run is None or rel - run[0] > BUNCH_WINDOW_S:
+            end_bunch(bd)
+            run = bunches[bd] = [rel, [], 0]
+        run[2] += 1
+        got = rx_ticks(body) if msg_id in RX_DATA_IDS else None
+        if got is not None:
+            run[1].append(got[1])
 
     def ledger(key) -> Ledger:
         if key not in ledgers:
@@ -842,6 +879,7 @@ def decode(path: Path, raw: bool = False, only_device: int | None = None,
             line = f"{rel:10.3f}  {direction}  {name} {body.hex()}"
             if from_device:
                 timing.note_dev(rel, msg_id, body)
+                note_bunch((bus, device), rel, msg_id, body)
             else:
                 timing.note_host(rel, msg_id, body)
             if msg_id == ant_wire.MESG_SYSTEM_RESET_ID and not from_device:
@@ -934,6 +972,9 @@ def decode(path: Path, raw: bool = False, only_device: int | None = None,
     # that stream (the same timestamp used for normal split-frame completion).
     for stream_key, rel in stream_times.items():
         consume(stream_key, rel, final=True)
+
+    for bd in list(bunches):
+        end_bunch(bd)
 
     for stream in streams.values():
         if stream:

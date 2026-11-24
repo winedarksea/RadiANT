@@ -22,6 +22,15 @@ static HANDLE g_port = INVALID_HANDLE_VALUE;
 static DWORD g_read_timeout = 1000;
 static DWORD g_write_timeout = 1000;
 
+/* ANT_DLL writes from more than one thread. The synchronous handle this shim
+ * used to open kept each write's bytes together; with overlapped I/O this lock
+ * does that for writers, without making a write wait for a pending read. */
+static SRWLOCK g_write_lock = SRWLOCK_INIT;
+
+/* One manual-reset event per thread for its overlapped reads and writes,
+ * created on first use and closed when the thread (or the DLL) goes. */
+static __declspec(thread) HANDLE t_ev;
+
 /* Empty reads come in floods (one per read timeout while the radio is quiet),
  * so each thread folds a run of them into one line, emitted when the run ends
  * or once a second while it lasts. Per-thread because ANT_DLL reads and
@@ -136,6 +145,73 @@ static const char *write_dump(const unsigned char *b, DWORD n)
     return buf;
 }
 
+/* Extra time past the read or write timeout before port_io() cancels an I/O
+ * itself. On a COM port COMMTIMEOUTS always end the I/O first; the backstop
+ * is for handles they do not apply to, like the tests' named pipe. */
+#define IO_BACKSTOP_MS 500
+
+/* The backstop for a read or write timeout. 0 means no total timeout to
+ * COMMTIMEOUTS, and INFINITE is infinite, so neither gets one here: adding
+ * to them would cut a wait short (or wrap to 499 ms). */
+static DWORD io_backstop(DWORD timeout_ms)
+{
+    if (timeout_ms == 0 || timeout_ms > INFINITE - IO_BACKSTOP_MS - 1)
+        return INFINITE;
+    return timeout_ms + IO_BACKSTOP_MS;
+}
+
+/* One read or write on g_port, waited for here so callers keep blocking
+ * semantics. The port is opened FILE_FLAG_OVERLAPPED because Windows runs
+ * synchronous I/O on one handle one call at a time: a write then waits for
+ * ANT_DLL's pending 1-byte read, which on a quiet radio lasts the whole read
+ * timeout (89 of 250 writes held >=50 ms, up to 1348 ms, in the 2026-11-23
+ * TI/Zwift session). A wait that passes backstop_ms cancels the I/O and
+ * returns what arrived as success. On failure, GetLastError() holds the
+ * I/O's error. */
+static BOOL port_io(BOOL write, void *buf, DWORD n, DWORD *done,
+                    DWORD backstop_ms)
+{
+    HANDLE h = g_port;
+    OVERLAPPED ov;
+    BOOL ok;
+    DWORD err;
+
+    *done = 0;
+    if (!t_ev) {
+        t_ev = CreateEventW(NULL, TRUE, FALSE, NULL);
+        if (!t_ev)
+            return FALSE;
+    }
+    ZeroMemory(&ov, sizeof(ov));
+    ov.hEvent = t_ev;
+    ok = write ? WriteFile(h, buf, n, NULL, &ov)
+               : ReadFile(h, buf, n, NULL, &ov);
+    if (!ok && GetLastError() != ERROR_IO_PENDING)
+        return FALSE;
+    if (GetOverlappedResultEx(h, &ov, done, backstop_ms, FALSE))
+        return TRUE;
+    err = GetLastError();
+    if (err != WAIT_TIMEOUT)
+        return FALSE;               /* completed, with an error */
+    CancelIoEx(h, &ov);
+    /* Wait for it to finish either way: ov lives on this stack. */
+    if (GetOverlappedResult(h, &ov, done, TRUE))
+        return TRUE;                /* it completed before the cancel */
+    err = GetLastError();
+    if (err == ERROR_OPERATION_ABORTED)
+        return TRUE;                /* our cancel: a timeout, not an error */
+    SetLastError(err);
+    return FALSE;
+}
+
+static void close_thread_event(void)
+{
+    if (t_ev) {
+        CloseHandle(t_ev);
+        t_ev = NULL;
+    }
+}
+
 /* A handle value ANT_DLL can hold that is obviously ours and never a real
  * kernel handle it might accidentally pass elsewhere. */
 #define SHIM_HANDLE ((HANDLE)(ULONG_PTR)0x51D0BEEF)
@@ -151,7 +227,7 @@ static int open_port(void)
 
     sprintf_s(path, sizeof(path), "\\\\.\\%s", shim_port());
     g_port = CreateFileA(path, GENERIC_READ | GENERIC_WRITE, 0, NULL,
-                         OPEN_EXISTING, 0, NULL);
+                         OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
     if (g_port == INVALID_HANDLE_VALUE) {
         DWORD err = GetLastError();
         shim_log("open %s FAILED err=%lu %s", path, err, shim_err_name(err));
@@ -220,8 +296,17 @@ __declspec(dllexport) DWORD WINAPI SI_GetNumDevices(LPDWORD lpdwNumDevices)
     if (h != INVALID_HANDLE_VALUE)
         CloseHandle(h);
     if (lpdwNumDevices) *lpdwNumDevices = 1;
-    shim_log("SI_GetNumDevices -> 1 (%s%s)", shim_port(),
-             h == INVALID_HANDLE_VALUE ? ", already open here" : "");
+    if (h != INVALID_HANDLE_VALUE)
+        shim_log("SI_GetNumDevices -> 1 (%s)", shim_port());
+    else if (err == ERROR_ACCESS_DENIED)
+        shim_log("SI_GetNumDevices -> 1 (%s, already open here)", shim_port());
+    else
+        /* The probe's error is not "held by us", so the port this shim holds
+         * may have left USB. The answer stays 1 (ANT_DLL behaves as before);
+         * the line is evidence: the XDS110 left at 18:47:06 on 2026-11-23
+         * and the old "already open here" line hid it. */
+        shim_log("SI_GetNumDevices -> 1 (%s open here, but probe err=%lu %s: "
+                 "port may be gone)", shim_port(), err, shim_err_name(err));
     return SI_SUCCESS;
 }
 
@@ -294,7 +379,8 @@ __declspec(dllexport) DWORD WINAPI SI_Read(HANDLE cyHandle, LPVOID lpBuffer,
     if (g_port == INVALID_HANDLE_VALUE || !lpBuffer)
         return SI_INVALID_HANDLE;
     t0 = shim_ticks();
-    ok = ReadFile(g_port, lpBuffer, dwBytesToRead, &got, NULL);
+    ok = port_io(FALSE, lpBuffer, dwBytesToRead, &got,
+                 io_backstop(g_read_timeout));
     t1 = shim_ticks();
     if (!ok) {
         DWORD err = GetLastError();
@@ -337,9 +423,12 @@ __declspec(dllexport) DWORD WINAPI SI_Write(HANDLE cyHandle, LPVOID lpBuffer,
     if (lpdwBytesWritten) *lpdwBytesWritten = 0;
     if (g_port == INVALID_HANDLE_VALUE || !lpBuffer)
         return SI_INVALID_HANDLE;
+    AcquireSRWLockExclusive(&g_write_lock);
     t0 = shim_ticks();
-    ok = WriteFile(g_port, lpBuffer, dwBytesToWrite, &put, NULL);
+    ok = port_io(TRUE, lpBuffer, dwBytesToWrite, &put,
+                 io_backstop(g_write_timeout));
     t1 = shim_ticks();
+    ReleaseSRWLockExclusive(&g_write_lock);
     ant_ids((const unsigned char *)lpBuffer, dwBytesToWrite, ids, sizeof(ids));
     if (!ok) {
         DWORD err = GetLastError();
@@ -480,8 +569,10 @@ BOOL WINAPI DllMain(HINSTANCE h, DWORD reason, LPVOID reserved)
         shim_port();                /* logs where the port came from */
     } else if (reason == DLL_THREAD_DETACH) {
         flush_zero_run();
+        close_thread_event();
     } else if (reason == DLL_PROCESS_DETACH) {
         flush_zero_run();
+        close_thread_event();
         close_port();
     }
     return TRUE;

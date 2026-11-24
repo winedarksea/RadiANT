@@ -113,13 +113,24 @@ Reading it:
   (`id=0x4A`) to the read carrying `STARTUP_MESG`.
 * **`in N ms`** is how long the call blocked. A read returns about 10 ms after
   its last byte (the inter-byte timeout), so a non-empty read shows that much
-  on top of the wait for data.
+  on top of the wait for data. A write's time is its own I/O only: the port is
+  opened for overlapped I/O, so a write no longer waits for a pending read.
+  Shims built before 2026-11-23 held each write behind ANT_DLL's read, up to
+  the 1000 ms read timeout on a quiet radio, so older logs show long writes
+  that ended about 0.15 ms after a read returned. On a working port a write
+  takes well under 5 ms; much more is worth a look.
 * **`id=`** lists the ANT message id of each `0xA4` frame in a write.
 * **`absent, err=N`** on `SI_GetNumDevices` says why the port could not be
   opened: `2` not present, `5` held by another process (close `ant_scan` and
   friends), `31` device error. The line before it says where the port name
   came from: `RADIANT_ANT_COM`, the registry, or the `COM15` fallback.
+* **`already open here`** on `SI_GetNumDevices` means this shim holds the port
+  (the probe got `5`). **`open here, but probe err=N … port may be gone`**
+  means the probe failed some other way while the shim holds the port, as
+  when the dongle has left USB. The call still answers 1 either way.
 
 `tools/zwift_shim/test_shim_log.py` checks the line format under 8 threads
-calling both DLLs at once. Build first with
+calling both DLLs at once, key redaction, and (on a named pipe) that a write is
+not held behind a pending read. With `RADIANT_SHIM_TEST_COM=COMn` it also runs
+that check on a dongle. Build first with
 `scripts/zwift_ant_shim.ps1 -BuildOnly`.
