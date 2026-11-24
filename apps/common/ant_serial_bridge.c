@@ -100,6 +100,35 @@ static __noinline uint8_t key_msg_keep(uint8_t id, const uint8_t *body,
 	}
 }
 
+/* ── Exact-length messages ───────────────────────────────────────────────── */
+
+/*
+ * False for a body whose length differs from the one protocol/ant_wire.yaml
+ * gives a message with no optional bytes: 0x46 network key (9), 0xF1 security
+ * config (5), 0xF2 root key (18) and 0xF3 epoch (14). dispatch() refuses such
+ * a body with INVALID_MESSAGE before any arm runs, as 0xF5 already refuses an
+ * over-long one, rather than acting on its prefix (security review
+ * 2026-11-22, Hardening). Messages with optional trailing bytes (0x42's
+ * extended assignment, 0x5E's stall fields) are not listed and keep their
+ * minimum-length checks in dispatch(). Outside ANT_BRIDGE_PARSER_ONLY so
+ * test_bridge_parser.c can reach it.
+ */
+static inline bool body_len_ok(uint8_t id, uint8_t len)
+{
+	switch (id) {
+	case RADIANT_WIRE_MESG_NETWORK_KEY_ID:
+		return len >= 9U;
+	case RADIANT_WIRE_MESG_RADIANT_SEC_CONFIG_ID:
+		return len >= 5U;
+	case RADIANT_WIRE_MESG_RADIANT_SET_KEY_ID:
+		return len >= 18U;
+	case RADIANT_WIRE_MESG_RADIANT_EPOCH_ID:
+		return len >= 14U;
+	default:
+		return true;
+	}
+}
+
 /* ── Host trace (CONFIG_ANT_DONGLE_HOST_TRACE) ─────────────────────────────── */
 
 /*
@@ -1154,6 +1183,11 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 	radiant_ant_err_t err = RADIANT_WIRE_INVALID_MESSAGE;
 	/* body[0] is channel number (or network number for NETWORK_KEY) */
 	uint8_t ch = (len > 0) ? body[0] : 0;
+
+	if (!body_len_ok(msg_id, len)) {
+		send_response(ch, msg_id, RADIANT_WIRE_INVALID_MESSAGE);
+		return;
+	}
 
 	switch (msg_id) {
 
