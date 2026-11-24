@@ -793,13 +793,23 @@ group.
   `AnythingDirty()` arms the 1 Hz flush and the collector runs every second
   while a row waits. The device-type-mismatch adoption path now removes the
   stale record at once instead of creating a second endpoint with the same
-  UniqueID. Policy (`Orphans::Needed`/`PickOldest`) is in
-  `bridge_storage_codec.h`, tested in `dongle_thread.matter_storage`.
+  UniqueID. Review follow-up: the collector skips an entry whose UniqueID a
+  current row would adopt (`RowWouldAdopt()`; none left means nothing is
+  collected and the create retries), and adopting an entry, or creating after
+  the mismatched ones are retired, retires every other unclaimed record with
+  the same UniqueID (`Orphans::NextDuplicate`), which older builds stored on
+  the mismatch path. Policy (`Orphans::Needed`/`PickOldest`/`NextDuplicate`)
+  is in `bridge_storage_codec.h`, tested in `dongle_thread.matter_storage`.
   **Still open:** the "seen N times" debounce (the spoof half). The CHIP-side
-  wiring in `ant_bridge.cpp` has no native_sim coverage (compile-checked only);
-  an on-air Matter check (fill 16, replace a sensor, see the oldest orphan go)
-  is an owner step. A sensor that is merely slow to come back after a reboot
-  can lose its endpoint to a new row once the bridge is full.
+  wiring in `ant_bridge.cpp` (`RetireRestored()`, the collector and the
+  duplicate retirement against BridgeManager) has no native_sim test
+  (compile-checked only); an on-air Matter check (fill 16, replace a sensor,
+  see the oldest orphan go) is an owner step. A sensor that is merely slow to
+  come back after a reboot can lose its endpoint to a new row once the bridge
+  is full. An upgrade re-identifies every measured endpoint (env temperature
+  and page-84 temperature/humidity/pressure): their old records stay as
+  unreachable orphans until the bridge fills. Owner call whether to add a
+  legacy-ID migration.
 - [x] **Matter: `(source, field_id)` is not unique for Environment sensors.**
   The env temperature is field 0 (`radiant_env_adapter.h`), and the env event
   count drives the WORN rule, which posts field 0 as OCCUPANCY

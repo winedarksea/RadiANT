@@ -37,6 +37,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 /*
  * The shape a V2 record struct must have, stated once and asserted on both
@@ -435,15 +436,49 @@ inline bool Needed(size_t devicesInUse, size_t maxDevices)
 	return devicesInUse >= maxDevices;
 }
 
-/* The index of the oldest restored entry that is in use and unclaimed, or
- * kNone. T has `used` and `claimed` (ant_bridge.cpp's RestoredDevice). */
-template <class T> int PickOldest(const T *restored, size_t count)
+/*
+ * The index of the oldest restored entry that is in use, unclaimed and not
+ * `wanted`, or kNone. `wanted(entry)` is true when a row that exists now
+ * would adopt the entry - a row still waiting for its creation, possibly one
+ * the same flush pass reaches after this one. Such an entry is not an orphan,
+ * only not adopted yet, so it is skipped; if every unclaimed entry is wanted,
+ * nothing is collected and the caller's create fails and retries as before.
+ * T has `used` and `claimed` (ant_bridge.cpp's RestoredDevice).
+ */
+template <class T, class Wanted> int PickOldest(const T *restored, size_t count, Wanted wanted)
 {
 	if (restored == nullptr) {
 		return kNone;
 	}
 	for (size_t i = 0; i < count; i++) {
-		if (restored[i].used && !restored[i].claimed) {
+		if (restored[i].used && !restored[i].claimed && !wanted(restored[i])) {
+			return static_cast<int>(i);
+		}
+	}
+	return kNone;
+}
+
+/*
+ * LEGACY DUPLICATES. Before 2026-11-24 the device-type-mismatch adoption path
+ * created a new endpoint beside the stored one and persisted it under the
+ * SAME UniqueID, so a store can hold two (or more) records with one UniqueID.
+ * Whichever entry a row adopts (or, when none matches its device type, after
+ * the mismatched ones are retired), every OTHER unclaimed entry with that
+ * UniqueID is retired too, so no two endpoints share one whatever the stored
+ * order.
+ *
+ * The index of the next such entry - in use, unclaimed, not `keep`, UniqueID
+ * equal to `uniqueID` - or kNone. The caller retires it and asks again. T has
+ * `used`, `claimed` and a NUL-terminated `uniqueID`.
+ */
+template <class T> int NextDuplicate(const T *restored, size_t count, const char *uniqueID, int keep)
+{
+	if (restored == nullptr || uniqueID == nullptr) {
+		return kNone;
+	}
+	for (size_t i = 0; i < count; i++) {
+		if (static_cast<int>(i) != keep && restored[i].used && !restored[i].claimed &&
+		    strcmp(restored[i].uniqueID, uniqueID) == 0) {
 			return static_cast<int>(i);
 		}
 	}

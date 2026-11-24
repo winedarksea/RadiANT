@@ -542,11 +542,58 @@ bool RetireRestored(RestoredDevice &rd, const char *why)
 }
 
 /*
+ * True if a row that exists now - pending creation, possibly one this flush
+ * pass reaches later - would adopt this restored entry: its UniqueID matches.
+ * Such an entry is not an orphan. CHIP thread; takes the shadow lock (the
+ * caller must not hold it). A row's identity fields do not change while it is
+ * used.
+ */
+bool RowWouldAdopt(const RestoredDevice &rd)
+{
+	char uniqueID[Nrf::MatterBridgedDevice::kUniqueIDSize + 1];
+	bool match = false;
+
+	k_mutex_lock(&sShadowLock, K_FOREVER);
+	for (const Row &r : sRows) {
+		if (!r.used || r.needRemove) {
+			continue;
+		}
+		RowUniqueID(uniqueID, sizeof(uniqueID), sSources[r.source].key, r);
+		if (strcmp(uniqueID, rd.uniqueID) == 0) {
+			match = true;
+			break;
+		}
+	}
+	k_mutex_unlock(&sShadowLock);
+	return match;
+}
+
+/*
+ * Retires every unclaimed restored entry other than `keep` whose UniqueID is
+ * `uniqueID` (bridge_storage_codec.h's Orphans::NextDuplicate: a build before
+ * 2026-11-24 could store one UniqueID twice). False if one could not be
+ * removed.
+ */
+bool RetireDuplicates(const char *uniqueID, int keep)
+{
+	int d;
+
+	while ((d = RadiantMatter::Orphans::NextDuplicate(sRestored, ARRAY_SIZE(sRestored), uniqueID, keep)) !=
+	       RadiantMatter::Orphans::kNone) {
+		if (!RetireRestored(sRestored[d], "duplicate UniqueID")) {
+			return false;
+		}
+	}
+	return true;
+}
+
+/*
  * THE ORPHAN COLLECTOR (bridge_storage_codec.h's Orphans). Called by
  * CreateEndpointForRow() just before it creates, so it runs only when a row
- * actually needs a device. It removes the oldest unclaimed restored endpoint,
- * and only when the bridge has no free device slot: a sensor that is merely
- * away keeps its endpoint while there is room.
+ * actually needs a device. It removes the oldest unclaimed restored endpoint
+ * that no current row would adopt (RowWouldAdopt()), and only when the bridge
+ * has no free device slot: a sensor that is merely away keeps its endpoint
+ * while there is room.
  *
  * HOW THE 1 Hz RETRY REACHES IT. A row whose creation failed keeps needCreate
  * set (FlushHandler), AnythingDirty() reports needCreate, and the pacer then
@@ -566,11 +613,12 @@ bool CollectOrphanIfFull()
 		return true;
 	}
 
-	const int pick = RadiantMatter::Orphans::PickOldest(sRestored, ARRAY_SIZE(sRestored));
+	const int pick = RadiantMatter::Orphans::PickOldest(sRestored, ARRAY_SIZE(sRestored), RowWouldAdopt);
 
 	if (pick == RadiantMatter::Orphans::kNone) {
-		/* Full of live endpoints: nothing to collect, and the create
-		 * below fails as it always did (create_failures). */
+		/* Full of live endpoints, or of restored ones a current row will
+		 * adopt: nothing to collect, and the create below fails as it
+		 * always did (create_failures) and retries. */
 		return true;
 	}
 	return RetireRestored(sRestored[pick], "orphan collected, bridge full");
@@ -650,7 +698,20 @@ bool CreateEndpointForRow(Row &row)
 		sSources[row.source].reachableDirty = true;
 		k_mutex_unlock(&sShadowLock);
 		LOG_INF("matter: adopted stored endpoint %u for %s", rd.endpointId, uniqueID);
+		/* One endpoint per UniqueID: any other record a pre-2026-11-24
+		 * build stored under it goes now, whatever its place in the
+		 * stored order. The adoption stands either way. */
+		if (!RetireDuplicates(uniqueID, static_cast<int>(&rd - sRestored))) {
+			LOG_ERR("matter: duplicate of %s left in place", uniqueID);
+		}
 		return true;
+	}
+
+	/* No entry adopted: the loop retired every mismatched one with this
+	 * UniqueID. Asked again so the invariant does not rest on the loop's
+	 * shape - a new endpoint must never share a UniqueID with a record. */
+	if (!RetireDuplicates(uniqueID, RadiantMatter::Orphans::kNone)) {
+		return false;
 	}
 
 	/* Room first: on a full bridge the oldest unclaimed restored endpoint

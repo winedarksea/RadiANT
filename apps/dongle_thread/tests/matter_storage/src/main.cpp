@@ -1396,6 +1396,39 @@ namespace
 struct ModelRestored {
 	bool used;
 	bool claimed;
+	char uniqueID[kUniqueIDSize + 1];
+};
+
+ModelRestored Entry(bool used, bool claimed, const char *uniqueID)
+{
+	ModelRestored r = {};
+
+	r.used = used;
+	r.claimed = claimed;
+	strncpy(r.uniqueID, uniqueID, sizeof(r.uniqueID) - 1);
+	return r;
+}
+
+/* No current row wants anything. */
+bool NoRowAdopts(const ModelRestored &)
+{
+	return false;
+}
+
+/* ant_bridge.cpp's RowWouldAdopt(): the UniqueIDs of the rows that exist now. */
+struct RowsAdopt {
+	const char *const *ids;
+	size_t n;
+
+	bool operator()(const ModelRestored &r) const
+	{
+		for (size_t i = 0; i < n; i++) {
+			if (strcmp(ids[i], r.uniqueID) == 0) {
+				return true;
+			}
+		}
+		return false;
+	}
 };
 } /* namespace */
 
@@ -1411,17 +1444,18 @@ ZTEST(matter_storage, test_orphan_pick_is_the_oldest_unclaimed)
 {
 	/* Creation order: 0 claimed, 1 a skipped (unreadable) record, 2 and 3
 	 * unclaimed. 2 is the oldest orphan. */
-	ModelRestored r[] = { { true, true }, { false, false }, { true, false }, { true, false } };
+	ModelRestored r[] = { Entry(true, true, "a"), Entry(false, false, ""), Entry(true, false, "c"),
+			      Entry(true, false, "d") };
 
-	zassert_equal(Orphans::PickOldest(r, ARRAY_SIZE(r)), 2);
+	zassert_equal(Orphans::PickOldest(r, ARRAY_SIZE(r), NoRowAdopts), 2);
 
 	/* Collected (ant_bridge.cpp clears `used`): the next one is 3. */
 	r[2].used = false;
-	zassert_equal(Orphans::PickOldest(r, ARRAY_SIZE(r)), 3);
+	zassert_equal(Orphans::PickOldest(r, ARRAY_SIZE(r), NoRowAdopts), 3);
 
 	/* A claim before collection takes it out of the running. */
 	r[3].claimed = true;
-	zassert_equal(Orphans::PickOldest(r, ARRAY_SIZE(r)), Orphans::kNone);
+	zassert_equal(Orphans::PickOldest(r, ARRAY_SIZE(r), NoRowAdopts), Orphans::kNone);
 }
 
 ZTEST(matter_storage, test_orphan_none_when_every_restored_endpoint_is_claimed)
@@ -1429,19 +1463,77 @@ ZTEST(matter_storage, test_orphan_none_when_every_restored_endpoint_is_claimed)
 	ModelRestored all[16];
 
 	for (size_t i = 0; i < ARRAY_SIZE(all); i++) {
-		all[i].used = true;
-		all[i].claimed = true;
+		all[i] = Entry(true, true, "x");
 	}
-	zassert_equal(Orphans::PickOldest(all, ARRAY_SIZE(all)), Orphans::kNone);
+	zassert_equal(Orphans::PickOldest(all, ARRAY_SIZE(all), NoRowAdopts), Orphans::kNone);
 
 	ModelRestored none[4] = {};
 
-	zassert_equal(Orphans::PickOldest(none, ARRAY_SIZE(none)), Orphans::kNone);
-	zassert_equal(Orphans::PickOldest(static_cast<const ModelRestored *>(nullptr), 4), Orphans::kNone);
+	zassert_equal(Orphans::PickOldest(none, ARRAY_SIZE(none), NoRowAdopts), Orphans::kNone);
+	zassert_equal(Orphans::PickOldest(static_cast<const ModelRestored *>(nullptr), 4, NoRowAdopts),
+		      Orphans::kNone);
 
 	/* The last entry alone. */
 	all[15].claimed = false;
-	zassert_equal(Orphans::PickOldest(all, ARRAY_SIZE(all)), 15);
+	zassert_equal(Orphans::PickOldest(all, ARRAY_SIZE(all), NoRowAdopts), 15);
+}
+
+ZTEST(matter_storage, test_orphan_pick_skips_one_a_current_row_will_adopt)
+{
+	/* 0 is the oldest unclaimed entry, but a row exists for it - created
+	 * later in the same flush pass, say - so it is not an orphan. 1 is. */
+	ModelRestored r[] = { Entry(true, false, "3f2a91c40e77b21200"), Entry(true, false, "00000000000000aa00t10"),
+			      Entry(true, false, "00000000000000bb01") };
+	static const char *const wantFirst[] = { "3f2a91c40e77b21200" };
+	static const char *const wantTwo[] = { "00000000000000aa00t10", "3f2a91c40e77b21200" };
+
+	zassert_equal(Orphans::PickOldest(r, ARRAY_SIZE(r), RowsAdopt{ wantFirst, ARRAY_SIZE(wantFirst) }), 1);
+	zassert_equal(Orphans::PickOldest(r, ARRAY_SIZE(r), RowsAdopt{ wantTwo, ARRAY_SIZE(wantTwo) }), 2);
+	/* A row whose UniqueID only shares a prefix does not protect it. */
+	static const char *const prefix[] = { "00000000000000aa00" };
+
+	zassert_equal(Orphans::PickOldest(r, ARRAY_SIZE(r), RowsAdopt{ prefix, ARRAY_SIZE(prefix) }), 0);
+}
+
+ZTEST(matter_storage, test_orphan_none_when_every_unclaimed_entry_is_wanted)
+{
+	ModelRestored r[] = { Entry(true, true, "a"), Entry(true, false, "b"), Entry(true, false, "c") };
+	static const char *const want[] = { "c", "b" };
+
+	/* Nothing to collect: the create fails and retries rather than evicting
+	 * an endpoint a row is about to adopt. */
+	zassert_equal(Orphans::PickOldest(r, ARRAY_SIZE(r), RowsAdopt{ want, ARRAY_SIZE(want) }), Orphans::kNone);
+}
+
+ZTEST(matter_storage, test_duplicates_of_an_adopted_unique_id_are_all_retired)
+{
+	/* A pre-2026-11-24 store: "x" three times (the mismatch path stored a
+	 * second endpoint under the same UniqueID), in no useful order. Entry 2
+	 * is adopted; 0 and 4 are its duplicates, 3 is unused, 1 is another
+	 * device. */
+	ModelRestored r[] = { Entry(true, false, "x"), Entry(true, false, "y"), Entry(true, true, "x"),
+			      Entry(false, false, "x"), Entry(true, false, "x") };
+
+	zassert_equal(Orphans::NextDuplicate(r, ARRAY_SIZE(r), "x", 2), 0);
+	r[0].used = false; /* retired */
+	zassert_equal(Orphans::NextDuplicate(r, ARRAY_SIZE(r), "x", 2), 4);
+	r[4].used = false;
+	zassert_equal(Orphans::NextDuplicate(r, ARRAY_SIZE(r), "x", 2), Orphans::kNone);
+	zassert_true(r[1].used, "another device's record was touched");
+}
+
+ZTEST(matter_storage, test_duplicates_with_no_adopter_and_edges)
+{
+	ModelRestored r[] = { Entry(true, false, "x"), Entry(true, true, "x"), Entry(true, false, "xx") };
+
+	/* No entry kept (the mismatch path): every unclaimed "x" goes, a
+	 * claimed one never does, and "xx" is a different UniqueID. */
+	zassert_equal(Orphans::NextDuplicate(r, ARRAY_SIZE(r), "x", Orphans::kNone), 0);
+	r[0].used = false;
+	zassert_equal(Orphans::NextDuplicate(r, ARRAY_SIZE(r), "x", Orphans::kNone), Orphans::kNone);
+
+	zassert_equal(Orphans::NextDuplicate(static_cast<const ModelRestored *>(nullptr), 3, "x", 0), Orphans::kNone);
+	zassert_equal(Orphans::NextDuplicate(r, ARRAY_SIZE(r), nullptr, 0), Orphans::kNone);
 }
 
 /* ---- lengths near SIZE_MAX: `counter + length` wraps ------------------- */

@@ -280,7 +280,7 @@ min_scenarios: 29
 # (Bluefin twister, 29 scenarios, 9303 cases, all passed). Many earlier
 # commits added tests without raising their floors (review 2026-11-24 found
 # 9e4ff0b and 47fe08c; the gap was wider than those two).
-min_testcases: 9363
+min_testcases: 9367
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -494,6 +494,6 @@ min_cases.radiant.backend_cc26xx.coex: 68
 # 44 (+7, security review 2026-11-21): missing vs unreadable endpoint mark, provider quota.
 # 49 (+5, security review 2026-11-22 item 3, 2026-11-23): LabelPersist renamed-label writes.
 # 54 (+5, security review 2026-11-22 Matter item, 2026-11-24): the mark's format marker.
-min_cases.dongle_thread.matter_storage: 60
+min_cases.dongle_thread.matter_storage: 64
 # radiant.backend_cc26xx.short_match (item 7): caps parity, short-match row only.
 min_cases.radiant.backend_cc26xx.short_match: 1
