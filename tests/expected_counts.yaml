@@ -283,7 +283,9 @@ min_scenarios: 29
 # 2026-11-24: +54 (wip/s24-ttype, Bluefin twister 9357 executed): nine
 # test_api.c cases in each of the six api scenarios (a clean frame of another
 # transmission type is dropped on a tracked channel; Hardening, TODO.md).
-min_testcases: 9357
+# 2026-11-24: +64 (wip/s24-matter-ident: Matter field-type keying, WORN/0x19,
+# combo suite, UniqueID + orphan policy in matter_storage). Merged: 9421.
+min_testcases: 9421
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -327,11 +329,11 @@ min_testcases: 9357
 # rekey import keeps the old root, a refused wrap is counted).
 # 2026-11-24: +3 per unit scenario (radiant_sec: the scan guess budget).
 # 2026-11-24: raised to the observed count on 430562b (was 1163).
-min_cases.radiant.unit: 1289
+min_cases.radiant.unit: 1298
 # 2026-11-24: raised to the observed count on 430562b (was 1163).
-min_cases.radiant.unit.sec_modes: 1289
+min_cases.radiant.unit.sec_modes: 1298
 # 2026-11-24: raised to the observed count on 430562b (was 1099).
-min_cases.radiant.unit.no_pairing: 1212
+min_cases.radiant.unit.no_pairing: 1221
 # radiant.unit.pairing_no_rng: 1218, the observed count on sec/item8-pair-rng
 # (2026-11-20), including test_pair_begin_without_an_rng_uses_the_kdf_scalar.
 # +4 (HAL drift item 5 settled, as radiant.unit).
@@ -342,7 +344,7 @@ min_cases.radiant.unit.no_pairing: 1212
 # 2026-11-24: +3 (radiant_sec, as radiant.unit).
 # 2026-11-24: +3 (radiant_sec: the scan guess budget, as radiant.unit).
 # 2026-11-24: raised to the observed count on 430562b (was 1266).
-min_cases.radiant.unit.pairing_no_rng: 1276
+min_cases.radiant.unit.pairing_no_rng: 1285
 # 2026-11-24: raised to the observed count on 430562b (was 91).
 # 2026-11-24: +9 (wip/s24-ttype: transmission type on clean tracked frames).
 min_cases.radiant.api: 129
@@ -428,7 +430,7 @@ min_cases.treadmill.hr_rx: 3
 # 2026-11-24: +16 (node_ident lost records, record table and wipe, as radiant.unit).
 # 2026-11-24: +3 (radiant_sec: the scan guess budget, as radiant.unit).
 # 2026-11-24: raised to the observed count on 430562b (was 1170).
-min_cases.radiant.unit.ack_faults: 1298
+min_cases.radiant.unit.ack_faults: 1307
 # radiant.unit.diag: the unit suites with CONFIG_RADIANT_DIAG_COUNTERS.
 # 1127 (2026-11-16, Bluefin twister on fix/diag-page9-done-cb): the observed
 # count, including the four page-9/page-12 scheduler cases.
@@ -449,7 +451,7 @@ min_cases.radiant.unit.ack_faults: 1298
 # 2026-11-24: +16 (node_ident lost records, record table and wipe, as radiant.unit).
 # 2026-11-24: +3 (radiant_sec: the scan guess budget, as radiant.unit).
 # 2026-11-24: raised to the observed count on 430562b (was 1241).
-min_cases.radiant.unit.diag: 1300
+min_cases.radiant.unit.diag: 1309
 min_cases.trainer.model: 14
 # radiant.lp_clock (power plan pass B2): the low-power timebase arithmetic,
 # 31 unit cases and seven 100 000-cycle drift simulations (three of them
@@ -503,6 +505,6 @@ min_cases.radiant.backend_cc26xx.coex: 68
 # 44 (+7, security review 2026-11-21): missing vs unreadable endpoint mark, provider quota.
 # 49 (+5, security review 2026-11-22 item 3, 2026-11-23): LabelPersist renamed-label writes.
 # 54 (+5, security review 2026-11-22 Matter item, 2026-11-24): the mark's format marker.
-min_cases.dongle_thread.matter_storage: 54
+min_cases.dongle_thread.matter_storage: 64
 # radiant.backend_cc26xx.short_match (item 7): caps parity, short-match row only.
 min_cases.radiant.backend_cc26xx.short_match: 1

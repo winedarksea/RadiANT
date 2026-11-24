@@ -785,7 +785,32 @@ group.
   power cycle orphans its endpoints, and 16 fill the table. Fix: require a
   field to be seen several times before creating an endpoint, and collect
   unclaimed restored endpoints (oldest first when the table is full).
-- [ ] **Matter: `(source, field_id)` is not unique for Environment sensors.**
+  *Orphan half done 2026-11-24 (wip/s24-matter-ident):* `CreateEndpointForRow()`
+  calls `CollectOrphanIfFull()` before it creates: only when BridgeManager has
+  no free device slot, it removes the oldest unclaimed restored endpoint
+  (`RemoveBridgedDevice` → storage record → `PersistIndexes()`) and creates in
+  the freed slot. A row that failed to create keeps `needCreate`, so
+  `AnythingDirty()` arms the 1 Hz flush and the collector runs every second
+  while a row waits. The device-type-mismatch adoption path now removes the
+  stale record at once instead of creating a second endpoint with the same
+  UniqueID. Review follow-up: the collector skips an entry whose UniqueID a
+  current row would adopt (`RowWouldAdopt()`; none left means nothing is
+  collected and the create retries), and adopting an entry, or creating after
+  the mismatched ones are retired, retires every other unclaimed record with
+  the same UniqueID (`Orphans::NextDuplicate`), which older builds stored on
+  the mismatch path. Policy (`Orphans::Needed`/`PickOldest`/`NextDuplicate`)
+  is in `bridge_storage_codec.h`, tested in `dongle_thread.matter_storage`.
+  **Still open:** the "seen N times" debounce (the spoof half). The CHIP-side
+  wiring in `ant_bridge.cpp` (`RetireRestored()`, the collector and the
+  duplicate retirement against BridgeManager) has no native_sim test
+  (compile-checked only); an on-air Matter check (fill 16, replace a sensor,
+  see the oldest orphan go) is an owner step. A sensor that is merely slow to
+  come back after a reboot can lose its endpoint to a new row once the bridge
+  is full. An upgrade re-identifies every measured endpoint (env temperature
+  and page-84 temperature/humidity/pressure): their old records stay as
+  unreachable orphans until the bridge fills. Owner call whether to add a
+  legacy-ID migration.
+- [x] **Matter: `(source, field_id)` is not unique for Environment sensors.**
   The env temperature is field 0 (`radiant_env_adapter.h`), and the env event
   count drives the WORN rule, which posts field 0 as OCCUPANCY
   (`radiant_rules.c` ~:233; `RADIANT_RULE_FIELD_WORN` is 0).
@@ -796,6 +821,25 @@ group.
   endpoints and the deadband on the field type as well, or exclude device type
   0x19 from the WORN rule. Add a test that combines the env adapter, the rules
   and the Matter sink.
+  *Done 2026-11-24 (wip/s24-matter-ident):* both. `radiant_matter.c` keys
+  endpoints and the deadband on (source, field_id, field_type)
+  (`radiant_matter_endpoint_for()` takes the type; same symbol), and
+  `struct radiant_matter_endpoint` records `derived`. `eval_activity()` skips
+  the WORN slot for a source bound with device type 0x19 (pairing bit masked);
+  unbound sources keep it. The Matter UniqueID follows the spec's "unique per
+  bridged device, persistent, at most 32 characters": derived rows keep
+  `%08x%08x%02x` byte for byte, measured rows add `t%02x` (field type), e.g.
+  `3f2a91c40e77b21200t10` (21 characters), in `bridge_storage_codec`'s
+  `UniqueId::Format()`. So every measured endpoint stored by an older build
+  (env temperature, page-84 temperature/humidity/pressure) is re-identified
+  once and its old record becomes an orphan (see the item above). Comments in
+  `mqtt_sink.c` and `docs/radiant-bridge.md` §9.1 corrected. Tests:
+  `test_matter.c` (both arrival orders, independent deadbands, `derived`, and
+  the `radiant_matter_combo` suite: env adapter → rules → Matter gives one
+  temperature endpoint and no WORN for a bound 0x19 source, while a bound HR
+  strap still gets WORN), `test_rules.c` (WORN skipped for bound 0x19 and
+  0x99, kept unbound and for 0x78), `matter_storage` (formatter). Red on
+  master first. Residual: on-air Matter check is an owner step.
 - [ ] **Bridge pairing window binds the first device heard, and a transmitter
   that keeps sending cannot be evicted.** `try_bind()` (`self_channels.c`
   ~:758) has no RSSI or proximity threshold, and `radiant_self_pick_evict()`

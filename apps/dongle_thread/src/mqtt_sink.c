@@ -135,10 +135,13 @@ static void uuid_str(uint64_t uuid, char *out, size_t out_len)
  *
  * The derived samples are the ones that do not own the id space, so they are
  * the ones that move: they get a "d" prefix and everything else keeps the topic
- * it already had. THE MATTER PLANE NEEDS NO EQUIVALENT - radiant_matter.c maps
- * only OCCUPANCY, TEMPERATURE, HUMIDITY, PRESSURE and BATTERY_SOC, so no
- * endpoint is ever created for a profile-block id and (source, field_id) is
- * genuinely unique there.
+ * it already had. THE MATTER PLANE HAD THE SAME COLLISION and used to claim it
+ * could not: an Environment sensor's temperature is profile-block id 0, the
+ * id WORN is posted on, and both are types radiant_matter.c maps. It now keys
+ * endpoints and deadbands on (source, field_id, field_type), adds the type to
+ * a measured endpoint's UniqueID, and the WORN rule skips a source bound as
+ * Environment (device type 0x19). This key is unchanged: the "d" prefix
+ * already separates the two.
  */
 static void field_key(const struct radiant_sample *s, char *out, size_t out_len)
 {

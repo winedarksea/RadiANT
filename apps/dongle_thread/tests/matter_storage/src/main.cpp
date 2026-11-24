@@ -19,6 +19,7 @@
 #include <zephyr/ztest.h>
 
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "bridge_storage_codec.h"
@@ -1307,6 +1308,232 @@ ZTEST(matter_storage, test_label_persist_one_charge_per_rename_event_per_source)
 	b.Pass("Indoor Bike 2 Speed", 5);
 	zassert_equal(b.writes, ModelSource::kRows, "a busy source spent another source's budget");
 	zassert_equal(b.budget.used, 1);
+}
+
+/* ---- UniqueID forms (TODO 2026-11-24) ----------------------------------- */
+
+namespace
+{
+constexpr uint64_t kKey = 0x3f2a91c40e77b212ULL;
+constexpr uint8_t kTypeTemperature = 0x10; /* RADIANT_FIELD_TEMPERATURE */
+constexpr uint8_t kTypeOccupancy = 0x02;   /* RADIANT_FIELD_OCCUPANCY */
+} /* namespace */
+
+ZTEST(matter_storage, test_unique_id_derived_is_the_old_form_byte_for_byte)
+{
+	static const uint64_t keys[] = { kKey, 0, UINT64_MAX, 0x00000001ffffffffULL, 0xabcdef0000000000ULL };
+	static const uint8_t ids[] = { 0, 1, 4, 0x26, 0xff };
+	char got[kUniqueIDSize + 1];
+	char old[kUniqueIDSize + 1];
+
+	/* A known vector, then the formatter ant_bridge.cpp used before. */
+	zassert_equal(UniqueId::Format(got, sizeof(got), kKey, 5, kTypeOccupancy, true), 18u);
+	zassert_mem_equal(got, "3f2a91c40e77b21205", 19);
+
+	for (size_t k = 0; k < ARRAY_SIZE(keys); k++) {
+		for (size_t i = 0; i < ARRAY_SIZE(ids); i++) {
+			snprintf(old, sizeof(old), "%08x%08x%02x", static_cast<unsigned int>(keys[k] >> 32),
+				 static_cast<unsigned int>(keys[k] & 0xFFFFFFFFu), ids[i]);
+			/* The field type does not enter a derived id. */
+			zassert_equal(UniqueId::Format(got, sizeof(got), keys[k], ids[i], kTypeTemperature, true),
+				      UniqueId::kDerivedLength);
+			zassert_mem_equal(got, old, UniqueId::kDerivedLength + 1, "key %u/%u id %u", (unsigned)k,
+					  (unsigned)i, ids[i]);
+		}
+	}
+}
+
+ZTEST(matter_storage, test_unique_id_measured_carries_the_field_type)
+{
+	char temp[kUniqueIDSize + 1];
+	char other[kUniqueIDSize + 1];
+	char derived[kUniqueIDSize + 1];
+
+	zassert_equal(UniqueId::Format(temp, sizeof(temp), kKey, 0, kTypeTemperature, false), 21u);
+	zassert_mem_equal(temp, "3f2a91c40e77b21200t10", 22);
+	zassert_equal(strlen(temp), UniqueId::kMeasuredLength);
+
+	/* Within Matter's 32 and a stored record's 31 plus NUL. */
+	zassert_true(UniqueId::kMeasuredLength <= UniqueId::kMatterMaxLength);
+	zassert_true(UniqueId::kMeasuredLength < kUniqueIDSize);
+
+	/* Same sensor and field id: another type, or the rule output on that id,
+	 * is another device. */
+	zassert_equal(UniqueId::Format(other, sizeof(other), kKey, 0, kTypeOccupancy, false), 21u);
+	zassert_true(strcmp(temp, other) != 0);
+	zassert_equal(UniqueId::Format(derived, sizeof(derived), kKey, 0, kTypeTemperature, true), 18u);
+	zassert_true(strcmp(temp, derived) != 0);
+	/* And the measured form is the derived one plus the suffix, so the stored
+	 * prefix still reads as the sensor's key and field. */
+	zassert_mem_equal(temp, derived, UniqueId::kDerivedLength);
+	zassert_mem_equal(temp + UniqueId::kDerivedLength, "t10", 4);
+}
+
+ZTEST(matter_storage, test_unique_id_refuses_a_buffer_without_room_for_the_nul)
+{
+	char buf[kUniqueIDSize + 1];
+
+	memset(buf, 'x', sizeof(buf));
+	zassert_equal(UniqueId::Format(buf, UniqueId::kMeasuredLength, kKey, 0, kTypeTemperature, false), 0u);
+	zassert_equal(buf[0], '\0');
+	zassert_equal(buf[1], 'x', "wrote past the refusal");
+	zassert_equal(UniqueId::Format(buf, UniqueId::kMeasuredLength + 1, kKey, 0, kTypeTemperature, false),
+		      UniqueId::kMeasuredLength);
+	zassert_equal(buf[UniqueId::kMeasuredLength], '\0');
+
+	zassert_equal(UniqueId::Format(buf, UniqueId::kDerivedLength, kKey, 0, 0, true), 0u);
+	zassert_equal(UniqueId::Format(buf, UniqueId::kDerivedLength + 1, kKey, 0, 0, true),
+		      UniqueId::kDerivedLength);
+	zassert_equal(UniqueId::Format(nullptr, 64, kKey, 0, 0, true), 0u);
+	zassert_equal(UniqueId::Format(buf, 0, kKey, 0, 0, true), 0u);
+}
+
+/* ---- orphan collection (TODO 2026-11-24) -------------------------------- */
+
+namespace
+{
+/* ant_bridge.cpp's RestoredDevice, as far as the policy reads it. */
+struct ModelRestored {
+	bool used;
+	bool claimed;
+	char uniqueID[kUniqueIDSize + 1];
+};
+
+ModelRestored Entry(bool used, bool claimed, const char *uniqueID)
+{
+	ModelRestored r = {};
+
+	r.used = used;
+	r.claimed = claimed;
+	strncpy(r.uniqueID, uniqueID, sizeof(r.uniqueID) - 1);
+	return r;
+}
+
+/* No current row wants anything. */
+bool NoRowAdopts(const ModelRestored &)
+{
+	return false;
+}
+
+/* ant_bridge.cpp's RowWouldAdopt(): the UniqueIDs of the rows that exist now. */
+struct RowsAdopt {
+	const char *const *ids;
+	size_t n;
+
+	bool operator()(const ModelRestored &r) const
+	{
+		for (size_t i = 0; i < n; i++) {
+			if (strcmp(ids[i], r.uniqueID) == 0) {
+				return true;
+			}
+		}
+		return false;
+	}
+};
+} /* namespace */
+
+ZTEST(matter_storage, test_orphan_collected_only_when_the_bridge_is_full)
+{
+	zassert_false(Orphans::Needed(0, 16));
+	zassert_false(Orphans::Needed(15, 16));
+	zassert_true(Orphans::Needed(16, 16));
+	zassert_true(Orphans::Needed(17, 16));
+}
+
+ZTEST(matter_storage, test_orphan_pick_is_the_oldest_unclaimed)
+{
+	/* Creation order: 0 claimed, 1 a skipped (unreadable) record, 2 and 3
+	 * unclaimed. 2 is the oldest orphan. */
+	ModelRestored r[] = { Entry(true, true, "a"), Entry(false, false, ""), Entry(true, false, "c"),
+			      Entry(true, false, "d") };
+
+	zassert_equal(Orphans::PickOldest(r, ARRAY_SIZE(r), NoRowAdopts), 2);
+
+	/* Collected (ant_bridge.cpp clears `used`): the next one is 3. */
+	r[2].used = false;
+	zassert_equal(Orphans::PickOldest(r, ARRAY_SIZE(r), NoRowAdopts), 3);
+
+	/* A claim before collection takes it out of the running. */
+	r[3].claimed = true;
+	zassert_equal(Orphans::PickOldest(r, ARRAY_SIZE(r), NoRowAdopts), Orphans::kNone);
+}
+
+ZTEST(matter_storage, test_orphan_none_when_every_restored_endpoint_is_claimed)
+{
+	ModelRestored all[16];
+
+	for (size_t i = 0; i < ARRAY_SIZE(all); i++) {
+		all[i] = Entry(true, true, "x");
+	}
+	zassert_equal(Orphans::PickOldest(all, ARRAY_SIZE(all), NoRowAdopts), Orphans::kNone);
+
+	ModelRestored none[4] = {};
+
+	zassert_equal(Orphans::PickOldest(none, ARRAY_SIZE(none), NoRowAdopts), Orphans::kNone);
+	zassert_equal(Orphans::PickOldest(static_cast<const ModelRestored *>(nullptr), 4, NoRowAdopts),
+		      Orphans::kNone);
+
+	/* The last entry alone. */
+	all[15].claimed = false;
+	zassert_equal(Orphans::PickOldest(all, ARRAY_SIZE(all), NoRowAdopts), 15);
+}
+
+ZTEST(matter_storage, test_orphan_pick_skips_one_a_current_row_will_adopt)
+{
+	/* 0 is the oldest unclaimed entry, but a row exists for it - created
+	 * later in the same flush pass, say - so it is not an orphan. 1 is. */
+	ModelRestored r[] = { Entry(true, false, "3f2a91c40e77b21200"), Entry(true, false, "00000000000000aa00t10"),
+			      Entry(true, false, "00000000000000bb01") };
+	static const char *const wantFirst[] = { "3f2a91c40e77b21200" };
+	static const char *const wantTwo[] = { "00000000000000aa00t10", "3f2a91c40e77b21200" };
+
+	zassert_equal(Orphans::PickOldest(r, ARRAY_SIZE(r), RowsAdopt{ wantFirst, ARRAY_SIZE(wantFirst) }), 1);
+	zassert_equal(Orphans::PickOldest(r, ARRAY_SIZE(r), RowsAdopt{ wantTwo, ARRAY_SIZE(wantTwo) }), 2);
+	/* A row whose UniqueID only shares a prefix does not protect it. */
+	static const char *const prefix[] = { "00000000000000aa00" };
+
+	zassert_equal(Orphans::PickOldest(r, ARRAY_SIZE(r), RowsAdopt{ prefix, ARRAY_SIZE(prefix) }), 0);
+}
+
+ZTEST(matter_storage, test_orphan_none_when_every_unclaimed_entry_is_wanted)
+{
+	ModelRestored r[] = { Entry(true, true, "a"), Entry(true, false, "b"), Entry(true, false, "c") };
+	static const char *const want[] = { "c", "b" };
+
+	/* Nothing to collect: the create fails and retries rather than evicting
+	 * an endpoint a row is about to adopt. */
+	zassert_equal(Orphans::PickOldest(r, ARRAY_SIZE(r), RowsAdopt{ want, ARRAY_SIZE(want) }), Orphans::kNone);
+}
+
+ZTEST(matter_storage, test_duplicates_of_an_adopted_unique_id_are_all_retired)
+{
+	/* A pre-2026-11-24 store: "x" three times (the mismatch path stored a
+	 * second endpoint under the same UniqueID), in no useful order. Entry 2
+	 * is adopted; 0 and 4 are its duplicates, 3 is unused, 1 is another
+	 * device. */
+	ModelRestored r[] = { Entry(true, false, "x"), Entry(true, false, "y"), Entry(true, true, "x"),
+			      Entry(false, false, "x"), Entry(true, false, "x") };
+
+	zassert_equal(Orphans::NextDuplicate(r, ARRAY_SIZE(r), "x", 2), 0);
+	r[0].used = false; /* retired */
+	zassert_equal(Orphans::NextDuplicate(r, ARRAY_SIZE(r), "x", 2), 4);
+	r[4].used = false;
+	zassert_equal(Orphans::NextDuplicate(r, ARRAY_SIZE(r), "x", 2), Orphans::kNone);
+	zassert_true(r[1].used, "another device's record was touched");
+}
+
+ZTEST(matter_storage, test_duplicates_with_no_adopter_and_edges)
+{
+	ModelRestored r[] = { Entry(true, false, "x"), Entry(true, true, "x"), Entry(true, false, "xx") };
+
+	/* No entry kept (the mismatch path): every unclaimed "x" goes, a
+	 * claimed one never does, and "xx" is a different UniqueID. */
+	zassert_equal(Orphans::NextDuplicate(r, ARRAY_SIZE(r), "x", Orphans::kNone), 0);
+	r[0].used = false;
+	zassert_equal(Orphans::NextDuplicate(r, ARRAY_SIZE(r), "x", Orphans::kNone), Orphans::kNone);
+
+	zassert_equal(Orphans::NextDuplicate(static_cast<const ModelRestored *>(nullptr), 3, "x", 0), Orphans::kNone);
+	zassert_equal(Orphans::NextDuplicate(r, ARRAY_SIZE(r), nullptr, 0), Orphans::kNone);
 }
 
 /* ---- lengths near SIZE_MAX: `counter + length` wraps ------------------- */

@@ -9,6 +9,8 @@
  *   6.1 Activity - a sensor is active when its accumulating field is
  *       advancing (0x36 beat count -> worn, 0x30 energy -> bike in use),
  *       with the ~2s assert / ~20s clear dwell the section specifies.
+ *       Worn is not produced for a source bound as ANT+ Environment
+ *       (device type 0x19), whose event count steps on every message.
  *   6.2 Zones - Karvonen (HRR) thresholds against the section's "never
  *       personalised" population prior: rest < 82 bpm, zone2+ >= 134 bpm,
  *       both gated on the same binding's worn state.
