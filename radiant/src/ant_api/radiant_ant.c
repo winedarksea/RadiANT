@@ -2386,6 +2386,15 @@ static void api_crc_bits_note(const struct radiant_rx_event *evt,
 }
 #endif
 
+/*
+ * One frame heard in a tracked window (or a master's turnaround). Returns
+ * whether it counts as this channel's own sensor heard, which is what
+ * slot_heard records: a clean frame, or a repair that was accepted. False for
+ * a repair that failed or was refuted, and for a clean frame whose
+ * transmission type names another sensor. A clean frame this function cannot
+ * parse still counts as heard (the address matched and the CRC verified), as
+ * it did before the transmission-type check existed.
+ */
 static bool api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt,
 			      bool crc_failed)
 {
@@ -2403,11 +2412,11 @@ static bool api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt,
 	api_stats.rx_tracked_frames++;
 
 	if (radiant_channel_id_get(ch, &id) != RADIANT_CH_OK) {
-		return false;
+		return !crc_failed;
 	}
 	if (evt->body == NULL || evt->body_len == 0u ||
 	    (size_t)evt->body_len > sizeof(w.body)) {
-		return false;
+		return !crc_failed;
 	}
 
 	/* Matched address bytes never reach RAM, so the address half is
@@ -2417,7 +2426,7 @@ static bool api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt,
 	n = radiant_frame_addr(RADIANT_FRAME_CFG_TRACKING, api_net_addr_for(ch), &id,
 			   w.addr, sizeof(w.addr));
 	if (n < 0) {
-		return false;
+		return !crc_failed;
 	}
 	w.addr_len = (uint8_t)n;
 	memcpy(w.body, evt->body, evt->body_len);
@@ -2443,7 +2452,7 @@ static bool api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt,
 			 * existing check. Counted separately. */
 			api_stats.crc_repair_refuted++;
 		}
-		return false;
+		return !crc_failed;
 	}
 
 	/* Repaired frames are broadcasts only: acknowledged or burst data would
@@ -2457,14 +2466,30 @@ static bool api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt,
 
 	/*
 	 * Byte 0 of a tracked body is the transmission type, which the address match
-	 * cannot prove. For repaired frames only: a mismatch means a mis-repair. On a
-	 * clean frame it is a fact about the air, not evidence of a bad repair.
+	 * (device number and type only) cannot prove. ANT+ carries device-number
+	 * bits 16-19 in its upper nibble, so a frame whose byte 0 differs from the
+	 * channel's configured or acquired type is another sensor sharing the low
+	 * 16 bits and the device type: dropped here, before it re-anchors the slot,
+	 * is ACKed, or reaches the host under this channel's ID. A real ANT
+	 * receiver matches the whole channel ID, and search already filters the
+	 * type at acquisition (radiant_search.c id_match()); this closes tracking.
+	 * Every participant of a channel, shared channels and slave replies
+	 * included, transmits the one channel ID (TODO.md, Hardening, has the
+	 * assessment). On a repaired frame the mismatch is a mis-repair instead,
+	 * and keeps its own counter. A wildcard type (0) checks nothing.
 	 */
-	if (crc_failed && id.trans_type != 0u &&
+	if (id.trans_type != 0u &&
 	    f.payload_len > 0u && w.body[0] != id.trans_type) {
-		api_stats.crc_repair_refuted++;
-		LOG_DBG("crc repair ch=%u refuted: ttype %u != %u", (unsigned)ch,
-			(unsigned)w.body[0], (unsigned)id.trans_type);
+		if (crc_failed) {
+			api_stats.crc_repair_refuted++;
+			LOG_DBG("crc repair ch=%u refuted: ttype %u != %u",
+				(unsigned)ch, (unsigned)w.body[0],
+				(unsigned)id.trans_type);
+		} else {
+			api_stats.rx_ttype_mismatch++;
+			LOG_DBG("rx ch=%u dropped: ttype %u != %u", (unsigned)ch,
+				(unsigned)w.body[0], (unsigned)id.trans_type);
+		}
 		return false;
 	}
 
@@ -2601,6 +2626,8 @@ static bool api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt,
 static void api_sched_rx(uint8_t ch, uint8_t filter_index,
 			 const struct radiant_rx_event *evt, void *user)
 {
+	bool slot_was_heard;
+
 	(void)user;
 
 	if (!api_ch_valid(ch) || evt == NULL) {
@@ -2680,6 +2707,16 @@ static void api_sched_rx(uint8_t ch, uint8_t filter_index,
 		return;
 	}
 
+	/*
+	 * Set before api_tracked_frame(), as it always was, so nothing that frame
+	 * posts can see the slot unheard. A frame that turns out to be another
+	 * sensor's (api_tracked_frame() false, which returns before anything is
+	 * posted) puts back what the window had: a channel whose sensor left but
+	 * whose neighbour remains must keep missing and return to search. The
+	 * non-idle transfer branch below keeps the unconditional mark and has no
+	 * transmission-type check (TODO.md, Hardening).
+	 */
+	slot_was_heard = api_ch[ch].slot_heard;
 	api_ch[ch].slot_heard = true;
 
 	if (!radiant_transfer_is_idle(&api_xfer[ch])) {
@@ -2692,7 +2729,9 @@ static void api_sched_rx(uint8_t ch, uint8_t filter_index,
 		return;
 	}
 
-	(void)api_tracked_frame(ch, evt, false);
+	if (!api_tracked_frame(ch, evt, false)) {
+		api_ch[ch].slot_heard = slot_was_heard;
+	}
 }
 
 static void api_sched_tx(uint8_t ch, const struct radiant_tx_event *evt, void *user)
