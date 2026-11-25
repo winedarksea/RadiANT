@@ -1,0 +1,233 @@
+diff --git a/apps/common/usb_ant_class.c b/apps/common/usb_ant_class.c
+index 6d67edd..57223df 100644
+--- a/apps/common/usb_ant_class.c
++++ b/apps/common/usb_ant_class.c
+@@ -12,6 +12,10 @@
+  */
+ 
+ #include <zephyr/kernel.h>
++#if defined(CONFIG_ANT_DONGLE_UF2_REBOOT_REQUEST)
++#include <zephyr/sys/reboot.h>
++#include <hal/nrf_power.h>
++#endif
+ #include <zephyr/sys/byteorder.h>
+ #include <zephyr/usb/usb_device.h>
+ #include <zephyr/usb/bos.h>
+@@ -270,6 +274,49 @@ USBD_CLASS_DESCR_DEFINE(primary, 0) struct usb_ant_descriptor ant_desc = {
+ 
+ static void ep_out_cb(uint8_t ep, int tsize, void *priv);
+ 
++#if defined(CONFIG_ANT_DONGLE_UF2_REBOOT_REQUEST)
++
++/* Reboot into the UF2 bootloader on request - see the Kconfig help. Every
++ * field is matched so that nothing a host sends by accident can trip it. */
++#define ANT_UF2_REBOOT_REQUEST  0x57
++#define ANT_UF2_REBOOT_WVALUE   0x5546 /* "UF" */
++/* DFU_MAGIC_UF2_RESET in the Adafruit nRF52 bootloader. */
++#define ANT_UF2_GPREGRET_MAGIC  0x57
++
++static void uf2_reboot_work_fn(struct k_work *work)
++{
++	ARG_UNUSED(work);
++
++	/* Written directly rather than through nrf_power_gpregret_set(), whose
++	 * signature differs between nrfx releases, and not through
++	 * sys_reboot()'s type argument, which Zephyr's nRF reboot path
++	 * ignores. The bootloader reads GPREGRET at reset and clears it. */
++	NRF_POWER->GPREGRET = ANT_UF2_GPREGRET_MAGIC;
++	sys_reboot(SYS_REBOOT_COLD);
++}
++
++/* Deferred so that the status stage of the control transfer completes and
++ * the host sees the request succeed before the device drops off the bus. */
++static K_WORK_DELAYABLE_DEFINE(uf2_reboot_work, uf2_reboot_work_fn);
++
++static bool ant_uf2_reboot_req(const struct usb_setup_packet *setup)
++{
++	if (!usb_reqtype_is_to_device(setup) ||
++	    setup->RequestType.recipient != USB_REQTYPE_RECIPIENT_DEVICE ||
++	    setup->bRequest != ANT_UF2_REBOOT_REQUEST ||
++	    setup->wValue != ANT_UF2_REBOOT_WVALUE ||
++	    setup->wIndex != 0U ||
++	    setup->wLength != 0U) {
++		return false;
++	}
++
++	LOG_WRN("rebooting into the UF2 bootloader on host request");
++	k_work_schedule(&uf2_reboot_work, K_MSEC(100));
++	return true;
++}
++
++#endif /* CONFIG_ANT_DONGLE_UF2_REBOOT_REQUEST */
++
+ #if defined(CONFIG_ANT_DONGLE_MSOS_DESCRIPTORS)
+ 
+ static int ant_custom_handle_req(struct usb_setup_packet *setup,
+@@ -290,14 +337,36 @@ static int ant_custom_handle_req(struct usb_setup_packet *setup,
+ 	return -EINVAL;
+ }
+ 
++#define ANT_CUSTOM_HANDLER ant_custom_handle_req
++
++#else
++
++/* No 0xEE string descriptor: a retail stick does not answer it, and
++ * answering it is what makes Windows bind WinUSB.
++ */
++#define ANT_CUSTOM_HANDLER NULL
++
++#endif /* CONFIG_ANT_DONGLE_MSOS_DESCRIPTORS */
++
++#if defined(CONFIG_ANT_DONGLE_MSOS_DESCRIPTORS) || \
++	defined(CONFIG_ANT_DONGLE_UF2_REBOOT_REQUEST)
++
+ static int ant_vendor_handle_req(struct usb_setup_packet *setup,
+ 				      int32_t *len,
+ 				      uint8_t **data)
+ {
++#if defined(CONFIG_ANT_DONGLE_UF2_REBOOT_REQUEST)
++	if (ant_uf2_reboot_req(setup)) {
++		*len = 0;
++		return 0;
++	}
++#endif
++
+ 	if (usb_reqtype_is_to_device(setup)) {
+ 		return -ENOTSUP;
+ 	}
+ 
++#if defined(CONFIG_ANT_DONGLE_MSOS_DESCRIPTORS)
+ 	if (setup->bRequest == ANT_MSOSV2_VENDOR_CODE &&
+ 	    setup->wIndex == MS_OS_20_DESCRIPTOR_INDEX) {
+ 		*data = (uint8_t *)&ant_msosv2_descriptor;
+@@ -311,22 +380,22 @@ static int ant_vendor_handle_req(struct usb_setup_packet *setup,
+ 		*len = sizeof(ant_msos1_compatid_descriptor);
+ 		return 0;
+ 	}
++#else
++	ARG_UNUSED(len);
++	ARG_UNUSED(data);
++#endif
+ 
+ 	return -ENOTSUP;
+ }
+ 
+-#define ANT_CUSTOM_HANDLER ant_custom_handle_req
+ #define ANT_VENDOR_HANDLER ant_vendor_handle_req
+ 
+ #else
+ 
+-/* No 0xEE string descriptor and no vendor requests: a retail stick answers
+- * neither, and answering them is what makes Windows bind WinUSB.
+- */
+-#define ANT_CUSTOM_HANDLER NULL
++/* No vendor requests: a retail stick answers none. */
+ #define ANT_VENDOR_HANDLER NULL
+ 
+-#endif /* CONFIG_ANT_DONGLE_MSOS_DESCRIPTORS */
++#endif
+ 
+ /* How long a bulk-IN transfer may take before we stop waiting for it. A host
+  * that has stopped polling IN while still configured is indistinguishable
+diff --git a/apps/dongle/Kconfig b/apps/dongle/Kconfig
+index 68a7c2d..4e70816 100644
+--- a/apps/dongle/Kconfig
++++ b/apps/dongle/Kconfig
+@@ -422,6 +422,33 @@ config ANT_DONGLE_MSOS_DESCRIPTORS
+ 	  installed ANT driver wins either way: it matches on the hardware ID,
+ 	  which outranks a compatible ID match.
+ 
++config ANT_DONGLE_UF2_REBOOT_REQUEST
++	bool "Reboot into the UF2 bootloader on a USB vendor request"
++	depends on ANT_DONGLE_TRANSPORT_USB_LEGACY
++	depends on SOC_NRF52840
++	help
++	  Answer one vendor control request - bmRequestType 0x40, bRequest
++	  0x57, wValue 0x5546 ("UF"), wIndex 0, wLength 0 - by writing 0x57 to
++	  GPREGRET and rebooting. 0x57 is DFU_MAGIC_UF2_RESET, which the Adafruit nRF52
++	  bootloader on the Feather and on Pro Micro / nice!nano boards checks
++	  at boot to stay in UF2 mode, so the drive mounts without a RESET
++	  button. That is the point of it: most Pro Micro clones have no button,
++	  and the only other way in is shorting RST to GND twice.
++
++	  Send it with: python tools/ant_probe.py --reboot-to-bootloader
++
++	  Invisible to a host that does not send it. No descriptor changes, the
++	  request is ignored (STALLed, as a retail stick would) unless every
++	  field matches, and Windows only issues vendor requests after reading
++	  the MS OS descriptors that ANT_DONGLE_MSOS_DESCRIPTORS controls.
++
++	  The trade-off: with this on, any software on the host that can open
++	  the device can put the board into a writable bootloader with no
++	  physical access. The request carries no authentication.
++
++	  Only meaningful on a board whose bootloader honours GPREGRET 0x57;
++	  elsewhere the board simply reboots into the application.
++
+ config ANT_DONGLE_ENCRYPTION
+ 	bool "Bridge the single channel encryption configuration messages"
+ 	help
+diff --git a/apps/dongle/boards/promicro_nrf52840_nrf52840_uf2.conf b/apps/dongle/boards/promicro_nrf52840_nrf52840_uf2.conf
+index 8a1f6a5..ce38b2d 100644
+--- a/apps/dongle/boards/promicro_nrf52840_nrf52840_uf2.conf
++++ b/apps/dongle/boards/promicro_nrf52840_nrf52840_uf2.conf
+@@ -41,3 +41,9 @@ CONFIG_USB_NRFX_ATTACHED_EVENT_DELAY=1
+ # Remote wakeup off, matching a retail stick. See the Feather's conf for why
+ # this cannot live in prj.conf or be expressed as a Kconfig default.
+ CONFIG_USB_DEVICE_REMOTE_WAKEUP=n
++
++# Most of these boards have no RESET button, so without this every reflash
++# means shorting RST to GND twice. Asserted on both Pro Micro rows in
++# release.yml and scripts/build_all.ps1. See the Kconfig help for the
++# trade-off.
++CONFIG_ANT_DONGLE_UF2_REBOOT_REQUEST=y
+diff --git a/apps/dongle/uf2_reboot.conf b/apps/dongle/uf2_reboot.conf
+new file mode 100644
+index 0000000..e0dae06
+--- /dev/null
++++ b/apps/dongle/uf2_reboot.conf
+@@ -0,0 +1,11 @@
++# Let the host reboot the board into its UF2 bootloader over USB, so it can be
++# reflashed with no physical access. See CONFIG_ANT_DONGLE_UF2_REBOOT_REQUEST.
++#
++# The Pro Micro images already have this in their board conf. This fragment is
++# the opt-in for other boards.
++#
++# Usage:
++#   west build ... -b adafruit_feather_nrf52840/nrf52840/uf2 -- "-DEXTRA_CONF_FILE=uf2_reboot.conf"
++#   python tools/ant_probe.py --reboot-to-bootloader
++
++CONFIG_ANT_DONGLE_UF2_REBOOT_REQUEST=y
+diff --git a/scripts/build_all.ps1 b/scripts/build_all.ps1
+index 7423ec9..48f6dc8 100644
+--- a/scripts/build_all.ps1
++++ b/scripts/build_all.ps1
+@@ -145,8 +145,8 @@ $backendSymbol = "CONFIG_ANT_DONGLE_RADIO_$($Backend.ToUpper())=y"
+ $targets = @(
+     @{ dir='release';        board='adafruit_feather_nrf52840/nrf52840/uf2'; artifact='radiant_dongle.uf2';                   pkg='uf2'; offset=0x26000; transport='USB_LEGACY'; conf='rgb.conf';    release=$true; overlay='rgb_feather.overlay' }
+     @{ dir='dongle';         board='nrf52840dongle/nrf52840';                artifact='radiant_dongle_nrf52840dongle.zip';    pkg='dfu'; offset=0x1000;  transport='USB_LEGACY'; conf=$null;         release=$true  }
+-    @{ dir='promicro';       board='promicro_nrf52840/nrf52840/uf2';         artifact='radiant_dongle_promicro.uf2';          pkg='uf2'; offset=0x26000; transport='USB_LEGACY'; conf=$null;         release=$true  }
+-    @{ dir='promicro_synth'; board='promicro_nrf52840/nrf52840/uf2';         artifact='radiant_dongle_promicro_synth.uf2';    pkg='uf2'; offset=0x26000; transport='USB_LEGACY'; conf='synth.conf';  release=$true  }
++    @{ dir='promicro';       board='promicro_nrf52840/nrf52840/uf2';         artifact='radiant_dongle_promicro.uf2';          pkg='uf2'; offset=0x26000; transport='USB_LEGACY'; conf=$null;         release=$true; assert_config=@('CONFIG_ANT_DONGLE_UF2_REBOOT_REQUEST=y') }
++    @{ dir='promicro_synth'; board='promicro_nrf52840/nrf52840/uf2';         artifact='radiant_dongle_promicro_synth.uf2';    pkg='uf2'; offset=0x26000; transport='USB_LEGACY'; conf='synth.conf';  release=$true; assert_config=@('CONFIG_ANT_DONGLE_UF2_REBOOT_REQUEST=y') }
+     @{ dir='feather_next';   board='adafruit_feather_nrf52840/nrf52840/uf2'; artifact='radiant_dongle_feather_usbd.uf2';      pkg='uf2'; offset=0x26000; transport='USB_NEXT';   conf='next.conf';   release=$false }
+     @{ dir='l15';            board='nrf54l15dk/nrf54l15/cpuapp';             artifact='radiant_dongle_nrf54l15dk.hex';        pkg='hex'; offset=0x0;     transport='UART';       conf=$null;         release=$false }
+     @{ dir='lm20';           board='nrf54lm20dk/nrf54lm20a/cpuapp';          artifact='radiant_dongle_nrf54lm20dk.hex';       pkg='hex'; offset=0x0;     transport='USB_NEXT';   conf=$null;         release=$false }
+@@ -420,6 +420,17 @@ try {
+             }
+         }
+ 
++        # 6. Symbols a row must have, the counterpart of release.yml's
++        # assert_config. A whole-line compare against the generated .config,
++        # because a symbol whose `depends on` stops being met is dropped by
++        # Kconfig with no error and the image still builds. foreach over an
++        # absent field runs zero times, which is right for the other rows.
++        foreach ($sym in $t.assert_config) {
++            if (-not ($cfg | Where-Object { $_ -ceq $sym })) {
++                throw "$($t.artifact): expected $sym in .config"
++            }
++        }
++
+         $halNote = if ($Backend -eq 'core') { ", $rowRadiant HAL" } else { '' }
+         Write-Host ("  ok: links at 0x{0:x}, {1} transport, {2} radio{3}" -f $offset, $got, $Backend, $halNote)
+ 

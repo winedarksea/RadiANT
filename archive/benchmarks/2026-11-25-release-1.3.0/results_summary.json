@@ -1,0 +1,33 @@
+{
+  "date": "2026-11-25",
+  "candidate": "817c301",
+  "baseline": "b28680f",
+  "control_d2": "v1.2.0 (69ac822) + USB-reboot backport, local commit 3a3a2ad",
+  "images_sha256": {
+    "radiant_dongle.uf2@817c301": "8D5B9E12FF46741EEF51C5F8B608DC6CEA076244477724202CEA9E3ABCDAE2D0",
+    "radiant_dongle_feather_quiet.uf2@817c301": "483F1E3BC684431D0452CBBFAB28439B2E8015EBBED0059756DEF8CCA385FEF0",
+    "radiant_dongle_nrf52840dongle.zip@817c301": "94E000ED0DA0A175B9E679BF889D757369DDFEDFAB3D51C8F6CD71AD1DCC10E3",
+    "radiant_dongle_promicro.uf2@817c301": "F03F2AC8470CCD7AC4642F07AD58AFF6B8714C2ED755415480A41997285416B7",
+    "radiant_dongle_promicro_synth.uf2@817c301": "3F59DF6A37C787A387731677C44D568A91A6FE03C65A8A848ECAF3F773C42194",
+    "radiant_dongle_promicro.uf2@b28680f": "BE54C354A8E2D1A8E67BA3320C78D3139A7FE6C143E6E80128ACE07CCF15C3E4",
+    "radiant_dongle_promicro.uf2@v1.2.0+reboot": "ACC0AC4BF0810690F6FCCD69E5CB360B38177234FBA9CA54E399057D8834EE4A"
+  },
+  "d2_midframe_answered": {
+    "v1.2.0+reboot": {"partial4": "0/10", "partial5": "0/10", "partial6_control": "10/10"},
+    "817c301": {"partial4": "0/10", "partial5": "10/10", "partial6_control": "10/10"}
+  },
+  "d3_first_message_and_master_outcome": {
+    "b28680f": {"acked": {"BROADCAST/FAILED": 20}, "bursts": {"BROADCAST/FAILED": 20}},
+    "817c301": {"acked": {"ACKNOWLEDGED/COMPLETED": 20}, "bursts": {"BURST/COMPLETED": 20}}
+  },
+  "d4_tracked_loss_pct": {
+    "b28680f_window": {"promicro": {"23571:0x0B": 3.50, "23572:0x78": 3.45}, "ti_com11": {"23571:0x0B": 3.66, "23572:0x78": 3.30}},
+    "817c301_window": {"promicro": {"23571:0x0B": 3.75, "23572:0x78": 3.37}, "ti_com11": {"23571:0x0B": 3.57, "23572:0x78": 3.54}}
+  },
+  "d4_scan_23573_0x79": {
+    "b28680f_window": {"promicro": {"per_s": 2.60, "heard_opens": "66/66", "median_first_s": 0.26, "max_first_s": 0.98}, "ti_com11": {"per_s": 2.58, "heard_opens": "66/66", "median_first_s": 0.25, "max_first_s": 0.72}},
+    "817c301_window": {"promicro": {"per_s": 2.61, "heard_opens": "66/66", "median_first_s": 0.23, "max_first_s": 0.59}, "ti_com11": {"per_s": 2.58, "heard_opens": "66/66", "median_first_s": 0.24, "max_first_s": 0.61}}
+  },
+  "d4_probe_817c301": "PASS",
+  "d4_zwift_visible_817c301": "PASS (ANT_Init device 1 with the Garmin held busy; scratch copy of ANT_DLL.dll, libusb0 backend, no shim DLLs)"
+}
