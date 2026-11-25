@@ -67,13 +67,14 @@ This rig sends no slave 0x02 replies (`--slave-replies` exists but was not run).
 
 - `raw/{A1_old,B_new,A2_old}.jsonl` hold one record per trial, with every
   post (time, kind, rx timestamp, payload bytes 1-3) and every RX_FAIL /
-  GO_TO_SEARCH event. `.txt` is the console.
+  GO_TO_SEARCH event. The `.txt` consoles sit beside them locally only
+  (gitignored, as are `images/`).
 - The per-trial `ack_as_bcast` field inside the jsonl was written by a rule
   that assumed an echoed ACK (first post 0xAC), so it reads false
   everywhere. Use `analyse.py`, which matches the ACK payload directly. The
   tool now uses the corrected rule.
 - `raw/pilot_old.jsonl` is a 20-trial rig check on the old image, run with an
   earlier script revision that did not log per-event payloads.
-- `raw/flash_*.txt` are the flash_ti.ps1 transcripts (PowerShell `*>`, so
-  UTF-16).
+- `raw/flash_*.txt` (local only) are the flash_ti.ps1 transcripts. Both
+  report "Program verification successful", and ant_probe PASSed after each.
 - `run.sh` holds the exact commands.
