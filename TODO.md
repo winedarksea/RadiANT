@@ -1069,7 +1069,11 @@ group.
   opener bit and cannot be told apart from the frame alone; it needs a master
   retry inside our search dwell, so it is rare. Tests: `test_search.c`
   (opener gate cases), `test_api.c` (tracked re-anchor, search on an ACK).
-  On-air evidence: bench pending.
+  On-air A/B/A PASS 2026-11-24 (`archive/benchmarks/2026-11-24-opener-gate/`,
+  TI DUT, L15 acked master, Garmin ACKer, 200 reopens per arm): old image
+  13 and 13 acquisitions on the ACK (off-grid, ACK payload posted as the
+  first BROADCAST_DATA), new image 0. The Garmin's ACK carries its own
+  buffer, not an echo of the acked data.
 - [ ] **UART transport can emit a truncated frame.** `ant_uart_write()`
   (`ant_uart_transport.c` ~:311) queues the head of a frame, and on a 1 s
   stall returns with it queued, so the next frame follows a fragment and a
