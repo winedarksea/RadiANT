@@ -753,6 +753,170 @@ class TheWorkflowsThemselvesAreWellFormed(unittest.TestCase):
                                  f"{name}: west.yml and the frozen manifest "
                                  "disagree; regenerate the frozen file")
 
+    # ── release trust order: verify-tag, then publish (v1.3.0 Phase B) ──────
+    #
+    # A tag run executes the TAGGED commit's own release.yml, so none of this
+    # stops a hostile tag - the `v*` ruleset and the `release` environment
+    # reviewer do that (SECURITY.md). What it does stop is an honest mistake
+    # quietly undoing the order: a repository script run before the git-only
+    # checks have said the tag is on master and names this run's commit.
+
+    def job_header(self, path, job):
+        """{"needs": [job, ...], "permissions": {scope: level} or a string
+        such as "read-all", or None when the job sets none} for one job.
+        Reads only the job's own keys at indent 4, above `steps:`. `needs:`
+        may be a scalar, a [flow, list] or a block list."""
+        lines = path.read_text(encoding="utf-8").splitlines()
+        start = next((i for i, ln in enumerate(lines)
+                      if ln.rstrip() == f"  {job}:"), None)
+        self.assertIsNotNone(start, f"no job {job} in {path.name}")
+        out = {"needs": [], "permissions": None}
+        i = start + 1
+        while i < len(lines):
+            ln = lines[i]
+            if ln and not ln.startswith("    ") and not ln.lstrip(
+                    ).startswith("#"):
+                break  # the next job, or the end of `jobs:`
+            m = re.match(r"^    ([A-Za-z0-9_-]+):\s*(.*?)\s*$", ln)
+            i += 1
+            if not m:
+                continue
+            key, val = m.group(1), m.group(2).split(" #")[0].strip()
+            if key == "steps":
+                break
+            if key not in ("needs", "permissions"):
+                continue
+            if val:
+                if key == "needs":
+                    out[key] = [v.strip().strip("'\"")
+                                for v in val.strip("[]").split(",")
+                                if v.strip()]
+                else:
+                    out[key] = {} if val == "{}" else val
+                continue
+            items = [] if key == "needs" else {}
+            while i < len(lines) and (not lines[i].strip()
+                                      or self._indent(lines[i]) > 4):
+                sub = lines[i].split(" #")[0].strip()
+                i += 1
+                if not sub or sub.startswith("#"):
+                    continue
+                if key == "needs" and sub.startswith("- "):
+                    items.append(sub[2:].strip().strip("'\""))
+                elif key == "permissions" and ":" in sub:
+                    scope, level = sub.split(":", 1)
+                    items[scope.strip()] = level.strip()
+            out[key] = items
+        return out
+
+    @staticmethod
+    def first_index(steps, pred):
+        return next((n for n, s in enumerate(steps) if pred(s)), None)
+
+    @staticmethod
+    def runs_repo_script(step):
+        return "app/scripts/" in (step["run"] or "")
+
+    @staticmethod
+    def is_ancestry_check(step):
+        return "merge-base --is-ancestor" in (step["run"] or "")
+
+    @staticmethod
+    def is_tag_commit_check(step):
+        return "rev-parse" in (step["run"] or "") and "^{commit}" in (
+            step["run"] or "")
+
+    @staticmethod
+    def is_tag_recheck(step):
+        return "ls-remote" in (step["run"] or "")
+
+    def test_the_job_header_parser_reads_needs_and_permissions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            wf = Path(tmp) / "w.yml"
+            wf.write_text(textwrap.dedent("""\
+                jobs:
+                  a:
+                    needs: one
+                    permissions: read-all
+                    steps:
+                      - run: x
+                  b:
+                    needs: [one, "two"]
+                    permissions: {}
+                    steps:
+                      - run: x
+                  c:
+                    # a comment
+                    needs:
+                      - one
+                      - two # why
+                    permissions:
+                      contents: write
+                      id-token: write
+                    steps:
+                      - run: x
+                  d:
+                    runs-on: x
+                    steps:
+                      - run: x
+                """), encoding="utf-8")
+            a, b, c, d = (self.job_header(wf, j) for j in "abcd")
+        self.assertEqual(a, {"needs": ["one"], "permissions": "read-all"})
+        self.assertEqual(b, {"needs": ["one", "two"], "permissions": {}})
+        self.assertEqual(c, {"needs": ["one", "two"],
+                             "permissions": {"contents": "write",
+                                             "id-token": "write"}})
+        self.assertEqual(d, {"needs": [], "permissions": None})
+
+    def test_publish_needs_verify_tag(self):
+        self.assertIn("verify-tag",
+                      self.job_header(self.RELEASE, "publish")["needs"])
+
+    def test_verify_tag_is_read_only_and_checks_git_before_any_script(self):
+        perms = self.job_header(self.RELEASE, "verify-tag")["permissions"]
+        self.assertIsInstance(perms, dict, "verify-tag must set its own "
+                              "permissions, not inherit them")
+        self.assertTrue(perms, "verify-tag sets no permission at all")
+        self.assertEqual({k: v for k, v in perms.items()
+                          if v not in ("read", "none")}, {},
+                         "verify-tag holds a write permission")
+        steps = self.job_steps(self.RELEASE, "verify-tag")
+        checkout = [s for s in steps
+                    if s["uses"].startswith("actions/checkout@")]
+        self.assertEqual(len(checkout), 1)
+        self.assertEqual(checkout[0]["with"].get("persist-credentials"),
+                         "false")
+        self.assertEqual(checkout[0]["with"].get("fetch-depth"), "0")
+        ancestry = self.first_index(steps, self.is_ancestry_check)
+        tagged = self.first_index(steps, self.is_tag_commit_check)
+        script = self.first_index(steps, self.runs_repo_script)
+        self.assertIsNotNone(ancestry, "verify-tag has no ancestry check")
+        self.assertIsNotNone(tagged, "verify-tag has no tag-commit check")
+        self.assertIsNotNone(script, "verify-tag no longer checks the tag "
+                             "against VERSION")
+        self.assertLess(ancestry, script, self.where(steps[script]))
+        self.assertLess(tagged, script, self.where(steps[script]))
+
+    def test_publish_runs_no_repo_script_before_the_ancestry_check(self):
+        steps = self.job_steps(self.RELEASE, "publish")
+        ancestry = self.first_index(steps, self.is_ancestry_check)
+        self.assertIsNotNone(ancestry, "publish has no ancestry check")
+        early = [self.where(s) for s in steps[:ancestry]
+                 if self.runs_repo_script(s)]
+        self.assertEqual(early, [], "a repository script runs before the "
+                         "tagged commit is known to be on master")
+
+    def test_publish_rechecks_the_tag_before_attesting_or_releasing(self):
+        steps = self.job_steps(self.RELEASE, "publish")
+        recheck = self.first_index(steps, self.is_tag_recheck)
+        self.assertIsNotNone(recheck, "publish does not re-check the tag")
+        for prefix in ("actions/attest-build-provenance@",
+                       "softprops/action-gh-release@"):
+            at = self.first_index(steps,
+                                  lambda s, p=prefix: s["uses"].startswith(p))
+            self.assertIsNotNone(at, f"publish has no {prefix} step")
+            self.assertLess(recheck, at, self.where(steps[at]))
+
 
 if __name__ == "__main__":
     unittest.main()
