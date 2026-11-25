@@ -400,14 +400,15 @@ ZTEST(radiant_event, test_ext_all_three_fields_in_order)
 	/* RSSI: measurement type, value, threshold configuration. */
 	zassert_equal((uint8_t)RADIANT_WIRE_RSSI_MEASUREMENT_TYPE_DBM, out[5]);
 	zassert_equal(0xEFu, out[6]);
-	zassert_equal(0x00u, out[7]);
+	/* Proximity search off: -128, AN16 section 4.3.3. */
+	zassert_equal(0x80u, out[7]);
 	/* Receive timestamp, little endian: 1,000,000 us is 0x8000 ticks. */
 	zassert_equal(0x00u, out[8]);
 	zassert_equal(0x80u, out[9]);
 }
 
 /* Proximity search on: byte 2 of the RSSI field is the threshold in force, a
- * signed dBm (ANT MP Rev 5.1 7.1.1.2.3, AN16 4.3.3). Off it stays 0x00. */
+ * signed dBm (ANT MP Rev 5.1 7.1.1.2.3, AN16 4.3.3). Off it is -128 (0x80). */
 ZTEST(radiant_event, test_ext_rssi_byte_two_is_the_proximity_threshold)
 {
 	struct radiant_event_ext ext = mk_ext();
@@ -428,7 +429,7 @@ ZTEST(radiant_event, test_ext_rssi_byte_two_is_the_proximity_threshold)
 		(uint8_t)RADIANT_WIRE_LIB_CONFIG_MESG_OUT_INC_RSSI, &ext, out,
 		sizeof(out));
 	zassert_equal(4, n);
-	zassert_equal(0x00u, out[3]);
+	zassert_equal(0x80u, out[3]);
 }
 
 ZTEST(radiant_event, test_ext_device_id_only)

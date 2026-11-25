@@ -957,9 +957,8 @@
 /*
  * 3 bytes follow: measurement type, value, threshold configuration. The last
  * is a signed dBm: the proximity threshold in force (rev5.1 sec 7.1.1.2.3,
- * AN16 sec 4.3.3). With proximity search off radiant sends 0x00, where those
- * documents give -128 (0x80); that difference is an open owner decision.
- * [tools (ant_verify)]
+ * AN16 sec 4.3.3). With proximity search off it is -128 (0x80), as those
+ * documents give. [tools (ant_verify)]
  */
 #define RADIANT_WIRE_EXT_FLAG_RSSI                           0x40
 
