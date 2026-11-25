@@ -1469,14 +1469,146 @@ static void phase_diag_housekeep(radiant_time_t now)
 }
 #endif /* CONFIG_RADIANT_SEARCH_PHASE_DIAG */
 
+/*
+ * What a background scan posts for one frame it heard, by the frame's kind.
+ * Rev 5.1 section 9.5.4.5: a continuous scan "will pick up any message", and
+ * its synchronous-packets-only option exists "to filter out acknowledged
+ * messages occurring in the reverse direction (slave to master), and broken
+ * burst messages" - so an unfiltered scan reports acknowledged and burst
+ * messages as what they are, not as broadcasts. A background scan (5.2.1.4.2)
+ * reports the same way here.
+ *
+ *   - a broadcast (0x0A, 0x02): BROADCAST_DATA;
+ *   - a slot-opening last packet (0xAA): ACKNOWLEDGED_DATA, which is what a
+ *     one-packet exchange from a master is;
+ *   - any other data packet: BURST_DATA. The sequence comes from the control
+ *     byte, as a scan follows no transfer: 0 for a slot opener (0x8A, a
+ *     master's packet 0), else 1 or 2 by the on-air sequence bit - the host
+ *     form's 1,2,3 rotation cannot be rebuilt from one bit. LAST from b5. A
+ *     continuation (sequence 1..3) goes up without extended data (7.1.1), as
+ *     every received burst does.
+ *
+ * In-slot 0xA2/0xB2 stay BURST_DATA: on air an in-slot acknowledged message
+ * (a slave's, in the reverse direction) and a burst's last packet are the same
+ * bytes, and only the transfer they belong to tells them apart.
+ *
+ * Returns false for an acknowledgement (0xC2..0xF2) or an unknown control
+ * byte: an ACK carries the acknowledger's broadcast buffer, not a message, and
+ * an unknown byte is no message at all. The caller counts them.
+ */
+static bool api_scan_msg(uint8_t ctrl, enum radiant_msg_type mt, uint8_t *msg_id,
+			 uint8_t *seq, bool *last)
+{
+	*seq = 0u;
+	*last = false;
+	switch (mt) {
+	case RADIANT_MSG_BROADCAST:
+		*msg_id = (uint8_t)RADIANT_WIRE_MESG_BROADCAST_DATA_ID;
+		return true;
+	case RADIANT_MSG_BURST_DATA:
+	case RADIANT_MSG_BURST_LAST:
+		if (mt == RADIANT_MSG_BURST_LAST &&
+		    radiant_ctrl_is_slot_opener(ctrl)) {
+			*msg_id = (uint8_t)RADIANT_WIRE_MESG_ACKNOWLEDGED_DATA_ID;
+			return true;
+		}
+		*msg_id = (uint8_t)RADIANT_WIRE_MESG_BURST_DATA_ID;
+		if (!radiant_ctrl_is_slot_opener(ctrl)) {
+			*seq = (radiant_ctrl_seq(ctrl) != 0u) ? 1u : 2u;
+		}
+		*last = (mt == RADIANT_MSG_BURST_LAST);
+		return true;
+	case RADIANT_MSG_BURST_ACK:
+	case RADIANT_MSG_TRANSFER_ACK:
+	case RADIANT_MSG_UNKNOWN:
+	default:
+		return false;
+	}
+}
+
+/*
+ * An acknowledged-data or burst opener (0x8A/0xAA) acquired an ACQUIRE
+ * channel: deliver it as the tracked path does (api_tracked_frame()'s data
+ * case), through radiant_transfer_on_data(), which posts it from
+ * api_xfer_rx_data() as ACKNOWLEDGED_DATA or as BURST_DATA sequence 0.
+ *
+ * A SLAVE_RX_ONLY channel acknowledges nothing: the engine delivers and arms
+ * nothing, so nothing here is timing-bound.
+ *
+ * A bidirectional channel owes the master an acknowledgement at
+ * RADIANT_TRANSFER_OPENER_REPLY_US. Delivered only when that reply can still
+ * be armed, under the held command's guards (below in api_search_acquired()):
+ * an exact timestamp, the reply instant ahead of the arm lead (an MPSL search
+ * frame can reach this callback ~23 ms late), an idle engine, and the sweep's
+ * carrier released if this channel is it. Otherwise the message is dropped,
+ * unacknowledged and undelivered, as a missed packet would be: the master
+ * learns of it from the missing ACK and resends (spec behaviour, owner
+ * decision 2026-11-25). Counted in acq_exchange_dropped. Delivering it
+ * unacknowledged instead would tell the host of a message its sender
+ * believes failed, and the resend would then arrive twice.
+ *
+ * Called after radiant_search_end(), so no search bookkeeping for this
+ * channel follows the transmit request. Radio interrupt context.
+ */
+static void api_search_acquired_exchange(uint8_t ch,
+					 const struct radiant_search_result *r)
+{
+	bool released = false;
+	int  rc;
+
+	if (radiant_channel_type_get(ch) ==
+	    (uint8_t)RADIANT_WIRE_CHANNEL_TYPE_SLAVE_RX_ONLY) {
+		api_stats.rx_on_data++;
+		if (radiant_transfer_on_data(&api_xfer[ch], &r->frame, r->t_sync) !=
+		    RADIANT_TRANSFER_OK) {
+			api_stats.acq_exchange_dropped++;
+		}
+		return;
+	}
+
+	if (!r->t_sync_exact ||
+	    radiant_radio_now() +
+			    (radiant_time_t)radiant_radio_caps_get()->min_arm_lead_us >=
+		    r->t_sync + (radiant_time_t)RADIANT_TRANSFER_OPENER_REPLY_US ||
+	    !radiant_transfer_is_idle(&api_xfer[ch]) ||
+	    !api_search_release_carrier(ch, &released)) {
+		api_stats.acq_exchange_dropped++;
+		return;
+	}
+
+	api_stats.rx_on_data++;
+	rc = radiant_transfer_on_data(&api_xfer[ch], &r->frame, r->t_sync);
+	if (rc != RADIANT_TRANSFER_OK) {
+		api_stats.acq_exchange_dropped++;
+	}
+	if (released && radiant_transfer_is_idle(&api_xfer[ch])) {
+		/* No acknowledgement took the slot (the engine refused, or a
+		 * test fault plan muted it). As for the held command below: a
+		 * released carrier's continuous chunk would otherwise hold the
+		 * slot for good, so cancel it as api_search_cut_locked() does;
+		 * the cancel is silent, so the binding goes too. */
+		unsigned int key = radiant_event_crit_enter();
+
+		(void)radiant_sched_cancel(ch);
+		api_bind_rejected(ch);
+		radiant_event_crit_exit(key);
+		radiant_event_wakeup();
+	}
+}
+
 /* The sweep offered this channel a device. Runs in the radio interrupt. */
 static void api_search_acquired(uint8_t channel,
 				const struct radiant_search_result *r, void *user)
 {
 	struct radiant_rx_event hal;
+	enum radiant_msg_type mt;
 	bool                 is_scan;
+	bool                 exchange;
 	bool                 post = true;
 	bool                 released = false;
+	bool                 last = false;
+	uint8_t              msg_id = (uint8_t)RADIANT_WIRE_MESG_BROADCAST_DATA_ID;
+	uint8_t              seq = 0u;
 	int8_t               prox_dbm = 0;
 
 	(void)user;
@@ -1498,6 +1630,27 @@ static void api_search_acquired(uint8_t channel,
 	 * changes the channel state. */
 	is_scan = radiant_search_chan_mode(&api_search, channel) ==
 		  RADIANT_SEARCH_MODE_SCAN;
+	mt = radiant_frame_msg_type(r->frame.ctrl_byte);
+
+	/* A scan reports each frame as its kind, and an ACK or an unknown
+	 * control byte not at all (api_scan_msg()). */
+	if (is_scan && !api_scan_msg(r->frame.ctrl_byte, mt, &msg_id, &seq, &last)) {
+		api_stats.scan_unposted++;
+		return;
+	}
+
+	/*
+	 * An ACQUIRE channel is only ever offered a master's slot opener
+	 * (radiant_search.c handle_ok(), radiant_ctrl_is_master_opener()), so
+	 * the anchor below is never a slave reply or an ACK. The opener keeps
+	 * its kind: a broadcast (0x0A) is posted here as the channel's first
+	 * broadcast, and acknowledged data or a burst's packet 0 (0xAA/0x8A)
+	 * goes through the transfer engine (api_search_acquired_exchange())
+	 * after radiant_search_end(), as ACKNOWLEDGED_DATA or BURST_DATA - never
+	 * as a broadcast. Anything else here would be a wiring fault, and the
+	 * engine refuses it (counted in acq_exchange_dropped).
+	 */
+	exchange = !is_scan && mt != RADIANT_MSG_BROADCAST;
 
 	if (!is_scan) {
 		radiant_channel_on_acquired(channel, &r->id, r->t_sync);
@@ -1505,11 +1658,7 @@ static void api_search_acquired(uint8_t channel,
 		api_stats.acquired++;
 	}
 
-	/* The acquiring frame is the first broadcast, so it goes to the host now
-	 * rather than a period later. The HAL event is built from the search
-	 * result. An ACQUIRE channel is only ever offered a slot opener
-	 * (radiant_search.c handle_ok(), stats.non_opener_skipped), so neither
-	 * the anchor above nor this post is ever a slave reply or an ACK. */
+	/* The HAL event for a frame posted here, built from the search result. */
 	memset(&hal, 0, sizeof(hal));
 	hal.status = RADIANT_RADIO_STATUS_OK;
 	hal.t_sync = r->t_sync;
@@ -1529,9 +1678,7 @@ static void api_search_acquired(uint8_t channel,
 	{
 		int sec = radiant_sec_rx_ingest(
 			channel, r->frame.payload, r->frame.payload_len,
-			radiant_frame_msg_type(r->frame.ctrl_byte) ==
-				RADIANT_MSG_BROADCAST,
-			(uint64_t)r->t_sync);
+			mt == RADIANT_MSG_BROADCAST, (uint64_t)r->t_sync);
 
 		if (sec == RADIANT_SEC_RX_DEFER) {
 			/* For radiant_sec_deliver(): who sent it. */
@@ -1548,10 +1695,9 @@ static void api_search_acquired(uint8_t channel,
 		}
 	}
 #endif
-	if (post) {
-		api_post_rx_prox(channel, (uint8_t)RADIANT_WIRE_MESG_BROADCAST_DATA_ID,
-				 &r->id, &hal, r->frame.payload,
-				 r->frame.payload_len, 0u, false, prox_dbm);
+	if (post && !exchange) {
+		api_post_rx_prox(channel, msg_id, &r->id, &hal, r->frame.payload,
+				 r->frame.payload_len, seq, last, prox_dbm);
 	}
 
 	/* ACQUIRE leaves the search; a scan stays SEARCHING, so radiant_search_end() is skipped. */
@@ -1563,6 +1709,12 @@ static void api_search_acquired(uint8_t channel,
 		if (api_search_slot == channel) {
 			radiant_event_wakeup();
 		}
+	}
+
+	/* After radiant_search_end(), for the reason the held command below
+	 * gives. A frame the policy guard dropped (D15) is not delivered. */
+	if (exchange && post) {
+		api_search_acquired_exchange(channel, r);
 	}
 
 	/*
@@ -1586,14 +1738,16 @@ static void api_search_acquired(uint8_t channel,
 	 * page 2 tx_margin_min_us -22607), and a send that cannot make its
 	 * slot fails the command; kept, it goes from the next tracked frame.
 	 *
-	 * Only from a master's frame (slot-opener bit, 0x0A): the continuous
-	 * search also hears another slave's 0x02 reply to the same master,
-	 * and a send timed from that lands where no reply slot is open.
+	 * Only from a master's broadcast (radiant_ctrl_is_master_opener(),
+	 * 0x0A): the continuous search also hears another slave's 0x02 reply
+	 * to the same master, and a send timed from that lands where no reply
+	 * slot is open. An exchange opener's reply slot belongs to its
+	 * acknowledgement (api_search_acquired_exchange()), as on a tracked
+	 * window, where only a broadcast sends a held command.
 	 */
-	if (post && !is_scan && api_ch[channel].ack_pending &&
+	if (post && !is_scan && !exchange && api_ch[channel].ack_pending &&
 	    !radiant_channel_is_master(channel) &&
-	    radiant_frame_msg_type(r->frame.ctrl_byte) == RADIANT_MSG_BROADCAST &&
-	    radiant_ctrl_is_slot_opener(r->frame.ctrl_byte) &&
+	    radiant_ctrl_is_master_opener(r->frame.ctrl_byte) &&
 	    r->t_sync_exact &&
 	    radiant_radio_now() +
 			    (radiant_time_t)radiant_radio_caps_get()->min_arm_lead_us <
@@ -2420,11 +2574,16 @@ static void api_crc_bits_note(const struct radiant_rx_event *evt,
 /*
  * One frame heard in a tracked window (or a master's turnaround). Returns
  * whether it counts as this channel's own sensor heard, which is what
- * slot_heard records: a clean frame, or a repair that was accepted. False for
- * a repair that failed or was refuted, and for a clean frame whose
- * transmission type names another sensor. A clean frame this function cannot
- * parse still counts as heard (the address matched and the CRC verified), as
- * it did before the transmission-type check existed.
+ * slot_heard records: a clean frame that decodes to a known message kind, or a
+ * repair that was accepted. False for a repair that failed or was refuted, for
+ * a clean frame whose transmission type names another sensor, and for a clean
+ * frame that does not decode or decodes to RADIANT_MSG_UNKNOWN (a control byte
+ * never transmitted): a matching address and a valid CRC do not make a frame
+ * this sensor's. api_sched_rx() puts back what the window had before such a
+ * frame, so an earlier valid frame in the same window still counts. Three
+ * internal failures still return !crc_failed, as before: no channel ID, a body
+ * the HAL handed over empty or oversized, and an address that cannot be
+ * rebuilt. None of them says anything about the frame.
  */
 static bool api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt,
 			      bool crc_failed)
@@ -2482,8 +2641,10 @@ static bool api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt,
 			/* A mis-repair in the control byte is usually rejected here by an
 			 * existing check. Counted separately. */
 			api_stats.crc_repair_refuted++;
+		} else {
+			api_stats.rx_undecoded++;
 		}
-		return !crc_failed;
+		return false;
 	}
 
 	/* Repaired frames are broadcasts only: acknowledged or burst data would
@@ -2582,9 +2743,19 @@ static bool api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt,
 	 * charging the guard only (the retired misses move to the skip count, so
 	 * the guard stays as wide). Without it the next window is posted at the
 	 * slot already gone, runs empty, and counts a miss.
+	 *
+	 * A control byte no stack transmits (RADIANT_MSG_UNKNOWN: 0x2A, 0x4A,
+	 * 0x6A and the rest) is neither heard nor an anchor: it returns before
+	 * both, and the window keeps what it had. The opener test is
+	 * radiant_ctrl_is_master_opener(), the slot bit with a master's kind.
 	 */
+	mt = radiant_frame_msg_type(f.ctrl_byte);
+	if (mt == RADIANT_MSG_UNKNOWN) {
+		api_stats.rx_undecoded++;
+		return false;
+	}
 	if (!radiant_channel_is_master(ch)) {
-		if (radiant_ctrl_is_slot_opener(f.ctrl_byte)) {
+		if (radiant_ctrl_is_master_opener(f.ctrl_byte)) {
 			radiant_channel_on_slot(ch, evt->t_sync);
 			radiant_search_seen_note_rf(&api_search, &id, evt->t_sync,
 						    api_rf_of(ch));
@@ -2596,7 +2767,6 @@ static bool api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt,
 		}
 	}
 
-	mt = radiant_frame_msg_type(f.ctrl_byte);
 	LOG_DBG("frame ch=%u kind=%u ctrl=0x%02X mt=%d xfer=%d reply=0x%02X bc=%u",
 		(unsigned)ch, (unsigned)api_ch[ch].slot_kind,
 		(unsigned)f.ctrl_byte, (int)mt,

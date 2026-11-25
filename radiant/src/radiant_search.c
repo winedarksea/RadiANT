@@ -1111,12 +1111,14 @@ static void handle_ok(struct radiant_search *s, const struct radiant_rx_event *e
 		 * ACK sits 2.19 ms into the master's period and an in-slot burst
 		 * packet a burst step past it; claiming on one puts the channel
 		 * off the grid, and posts that frame to the host as its first
-		 * broadcast. Skipped before the claim and the permit call, so a
-		 * non-opener spends neither. SCAN reports every frame. Known gap:
-		 * a retried burst packet 0 still carries the opener bit
-		 * (radiant_ctrl_is_slot_opener()). */
+		 * broadcast. The slot bit alone is not enough: 0x2A/0x4A/0x6A
+		 * carry it with no master's message kind
+		 * (radiant_ctrl_is_master_opener()). Skipped before the claim
+		 * and the permit call, so a non-opener spends neither. SCAN
+		 * reports every frame. Known gap: a retried burst packet 0 still
+		 * carries the opener bit (radiant_ctrl_is_slot_opener()). */
 		if (ch->mode == RADIANT_SEARCH_MODE_ACQUIRE &&
-		    !radiant_ctrl_is_slot_opener(f.ctrl_byte)) {
+		    !radiant_ctrl_is_master_opener(f.ctrl_byte)) {
 			s->stats.non_opener_skipped++;
 			continue;
 		}
