@@ -11,6 +11,8 @@ reads.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-25
+
 ### Added
 
 - **Inbound multi-packet bursts.** A burst sent to RadiANT used to stop at
@@ -108,6 +110,22 @@ reads.
 
 ### Fixed
 
+- **A slave that acquires on acknowledged data or a burst delivers it as
+  that.** The search posted a master's `0xAA`/`0x8A` opener to the host as
+  `BROADCAST_DATA`, unacknowledged. It now goes up as `ACKNOWLEDGED_DATA` or
+  `BURST_DATA` sequence 0, and a bidirectional channel ACKs it at +2190 µs;
+  when that slot can no longer be reached the message is dropped
+  unacknowledged, so the master resends it. A background scan reports
+  acknowledged and burst messages as such (Rev 5.1 9.5.4.5) and no longer
+  posts ACKs; its burst sequence comes from one bit, so it reads 0,1,2,1,2.
+  `0x2A`/`0x4A`/`0x6A` no longer claim or re-anchor a channel.
+- **A tracked frame that does not decode is a miss,** not the sensor heard:
+  one with a matching address and CRC but an unknown control byte used to
+  keep a lost sensor tracked. It now raises `RX_FAIL` and, repeated, sends
+  the channel to search.
+- **Treadmill: FTMS Stop and Reset report a deck that refused.** Stop answers
+  failure and keeps Training Status when the belt refuses speed 0; Reset
+  releases control and notifies only when speed and incline both reset.
 - **Treadmill: any ANT+ transmitter could command the deck past the
   machine's range.** FE-C page 51 was bounded only by the wire (±100 %) on
   every build, and FE-C-only builds had no range at all. Every command path
@@ -155,11 +173,15 @@ reads.
   fresh time, an MPSL staged operation survives `EXTEND_FAILED`; Matter label
   changes and owed MQTT offlines survive a flush or outage.
 - **The Linux udev rule grants access** (`host/linux/70-radiant-ant.rules`;
-  remove any `99-ant-usb.rules`). The bridge and Matter builds link again.
+  remove any `99-ant-usb.rules`), unbinds `usb_serial_simple` from
+  `0x1008`/`0x1004` sticks too, and tells ModemManager to leave them alone.
+  The bridge and Matter builds link again.
+- **`ant_verify.py` fails a replay with no sensor streams** instead of
+  passing it.
 
 ### Security
 
-Except the last bullet, these apply only to builds with the opt-in
+Except the last two bullets, these apply only to builds with the opt-in
 `security.conf`; none of the five release images has it.
 
 - **A secured channel stopped verifying within minutes when it carried
@@ -179,13 +201,20 @@ Except the last bullet, these apply only to builds with the opt-in
   ([docs/radiant-security.md](docs/radiant-security.md)).
 - **Key material is redacted from diagnostic traces** in any build with
   tracing on, and from the Zwift shim's level-2 log.
+- **Release trust order:** a read-only `verify-tag` job checks that the tagged
+  commit is on `master` and is the commit the run built before any repository
+  script runs, and `publish` re-checks the tag on GitHub before attesting. A
+  tag run uses the tagged commit's own workflow, so the `v*` tag ruleset and
+  the `release` environment reviewer are the real control. The documented
+  `gh attestation verify` now pins the signer workflow and source ref
+  ([SECURITY.md](SECURITY.md)).
 
 ### Tooling and CI
 
 - Releases come from one tag-only `publish` job that checks every image name
   and `.sha256` sidecar against the matrix; actions, nrfutil and the Matter
   gate's inputs are pinned by digest. Also: 0xF7 pages 8-13 (ADR 0023),
-  `ant_scan_rate.py`, `decode_pcap.py` slot loss, Zwift shim logging and a TI
+  `ant_scan_rate.py`, `bench_midframe_reopen.py`, `decode_pcap.py` slot loss, Zwift shim logging and a TI
   backend ztest harness.
 
 ### Known issues
@@ -195,59 +224,15 @@ Except the last bullet, these apply only to builds with the opt-in
   observation: 3 frames in 3.66 s with three pinned channels); not measured.
 - The MQTT sink has never run against a real broker.
 - No image has a watchdog.
-- On Windows, a host tool that dies mid-frame may still have the next tool's
-  first command swallowed; a bus reset or replug clears it. Probably fixed by
-  the host-frame parser change above, but not re-tested.
+- On Windows, a host tool that dies mid-frame can still have the next tool's
+  first command swallowed when the stale frame had not reached its checksum
+  byte (0 of 10 answered, as on v1.2.0); a resend, bus reset or replug clears
+  it. A frame cut at its checksum byte is fixed (10 of 10, v1.2.0 0 of 10).
 
 ## [1.2.0] - 2026-11-06
 
-### Added
-
-- **Bridge product, `apps/dongle_thread`:** self channels 6 and 7 pinned to
-  paired sensors on the Zwift model, restored after `SYSTEM_RESET`; MQTT and
-  Matter sinks; the Matter bridge fits an nRF54L15 and an nRF52840.
-- **Reference designs:** `apps/treadmill` (FE-C, RSC, FTMS;
-  [ADR 0017](docs/decisions/0017-fec-treadmill-control.md)), `apps/hrm_ble`
-  (BLE heart-rate strap that also transmits ANT+) and `apps/trainer`, a
-  trainer simulator with ACK fault injection.
-- **More hardware:** the nRF5340 network core as an ANT+ endpoint, and the TI
-  CC2652P dongle (`apps/dongle_ti`) over its own USB.
-- **Acknowledged data works on MPSL builds.**
-- **`MESG_RADIANT_HEALTH` (0xF6)** counters for silent drops.
-- **Opt-in RadiANT security (`security.conf`, in no release image):**
-  `X_AUTH`/`X_CONF`, X25519 pairing and `0xF1`-`0xF4`. A secured channel does
-  not interoperate with ANT+ profiles.
-
-### Changed
-
-- **Release artifacts are cut from the clean-room backend;** sdk-ant is out of
-  CI ([ADR 0001](docs/decisions/0001-backend-selection-and-release-default.md))
-  and every app defaults to a real radio backend.
-- **A pending acknowledged command gets three master slots** (750 ms on FE-C).
-- **A named device is revisited during search,** so one lost packet costs
-  0.25-2 s instead of an 8 s sweep.
-- **The MQTT sink does no network I/O on the self or sample path.**
-- **The coded PHY is opt-in,** cutting the arm lead to 168 µs (nRF54L15) and
-  328 µs (nRF52840) ([ADR 0007](docs/decisions/0007-long-range-phy.md)).
-- Bridge max channels sit below the self channels; the USB write is bounded at
-  1 s; one Feather image carries the RGB indicator.
-
-### Fixed
-
-- **Matter pressure was 10× and 1000× too small.** Page 84's
-  operating-temperature limits are no longer posted; existing Home Assistant
-  installs must delete the two retained discovery topics by hand.
-- **A USB bus reset mid-frame swallowed the host's next command.**
-- **An MPSL assert on bridge and Matter images reboots** instead of halting.
-- **A search cost a tracked channel every other packet.**
-- **Zwift:** an assign to a keyless network no longer stops discovery after
-  the first sensor; two tracked channels within one arm lead no longer lose
-  the later one ([ADR 0016](docs/decisions/0016-merge-reach-is-the-arm-lead.md)).
-- DFU packages carry the real version; `LICENSE` is Apache-2.0.
-
-### Security
-
-Both apply only to `security.conf` builds.
-
-- A keyless injector could replay or desynchronise a secured channel.
-- Under `DROP_UNVER`, forgeries were delivered as verified.
+Bridge product (`apps/dongle_thread`, MQTT and Matter sinks), the treadmill,
+BLE heart-rate and trainer reference designs, the nRF5340 network core and the
+TI CC2652P dongle, acknowledged data on MPSL builds, `0xF6` health counters and
+opt-in RadiANT security; release images cut from the clean-room backend. Full
+entry: [`CHANGELOG.md` at v1.2.0](https://github.com/winedarksea/RadiANT/blob/v1.2.0/CHANGELOG.md).
