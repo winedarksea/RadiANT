@@ -40,15 +40,35 @@ So the honest guarantee is integrity-on-download, not authenticity-at-flash:
   sidecar, generated in CI by the job that built the image and re-checked by
   the separate `publish` job before it attaches anything
   (`.github/workflows/release.yml`). Only `publish` can write to the release,
-  it runs only after every build job passes, it releases only a tag whose
-  commit is on master, and it never replaces an asset already on a release.
+  it runs only after every build job and a read-only `verify-tag` job pass,
+  it checks that the tagged commit is on master and that the tag still names
+  that commit just before it attests, and it never replaces an asset already
+  on a release.
   **v1.0 and v1.1 predate this:** their assets were uploaded by hand and have
   no sidecars and no attestation. v1.2.0 has no assets.
+- **What actually stops an off-master tag.** A tag run executes the tagged
+  commit's *own* copy of `release.yml`. A tag on a commit that is not on
+  master can carry a workflow with every one of the checks above deleted, so
+  those checks catch honest mistakes, not a hostile tag. The controls that
+  do stop one live in the repository settings, outside any commit: the `v*`
+  tag ruleset (who may create, move or delete a release tag) and the required
+  reviewer on the `release` environment (a person approves each publish
+  before it gets a write token).
 - The same job attaches a GitHub build-provenance attestation to every file it
-  publishes. `gh attestation verify <file> -R winedarksea/RadiANT` checks that
-  the file was built by this repository's release workflow, and from which
-  commit. Unlike the sidecar, this does not depend on trusting whoever can
-  write to the release.
+  publishes. Check a download with:
+
+  ```sh
+  gh attestation verify <file> -R winedarksea/RadiANT \
+    --signer-workflow winedarksea/RadiANT/.github/workflows/release.yml \
+    --source-ref refs/tags/v<version>
+  ```
+
+  `-R` checks the file was built from this repository, `--signer-workflow`
+  that it was this release workflow that signed it (not some other workflow
+  in the repository), and `--source-ref` that the run was for the release tag
+  you meant - so an image from one release cannot be passed off as another's.
+  Unlike the sidecar, this does not depend on trusting whoever can write to
+  the release.
 - Compare the sum before flashing (`sha256sum -c <artifact>.sha256` beside the
   downloaded file). If it does not match, do not flash it.
 - The job that builds the shipping images (`build-core` in
