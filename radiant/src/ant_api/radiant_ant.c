@@ -1484,7 +1484,9 @@ static void api_search_acquired(uint8_t channel,
 
 	/* The acquiring frame is the first broadcast, so it goes to the host now
 	 * rather than a period later. The HAL event is built from the search
-	 * result. */
+	 * result. An ACQUIRE channel is only ever offered a slot opener
+	 * (radiant_search.c handle_ok(), stats.non_opener_skipped), so neither
+	 * the anchor above nor this post is ever a slave reply or an ACK. */
 	memset(&hal, 0, sizeof(hal));
 	hal.status = RADIANT_RADIO_STATUS_OK;
 	hal.t_sync = r->t_sync;
@@ -2528,14 +2530,35 @@ static bool api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt,
 	}
 
 	/*
-	 * A slave re-anchors its slot clock on the frame heard. A master must not: it
-	 * owns the slot grid, and the frame it hears is a slave's reply 2.19 ms into
-	 * the period, so re-anchoring would drag its phase forward each exchange.
+	 * A slave re-anchors its slot clock on the master's slot opener, and on
+	 * nothing else. A slave reply (0x02) or an ACK heard in the window sits
+	 * 2.19 ms into the period, an in-slot burst packet a burst step past it:
+	 * anchoring there walks the grid off the master's, and the next windows
+	 * miss. Skipping the anchor costs little: a missed anchor only extrapolates
+	 * one period, while a wrong one moves the grid. The window still counts as
+	 * heard (slot_heard, api_sched_rx()), since a reply or ACK proves the master
+	 * transmitted that period. Repaired frames are broadcasts only (0x0A, an
+	 * opener), so they re-anchor as before. A master never re-anchors here: it
+	 * owns the slot grid, and the frame it hears is a slave's reply.
+	 *
+	 * A heard window does not advance the clock by itself (only on_slot() and
+	 * the miss paths do), so the extrapolation is explicit: the frame came
+	 * from this window's slot, t_next <= t_sync + guard, and catch_up() steps
+	 * whole periods past that instant - one, keeping the master's phase and
+	 * charging the guard only. Without it the next window is posted at the
+	 * slot already gone, runs empty, and counts a miss.
 	 */
 	if (!radiant_channel_is_master(ch)) {
-		radiant_channel_on_slot(ch, evt->t_sync);
-		radiant_search_seen_note_rf(&api_search, &id, evt->t_sync,
-					    api_rf_of(ch));
+		if (radiant_ctrl_is_slot_opener(f.ctrl_byte)) {
+			radiant_channel_on_slot(ch, evt->t_sync);
+			radiant_search_seen_note_rf(&api_search, &id, evt->t_sync,
+						    api_rf_of(ch));
+		} else {
+			radiant_channel_catch_up(
+				ch, evt->t_sync +
+					    (radiant_time_t)radiant_channel_guard_us(ch) +
+					    1u);
+		}
 	}
 
 	mt = radiant_frame_msg_type(f.ctrl_byte);
