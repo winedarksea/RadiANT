@@ -469,7 +469,7 @@ ZTEST(radiant_event, test_ext_offsets_move_with_the_flags)
 		      out[0]);
 	zassert_equal((uint8_t)RADIANT_WIRE_RSSI_MEASUREMENT_TYPE_DBM, out[1]);
 	zassert_equal(0xEFu, out[2]);
-	zassert_equal(0x00u, out[3]);
+	zassert_equal(0x80u, out[3]); /* threshold: proximity off, -128 */
 	zassert_equal(0x00u, out[4]);
 	zassert_equal(0x80u, out[5]);
 }
