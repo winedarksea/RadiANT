@@ -162,8 +162,12 @@ def ext_fields(body):
         dev = body[off] | (body[off + 1] << 8)
         off += 4
     if flag & 0x40 and len(body) >= off + 3:
-        s8 = lambda v: v - 256 if v > 127 else v  # noqa: E731
-        rssi, thr = s8(body[off + 1]), s8(body[off + 2])
+        # Only measurement type 0x20 is dBm with a threshold byte (AN16
+        # 4.3.1). A Garmin ANTUSB-m sends type 0x10 in a 4-byte field
+        # (archive/benchmarks/2026-11-25-garmin-rssi-byte2): not decoded.
+        if body[off] == 0x20:
+            s8 = lambda v: v - 256 if v > 127 else v  # noqa: E731
+            rssi, thr = s8(body[off + 1]), s8(body[off + 2])
         off += 3
     return dev, rssi, thr
 

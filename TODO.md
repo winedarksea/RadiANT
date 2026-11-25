@@ -895,9 +895,11 @@ group.
   *Done 2026-11-25:* the owner ruled to follow the ANT documents unless there
   is a clearly better way, and there isn't one: 0x00 reads as a 0 dBm
   threshold. `RSSI_THRESHOLD_CFG_NONE` is now 0x80 (`radiant_event.c`), and
-  test_event asserts it. No host in the repo reads the byte. Open: confirm on
-  a Garmin ANTUSB-m (it supports proximity search, MP p. 58) that it also sends
-  0x80 with proximity search off.
+  test_event asserts it. No host in the repo reads the byte. A Garmin ANTUSB-m
+  can't confirm it: its RSSI field is measurement type 0x10 in 4 bytes, not
+  the AN16 type 0x20 in 3, so it has no threshold byte
+  (`archive/benchmarks/2026-11-25-garmin-rssi-byte2/`). Confirming on the
+  wire would need a receiver that reports type 0x20.
 - [x] **Zwift shim installer cannot replace an older shim, and the installed
   one predates key masking.** `scripts/zwift_ant_shim.ps1` (~:143) treats "same
   file length" as "ours" and refuses anything else, and `-Uninstall` (~:81)

@@ -1,0 +1,46 @@
+{"meta": {"master_port": null, "master_serial": null, "master_baud": 115200, "master_kind": "l15", "far_port": null, "far_serial": null, "far_baud": 115200, "far_kind": "garmin", "far_level": "w4", "far_device": 24602, "dut_port": null, "dut_serial": "006", "dut_baud": 57600, "device": 0, "dev_type": 120, "trans_type": 0, "rf": 57, "period": 8070, "search_timeout": 4, "mode": ["wire", "ladder"], "levels": "fixed", "cal": 20, "trials": 10, "margin": 6, "strong": "+8", "weak": "-28", "behaviour_bin": null, "rounds": 5, "pair_bin": null, "pair_level": "+8", "pass_bin": 3, "acquire": 8.0, "watch": 1.0, "delay_max": 0.5, "seed": 2521, "out": "archive/benchmarks/2026-11-25-garmin-rssi-byte2/raw/garmin_hr.jsonl"}, "t_start": 1795620289.58427}
+{"caps": "080800ba3600df", "adv2": 54, "prox_bit": true}
+{"wire_0x71": "custom_60", "body": [128, 60], "code": 0}
+{"wire_0x71": "bin_11", "body": [11], "code": 0}
+{"wire_0x71": "custom_2byte", "body": [128], "code": 0}
+{"wire_0x71": "bin_10", "body": [10], "code": 0}
+{"wire_0x71": "bin_1", "body": [1], "code": 0}
+{"wire_0x71": "custom_0", "body": [128, 0], "code": 0}
+{"wire_0x71": "custom_128", "body": [128, 128], "code": 0}
+{"wire_0x71": "bin_3_with_3rd", "body": [3, 99], "code": 0}
+{"wire_0x71": "off", "body": [0], "code": 0}
+{"set_level": "fixed", "resp": null}
+{"prox": null, "acq_s": 0.0471, "dev": 12345, "rssi0": 0, "thr0": 104, "acquired": true, "sto": false, "closed": true, "later_thr": [104], "n_msgs": 6, "rssi_mean": 0, "rssi_min": 0, "rssi_max": 0, "label": "cal", "level": "fixed", "i": 0, "thr": "off"}
+{"prox": null, "acq_s": 0.1462, "dev": 12345, "rssi0": 0, "thr0": 104, "acquired": true, "sto": false, "closed": true, "later_thr": [104], "n_msgs": 6, "rssi_mean": 0, "rssi_min": 0, "rssi_max": 0, "label": "cal", "level": "fixed", "i": 1, "thr": "off"}
+{"prox": null, "acq_s": 0.0198, "dev": 12345, "rssi0": 0, "thr0": 104, "acquired": true, "sto": false, "closed": true, "later_thr": [104], "n_msgs": 6, "rssi_mean": 0, "rssi_min": 0, "rssi_max": 0, "label": "cal", "level": "fixed", "i": 2, "thr": "off"}
+{"prox": null, "acq_s": 0.1856, "dev": 12345, "rssi0": 0, "thr0": 104, "acquired": true, "sto": false, "closed": true, "later_thr": [104], "n_msgs": 6, "rssi_mean": 0, "rssi_min": 0, "rssi_max": 0, "label": "cal", "level": "fixed", "i": 3, "thr": "off"}
+{"prox": null, "acq_s": 0.0523, "dev": 12345, "rssi0": 0, "thr0": 104, "acquired": true, "sto": false, "closed": true, "later_thr": [104], "n_msgs": 6, "rssi_mean": 0, "rssi_min": 0, "rssi_max": 0, "label": "cal", "level": "fixed", "i": 4, "thr": "off"}
+{"prox": null, "acq_s": 0.201, "dev": 12345, "rssi0": 0, "thr0": 104, "acquired": true, "sto": false, "closed": true, "later_thr": [104], "n_msgs": 6, "rssi_mean": 0, "rssi_min": 0, "rssi_max": 0, "label": "cal", "level": "fixed", "i": 5, "thr": "off"}
+{"prox": null, "acq_s": 0.2215, "dev": 12345, "rssi0": 0, "thr0": 104, "acquired": true, "sto": false, "closed": true, "later_thr": [104], "n_msgs": 6, "rssi_mean": 0, "rssi_min": 0, "rssi_max": 0, "label": "cal", "level": "fixed", "i": 6, "thr": "off"}
+{"prox": null, "acq_s": 0.0762, "dev": 12345, "rssi0": 0, "thr0": 104, "acquired": true, "sto": false, "closed": true, "later_thr": [104], "n_msgs": 6, "rssi_mean": 0, "rssi_min": 0, "rssi_max": 0, "label": "cal", "level": "fixed", "i": 7, "thr": "off"}
+{"prox": null, "acq_s": 0.0317, "dev": 12345, "rssi0": 0, "thr0": 104, "acquired": true, "sto": false, "closed": true, "later_thr": [104], "n_msgs": 6, "rssi_mean": 0, "rssi_min": 0, "rssi_max": 0, "label": "cal", "level": "fixed", "i": 8, "thr": "off"}
+{"prox": null, "acq_s": 0.2454, "dev": 12345, "rssi0": 0, "thr0": 104, "acquired": true, "sto": false, "closed": true, "later_thr": [104], "n_msgs": 6, "rssi_mean": 0, "rssi_min": 0, "rssi_max": 0, "label": "cal", "level": "fixed", "i": 9, "thr": "off"}
+{"prox": null, "acq_s": 0.2403, "dev": 12345, "rssi0": 0, "thr0": 104, "acquired": true, "sto": false, "closed": true, "later_thr": [104], "n_msgs": 5, "rssi_mean": 0, "rssi_min": 0, "rssi_max": 0, "label": "cal", "level": "fixed", "i": 10, "thr": "off"}
+{"prox": null, "acq_s": 0.2009, "dev": 12345, "rssi0": 0, "thr0": 104, "acquired": true, "sto": false, "closed": true, "later_thr": [104, 109], "n_msgs": 6, "rssi_mean": 0.17, "rssi_min": 0, "rssi_max": 1, "label": "cal", "level": "fixed", "i": 11, "thr": "off"}
+{"prox": null, "acq_s": 0.1291, "dev": 12345, "rssi0": 0, "thr0": 104, "acquired": true, "sto": false, "closed": true, "later_thr": [104], "n_msgs": 6, "rssi_mean": 0, "rssi_min": 0, "rssi_max": 0, "label": "cal", "level": "fixed", "i": 12, "thr": "off"}
+{"prox": null, "acq_s": 0.0915, "dev": 12345, "rssi0": 0, "thr0": 104, "acquired": true, "sto": false, "closed": true, "later_thr": [104], "n_msgs": 6, "rssi_mean": 0, "rssi_min": 0, "rssi_max": 0, "label": "cal", "level": "fixed", "i": 13, "thr": "off"}
+{"prox": null, "acq_s": 0.0266, "dev": 12345, "rssi0": 0, "thr0": 104, "acquired": true, "sto": false, "closed": true, "later_thr": [104], "n_msgs": 6, "rssi_mean": 0, "rssi_min": 0, "rssi_max": 0, "label": "cal", "level": "fixed", "i": 14, "thr": "off"}
+{"prox": null, "acq_s": 0.0625, "dev": 12345, "rssi0": 0, "thr0": 104, "acquired": true, "sto": false, "closed": true, "later_thr": [104], "n_msgs": 6, "rssi_mean": 0, "rssi_min": 0, "rssi_max": 0, "label": "cal", "level": "fixed", "i": 15, "thr": "off"}
+{"prox": null, "acq_s": 0.1599, "dev": 12345, "rssi0": 0, "thr0": 104, "acquired": true, "sto": false, "closed": true, "later_thr": [104], "n_msgs": 6, "rssi_mean": 0, "rssi_min": 0, "rssi_max": 0, "label": "cal", "level": "fixed", "i": 16, "thr": "off"}
+{"prox": null, "acq_s": 0.1328, "dev": 12345, "rssi0": 0, "thr0": 104, "acquired": true, "sto": false, "closed": true, "later_thr": [104], "n_msgs": 6, "rssi_mean": 0, "rssi_min": 0, "rssi_max": 0, "label": "cal", "level": "fixed", "i": 17, "thr": "off"}
+{"prox": null, "acq_s": 0.4761, "dev": 12345, "rssi0": 0, "thr0": 104, "acquired": true, "sto": false, "closed": true, "later_thr": [104], "n_msgs": 6, "rssi_mean": 0, "rssi_min": 0, "rssi_max": 0, "label": "cal", "level": "fixed", "i": 18, "thr": "off"}
+{"prox": null, "acq_s": 0.0488, "dev": 12345, "rssi0": 0, "thr0": 104, "acquired": true, "sto": false, "closed": true, "later_thr": [104], "n_msgs": 6, "rssi_mean": 0, "rssi_min": 0, "rssi_max": 0, "label": "cal", "level": "fixed", "i": 19, "thr": "off"}
+{"summary": "cal", "level": "fixed", "thr": "off", "n": 20, "acquired": 20, "sto": 0, "thr0_mismatch": 20, "later_thr_nonzero": 20, "prox_resp": [], "acq_ms_median": 131, "rssi0_min": 0, "rssi0_median": 0.0, "rssi0_max": 0}
+{"bracket": "fixed", "lo": 0, "hi": 1, "reject": null, "pass": [3]}
+{"prox": [3], "prox_resp": 0, "acquired": false, "sto": false, "closed": true, "later_thr": [], "n_msgs": 0, "label": "pass", "level": "fixed", "i": 0, "thr": "bin3(-52)"}
+{"prox": [3], "prox_resp": 0, "acquired": false, "sto": false, "closed": true, "later_thr": [], "n_msgs": 0, "label": "pass", "level": "fixed", "i": 1, "thr": "bin3(-52)"}
+{"prox": [3], "prox_resp": 0, "acq_s": 0.0659, "dev": 12345, "rssi0": 0, "thr0": 0, "acquired": true, "sto": false, "closed": true, "later_thr": [0], "n_msgs": 6, "rssi_mean": 0.83, "rssi_min": 0, "rssi_max": 1, "label": "pass", "level": "fixed", "i": 2, "thr": "bin3(-52)"}
+{"prox": [3], "prox_resp": 0, "acquired": false, "sto": false, "closed": true, "later_thr": [], "n_msgs": 0, "label": "pass", "level": "fixed", "i": 3, "thr": "bin3(-52)"}
+{"prox": [3], "prox_resp": 0, "acquired": false, "sto": false, "closed": true, "later_thr": [], "n_msgs": 0, "label": "pass", "level": "fixed", "i": 4, "thr": "bin3(-52)"}
+{"prox": [3], "prox_resp": 0, "acq_s": 0.1702, "dev": 12345, "rssi0": 0, "thr0": 0, "acquired": true, "sto": false, "closed": true, "later_thr": [0], "n_msgs": 6, "rssi_mean": 0.83, "rssi_min": 0, "rssi_max": 1, "label": "pass", "level": "fixed", "i": 5, "thr": "bin3(-52)"}
+{"prox": [3], "prox_resp": 0, "acquired": false, "sto": false, "closed": true, "later_thr": [], "n_msgs": 0, "label": "pass", "level": "fixed", "i": 6, "thr": "bin3(-52)"}
+{"prox": [3], "prox_resp": 0, "acquired": false, "sto": false, "closed": true, "later_thr": [], "n_msgs": 0, "label": "pass", "level": "fixed", "i": 7, "thr": "bin3(-52)"}
+{"prox": [3], "prox_resp": 0, "acquired": false, "sto": false, "closed": true, "later_thr": [], "n_msgs": 0, "label": "pass", "level": "fixed", "i": 8, "thr": "bin3(-52)"}
+{"prox": [3], "prox_resp": 0, "acquired": false, "sto": false, "closed": true, "later_thr": [], "n_msgs": 0, "label": "pass", "level": "fixed", "i": 9, "thr": "bin3(-52)"}
+{"summary": "pass", "level": "fixed", "thr": "bin3(-52)", "n": 10, "acquired": 2, "sto": 0, "thr0_mismatch": 2, "later_thr_nonzero": 0, "prox_resp": [0], "acq_ms_median": 118, "rssi0_min": 0, "rssi0_median": 0.0, "rssi0_max": 0}
+{"tail": {"master": null, "far": null, "t_end": 1795620398.9304256}}
