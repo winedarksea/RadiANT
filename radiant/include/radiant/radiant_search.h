@@ -479,6 +479,11 @@ struct radiant_search_stats {
 	 * channel. Counted per channel offered, not per frame: one frame two
 	 * channels refuse counts twice. */
 	uint32_t permit_rejected;
+	/* Offers an ACQUIRE channel withheld because the frame was not a slot
+	 * opener (a slave reply, an ACK, an in-slot burst packet), which sits
+	 * 2.19 ms or a burst step off the master's grid. Counted per channel
+	 * offered, like permit_rejected. SCAN channels are never counted. */
+	uint32_t non_opener_skipped;
 	/* Chunks the scheduler's A9-3 reclaimed (reported more than
 	 * RADIANT_SCHED_ARMED_STALE_US past their close). The backend had lost
 	 * them, so they credited no dwell. */

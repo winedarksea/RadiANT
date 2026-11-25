@@ -1218,6 +1218,138 @@ ZTEST(radiant_search, test_a_frame_claims_only_one_wildcard_acquire_channel)
 	end_of_test();
 }
 
+/* ---------------------------------------------------------------------------
+ * Slot-opener gate (TODO.md, "Acquisition and re-anchor accept any control
+ * byte"). An ACQUIRE claim anchors the channel's slot clock on the frame, so
+ * only a frame that opens the master's slot may make it: a slave reply (0x02)
+ * or an ACK sits 2.19 ms into the period, an in-slot burst packet a burst step
+ * past it. SCAN reports everything.
+ * ---------------------------------------------------------------------------
+ */
+
+/* Air device 0x0703 (set 0) with the given control byte at t. */
+static void air_ctrl(radiant_time_t t, uint8_t ctrl)
+{
+	uint8_t frame[FAKE_RADIO_AIR_FRAME_MAX];
+	uint8_t len = fake_radio_build_ant_frame(frame, 0x0703u, 0x78u, 1u,
+						 payload8);
+
+	frame[6] = ctrl;
+	zassert_ok(fake_radio_air_frame(t, frame, len), "ctrl 0x%02x", ctrl);
+}
+
+ZTEST(radiant_search, test_acquire_does_not_claim_on_a_non_opener)
+{
+	static const uint8_t ctrls[] = {
+		RADIANT_CTRL_SLAVE_BROADCAST, /* 0x02 */
+		RADIANT_CTRL_ACK_LAST_SEQ0,   /* 0xE2 */
+		RADIANT_CTRL_BURST_LAST_SEQ0, /* 0xA2 */
+		RADIANT_CTRL_BURST_SEQ0,      /* 0x82 */
+	};
+	const struct radiant_search_stats *st;
+
+	bring_up(false);
+	zassert_ok(radiant_search_begin(&g_s, 0u, RADIANT_SEARCH_MODE_ACQUIRE, &want_any,
+				    radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+	zassert_ok(radiant_search_begin(&g_s, 1u, RADIANT_SEARCH_MODE_SCAN, &want_any,
+				    radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+
+	zassert_equal(RADIANT_SEARCH_OK, win_open());
+	for (size_t i = 0; i < ARRAY_SIZE(ctrls); i++) {
+		air_ctrl(g_w.t_open + 1000u + 10000u * i, ctrls[i]);
+	}
+	win_run();
+
+	/* The SCAN channel got every frame; the ACQUIRE channel none. */
+	zassert_equal(ARRAY_SIZE(ctrls), g_cap.n_acquired);
+	for (uint32_t k = 0; k < g_cap.n_acquired; k++) {
+		zassert_equal(1u, g_cap.chan[k], "frame %u went to channel %u",
+			      k, g_cap.chan[k]);
+		zassert_equal(ctrls[k], g_cap.res[k].frame.ctrl_byte);
+	}
+	zassert_true(radiant_search_is_searching(&g_s, 0u),
+		     "the ACQUIRE channel left the search on a non-opener");
+
+	st = radiant_search_get_stats(&g_s);
+	zassert_equal(ARRAY_SIZE(ctrls), st->frames_ok);
+	zassert_equal(ARRAY_SIZE(ctrls), st->non_opener_skipped);
+	zassert_equal(ARRAY_SIZE(ctrls), st->scan_reports);
+	zassert_equal(0u, st->acquired);
+
+	zassert_ok(radiant_search_end(&g_s, 0u));
+	zassert_ok(radiant_search_end(&g_s, 1u));
+	end_of_test();
+}
+
+/* Every slot opener claims: a broadcast, a burst's first packet and
+ * acknowledged data. One frame claims one wildcard channel, so three channels
+ * take one opener each. */
+ZTEST(radiant_search, test_acquire_claims_on_every_slot_opener)
+{
+	static const uint8_t ctrls[] = {
+		RADIANT_CTRL_BROADCAST,       /* 0x0A */
+		RADIANT_CTRL_BURST_OPEN_SEQ0, /* 0x8A */
+		RADIANT_CTRL_ACK_DATA_OPEN,   /* 0xAA */
+	};
+
+	bring_up(false);
+	for (uint8_t c = 0u; c < ARRAY_SIZE(ctrls); c++) {
+		zassert_ok(radiant_search_begin(&g_s, c, RADIANT_SEARCH_MODE_ACQUIRE,
+					    &want_any, radiant_radio_now(),
+					    RADIANT_SEARCH_TIMEOUT_NONE));
+	}
+
+	zassert_equal(RADIANT_SEARCH_OK, win_open());
+	for (size_t i = 0; i < ARRAY_SIZE(ctrls); i++) {
+		air_ctrl(g_w.t_open + 1000u + 10000u * i, ctrls[i]);
+	}
+	win_run();
+
+	zassert_equal(ARRAY_SIZE(ctrls), g_cap.n_acquired);
+	for (uint32_t k = 0; k < g_cap.n_acquired; k++) {
+		zassert_equal(k, g_cap.chan[k]);
+		zassert_equal(ctrls[k], g_cap.res[k].frame.ctrl_byte);
+	}
+	zassert_equal(0u, radiant_search_n_searching(&g_s));
+	zassert_equal(0u, radiant_search_get_stats(&g_s)->non_opener_skipped);
+	end_of_test();
+}
+
+/* An ACK heard first spends neither the frame's one ACQUIRE claim nor a permit
+ * call: the opener after it in the same dwell is what channel 0 acquires on,
+ * and channel 1 keeps searching. */
+ZTEST(radiant_search, test_a_non_opener_leaves_the_claim_for_the_opener)
+{
+	const struct radiant_search_stats *st;
+
+	bring_up_with(false, &search_cbs_permit);
+	zassert_ok(radiant_search_begin(&g_s, 0u, RADIANT_SEARCH_MODE_ACQUIRE, &want_any,
+				    radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+	zassert_ok(radiant_search_begin(&g_s, 1u, RADIANT_SEARCH_MODE_ACQUIRE, &want_any,
+				    radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+
+	zassert_equal(RADIANT_SEARCH_OK, win_open());
+	air_ctrl(g_w.t_open + 1000u, RADIANT_CTRL_ACK_LAST_SEQ0);
+	air_ctrl(g_w.t_open + 20000u, RADIANT_CTRL_BROADCAST);
+	win_run();
+
+	zassert_equal(1u, g_cap.n_acquired);
+	zassert_equal(0u, g_cap.chan[0]);
+	zassert_equal(RADIANT_CTRL_BROADCAST, g_cap.res[0].frame.ctrl_byte,
+		      "acquired on the ACK, 2.19 ms off the master's grid");
+	zassert_false(radiant_search_is_searching(&g_s, 0u));
+	zassert_true(radiant_search_is_searching(&g_s, 1u));
+
+	st = radiant_search_get_stats(&g_s);
+	/* The ACK was offered to both wildcard channels and both skipped it. */
+	zassert_equal(2u, st->non_opener_skipped);
+	zassert_equal(1u, st->acquired);
+	zassert_equal(1u, g_permit.n_calls, "the ACK reached the permit callback");
+
+	zassert_ok(radiant_search_end(&g_s, 1u));
+	end_of_test();
+}
+
 /* The pairing bit rides on the on-air device type, and a search must match
  * through it while still reporting it. */
 ZTEST(radiant_search, test_pairing_bit_matches_and_survives)

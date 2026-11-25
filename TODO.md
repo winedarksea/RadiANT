@@ -1072,12 +1072,35 @@ group.
   GO_TO_SEARCH. Its 42 % loss came from the link: the Kicker was heard about
   5 dB weaker than on 11-23 (-74 against -69 dBm) on the scan channel as well,
   and its other device types never pass the address match.
-- [ ] **Acquisition and re-anchor accept any control byte.** `handle_ok()` and
+- [x] **Acquisition and re-anchor accept any control byte.** `handle_ok()` and
   `api_search_acquired()` anchor on slave replies, ACKs and non-opener burst
-  packets, and the tracked path sets `slot_heard` before discarding ACK types.
-  A channel entering search during someone's exchange can acquire off the slot
-  grid and lose about 2 s. Fix: require `radiant_ctrl_is_slot_opener()` for an
-  ACQUIRE claim and for `radiant_channel_on_slot()` on a slave.
+  packets. A channel entering search during someone's exchange can acquire off
+  the slot grid and lose about 2 s, and the acquiring ACK's echoed payload
+  reaches the host as BROADCAST_DATA. Fix: require
+  `radiant_ctrl_is_slot_opener()` for an ACQUIRE claim and for
+  `radiant_channel_on_slot()` on a slave. The tracked path setting `slot_heard`
+  on a reply or ACK is correct and stays: a reply or ACK in the window proves
+  the master transmitted that period.
+  *Done 2026-11-24 (wip/s24-opener-gate):* `handle_ok()` skips an ACQUIRE
+  channel on a non-opener before the claim and the permit call
+  (`stats.non_opener_skipped`), which covers every backend and the seen-cache
+  acquires. SCAN still gets every frame and the seen cache still notes it.
+  `api_tracked_frame()` re-anchors and notes RF only on an opener; on a
+  slave's non-opener it steps the clock one period with
+  `radiant_channel_catch_up()` (guard charged, phase kept), because a heard
+  window does not advance the clock by itself and the next window would land
+  on the slot already gone and count a miss. A 0x02 heard by the search no
+  longer reacquires the FE-C channel (`fec_reacquire_does_not_send` now
+  expects SEARCHING for a non-opener). Residual,
+  not fixed: a repeated 0x8A/0xAA (packet-0 retry, +3.7 ms) still carries the
+  opener bit and cannot be told apart from the frame alone; it needs a master
+  retry inside our search dwell, so it is rare. Tests: `test_search.c`
+  (opener gate cases), `test_api.c` (tracked re-anchor, search on an ACK).
+  On-air A/B/A PASS 2026-11-24 (`archive/benchmarks/2026-11-24-opener-gate/`,
+  TI DUT, L15 acked master, Garmin ACKer, 200 reopens per arm): old image
+  13 and 13 acquisitions on the ACK (off-grid, ACK payload posted as the
+  first BROADCAST_DATA), new image 0. The Garmin's ACK carries its own
+  buffer, not an echo of the acked data.
 - [ ] **UART transport can emit a truncated frame.** `ant_uart_write()`
   (`ant_uart_transport.c` ~:311) queues the head of a frame, and on a 1 s
   stall returns with it queued, so the next frame follows a fragment and a

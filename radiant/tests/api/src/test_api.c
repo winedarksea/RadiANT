@@ -4906,6 +4906,125 @@ ZTEST(api, test_a_clean_ack_of_another_transmission_type_is_not_acked_short_matc
 }
 
 /*
+ * Slot-opener gate (TODO.md, "Acquisition and re-anchor accept any control
+ * byte"). A tracked slave hearing a slave reply (0x02) or an ACK (0xE2) in its
+ * window must not re-anchor on it: that frame sits 2.19 ms into the master's
+ * period, so anchoring there walks the grid. The window still counts as heard
+ * (the master transmitted that period), so there is no RX_FAIL. A 0x0A is the
+ * control and re-anchors as before.
+ */
+ZTEST(api, test_a_tracked_slave_does_not_re_anchor_on_a_reply_or_an_ack)
+{
+	static const uint8_t ctrls[] = {
+		RADIANT_CTRL_SLAVE_BROADCAST,
+		RADIANT_CTRL_ACK_LAST_SEQ0,
+	};
+	const struct radiant_api_stats *s = radiant_api_stats_get();
+	uint16_t       dev;
+	uint32_t       missed;
+	radiant_time_t t;
+	radiant_time_t t_pred;
+	radiant_time_t t_next;
+
+	open_and_acquire_slave(&dev);
+	run_housekeeping();
+	memset(msglog, 0, sizeof(msglog));
+	n_msg = 0u;
+
+	for (size_t i = 0; i < ARRAY_SIZE(ctrls); i++) {
+		t_pred = radiant_channel_next_slot(CH);
+		missed = s->slots_missed;
+
+		t = air_clean_tt(dev, 0x0Bu, ctrls[i], 5u);
+		t_next = radiant_channel_next_slot(CH);
+
+		zassert_not_equal(t + PERIOD_US, t_next,
+				  "ctrl 0x%02x re-anchored the slot clock",
+				  ctrls[i]);
+		zassert_equal(0u, (uint32_t)((t_next - t_pred) % PERIOD_US),
+			      "ctrl 0x%02x moved the slot phase", ctrls[i]);
+		zassert_equal(missed, s->slots_missed,
+			      "ctrl 0x%02x: the window was not counted heard",
+			      ctrls[i]);
+		zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH));
+	}
+	zassert_equal(0u, count_channel_events(CH, (uint8_t)RADIANT_WIRE_EVENT_RX_FAIL),
+		      "a window that heard a reply or an ACK raised RX_FAIL");
+
+	/* Control: the master's broadcast re-anchors. */
+	t = air_clean_tt(dev, 0x0Bu, RADIANT_CTRL_BROADCAST, 5u);
+	zassert_equal(t + PERIOD_US, radiant_channel_next_slot(CH),
+		      "control: the broadcast did not re-anchor");
+
+	end_of_test();
+}
+
+/*
+ * A wildcard search that hears an ACK first must not acquire on it: it would
+ * land 2.19 ms off the master's grid, and the ACK's echoed payload would reach
+ * the host as BROADCAST_DATA. The master's broadcast later in the same window
+ * is what it acquires on.
+ */
+ZTEST(api, test_a_search_does_not_acquire_on_an_ack)
+{
+	const struct fake_radio_arm *w;
+	uint8_t        frame[FAKE_RADIO_AIR_FRAME_MAX];
+	uint8_t        len;
+	uint16_t       number;
+	radiant_time_t t_ack;
+	radiant_time_t t_bc;
+
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_network_address_set(0u, ant_plus_key));
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_lib_config_set((uint8_t)RADIANT_WIRE_LIB_CONFIG_ALL_EXT_FIELDS));
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_channel_assign(CH,
+				(uint8_t)RADIANT_WIRE_CHANNEL_TYPE_SLAVE_RX_ONLY, 0u, 0u));
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_channel_id_set(CH, 0u, 0u, 0u));
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_channel_period_set(CH, RADIANT_CHANNEL_PERIOD_ANT_PLUS));
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_channel_radio_freq_set(CH, RF_INDEX));
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_channel_open(CH));
+
+	w = armed_search_window();
+	number = (uint16_t)(0x0500u | (w->filters[0].wild_last ? 0u
+								: w->filters[0].addr[2]));
+	zassert_true(w->t_close - w->t_open > 10000u,
+		     "setup: the search window is too short for two frames");
+	t_ack = w->t_open + 1000u;
+	t_bc = w->t_open + ((w->t_close - w->t_open) / 2u);
+
+	len = fake_radio_build_ant_frame(frame, number, 0x0Bu, 5u, peer_payload);
+	frame[6] = RADIANT_CTRL_ACK_LAST_SEQ0;
+	zassert_equal(RADIANT_RADIO_OK_RC, fake_radio_air_frame(t_ack, frame, len));
+	frame[6] = RADIANT_CTRL_BROADCAST;
+	zassert_equal(RADIANT_RADIO_OK_RC, fake_radio_air_frame(t_bc, frame, len));
+
+	/* The ACK alone: still searching, nothing posted. */
+	fake_radio_advance_to(t_ack + 2000u);
+	drain();
+	zassert_equal(RADIANT_CH_STATE_SEARCHING, radiant_channel_state_get(CH),
+		      "the search acquired on an ACK");
+	zassert_equal(0u, count_msgs((uint8_t)RADIANT_WIRE_MESG_BROADCAST_DATA_ID),
+		      "the ACK reached the host as a broadcast");
+
+	/* Then the broadcast: acquired, on the master's grid. */
+	fake_radio_advance_past_close(w->t_close);
+	drain();
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH),
+		      "the broadcast after the ACK did not acquire");
+	zassert_equal(t_bc + PERIOD_US, radiant_channel_next_slot(CH),
+		      "acquired off the master's grid");
+	zassert_equal(1u, count_bcast_from(number));
+
+	end_of_test();
+}
+
+/*
  * Kill the window the channel currently has pending and return with its
  * DONE_MISSED already delivered. Every arm is refused while the window is
  * posted, so it is never offered to the air at all - which is the shape that
@@ -6733,8 +6852,13 @@ static void fec_reacquire_does_not_send(uint8_t ctrl, bool exact)
 	(void)air_in_sweep(ctrl, 0u, &number);
 	fake_radio_caps_mut()->has_sync_timestamp = true;
 	drain();
-	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(FEC_CH),
-		      "setup: the FE-C channel did not reacquire");
+	/* A non-opener does not reacquire at all (the slot-opener gate in
+	 * radiant_search.c handle_ok()); an opener does. */
+	zassert_equal(radiant_ctrl_is_slot_opener(ctrl)
+			      ? RADIANT_CH_STATE_TRACKING
+			      : RADIANT_CH_STATE_SEARCHING,
+		      radiant_channel_state_get(FEC_CH),
+		      "the FE-C channel's reacquisition on ctrl 0x%02x", ctrl);
 	zassert_equal(arms, count_tx_with_ctrl(RADIANT_CTRL_BURST_LAST_SEQ0),
 		      "the held command was sent from a frame that cannot "
 		      "open its slot");
@@ -6760,7 +6884,8 @@ ZTEST(api, test_fec_pending_not_sent_on_inexact_reacquiring_frame)
 }
 
 /* Another slave's 0x02 reply to the same master, heard by the continuous
- * search after it missed the master's frame, opens no reply slot. */
+ * search after it missed the master's frame, opens no reply slot. Since the
+ * slot-opener gate it does not reacquire the channel either. */
 ZTEST(api, test_fec_pending_not_sent_on_reacquiring_slave_broadcast)
 {
 	api_long_match();
