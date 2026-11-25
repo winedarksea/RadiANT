@@ -102,6 +102,7 @@
 #include <bluetooth/services/rscs.h>
 
 #include "treadmill_ble.h"
+#include "treadmill_ftms_actuate.h"
 #include "treadmill_state.h"
 #if defined(CONFIG_TREADMILL_CTRL_POLICY_EXCLUSIVE)
 #include "treadmill_control.h"
@@ -583,6 +584,12 @@ static uint8_t handle_set_speed(struct bt_conn *conn, const uint8_t *param,
 	return ftms_result_for(rc);
 }
 
+/* The real actuators, for the kernel-free Stop/Reset decisions. */
+static const struct treadmill_ftms_setters node_setters = {
+	.set_speed_mm_s = treadmill_node_set_speed_mm_s,
+	.set_incline_deci = treadmill_node_set_incline_deci,
+};
+
 static uint8_t handle_reset(struct bt_conn *conn)
 {
 	uint8_t msg[1];
@@ -592,25 +599,38 @@ static uint8_t handle_reset(struct bt_conn *conn)
 	 * to the machine and this node does not zero a session on a BLE
 	 * command - a client resetting its own view must not silently discard
 	 * the ANT+ side's accumulators mid-run, which is a decision worth
-	 * recording rather than a shortcut. */
-	(void)treadmill_node_set_incline_deci(0, NULL);
-	(void)treadmill_node_set_speed_mm_s(0u, NULL);
-	set_training_status(FTMS_TRAINING_IDLE);
-	paused = false;
+	 * recording rather than a shortcut.
+	 *
+	 * The actuators' answers decide the rest (treadmill_ftms_actuate.h):
+	 * Idle only if the belt accepted speed 0, and control released and
+	 * RESET notified only if both setters accepted. A refusal is answered
+	 * OPERATION_FAILED, never SUCCESS. */
+	struct treadmill_ftms_outcome out = treadmill_ftms_reset(&node_setters);
 
-	/* Reset also revokes control (§4.16.2). */
-	controller = NULL;
+	if (out.go_idle) {
+		set_training_status(FTMS_TRAINING_IDLE);
+		paused = false;
+	}
+
+	if (out.release) {
+		/* Reset also revokes control (§4.16.2). */
+		controller = NULL;
 #if defined(CONFIG_TREADMILL_CTRL_POLICY_EXCLUSIVE)
-	/* And hands the machine back, so an FE-C controller's next page 51 is
-	 * applied instead of REJECTED. A BLE client that has explicitly reset
-	 * has said it is finished; keeping the deck locked to it after that
-	 * would be the token outliving the intent behind it. */
-	treadmill_control_release(TREADMILL_CTRL_BLE);
+		/* And hands the machine back, so an FE-C controller's next
+		 * page 51 is applied instead of REJECTED. A BLE client that
+		 * has explicitly reset has said it is finished; keeping the
+		 * deck locked to it after that would be the token outliving
+		 * the intent behind it. */
+		treadmill_control_release(TREADMILL_CTRL_BLE);
 #endif
+	}
 
-	msg[0] = FTMS_STATUS_RESET;
-	notify_status(conn, msg, sizeof(msg));
-	return FTMS_RESULT_SUCCESS;
+	if (out.notify) {
+		msg[0] = FTMS_STATUS_RESET;
+		notify_status(conn, msg, sizeof(msg));
+	}
+	return (out.rc == 0) ? FTMS_RESULT_SUCCESS
+			     : FTMS_RESULT_OPERATION_FAILED;
 }
 
 /* ---------------------------------------------------------------------------
@@ -759,19 +779,32 @@ static void cp_work_fn(struct k_work *w)
 		} else {
 			uint8_t msg[2] = { FTMS_STATUS_STOPPED_OR_PAUSED,
 					   data[1] };
+			bool notify = true;
 
+			result = FTMS_RESULT_SUCCESS;
 			if (data[1] == FTMS_STOP) {
-				set_training_status(FTMS_TRAINING_IDLE);
-				paused = false;
-				(void)treadmill_node_set_speed_mm_s(0u, NULL);
+				/* A belt that refused speed 0 has not
+				 * stopped: Training Status stays, nothing
+				 * is notified, and the client is told
+				 * OPERATION_FAILED rather than SUCCESS. */
+				struct treadmill_ftms_outcome out =
+					treadmill_ftms_stop(&node_setters);
+
+				if (out.go_idle) {
+					set_training_status(FTMS_TRAINING_IDLE);
+					paused = false;
+				}
+				notify = out.notify;
+				result = ftms_result_for(out.rc);
 			} else {
 				/* Whether Pause should also stop the belt is
 				 * product policy, deliberately not decided
 				 * here (O5 SF-4). */
 				paused = true;
 			}
-			notify_status(conn, msg, sizeof(msg));
-			result = FTMS_RESULT_SUCCESS;
+			if (notify) {
+				notify_status(conn, msg, sizeof(msg));
+			}
 		}
 		break;
 	default:

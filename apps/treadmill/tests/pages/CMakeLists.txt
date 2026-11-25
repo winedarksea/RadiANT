@@ -44,5 +44,9 @@ target_sources(app PRIVATE
   # implemented inside that file would have been arbitration nothing could
   # reach; it lives in its own module so this image can drive it.
   ../../src/treadmill_control.c
+  # FTMS Stop/Reset's actuator decisions, pulled out of treadmill_ble.c for
+  # the same reason; src/ftms_actuate.c drives them with a failing fake.
+  src/ftms_actuate.c
+  ../../src/treadmill_ftms_actuate.c
 )
 target_include_directories(app PRIVATE ../../src)
