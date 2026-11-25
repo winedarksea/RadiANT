@@ -95,7 +95,8 @@ elseif(CONFIG_TREADMILL_SOURCE_CUSTOM)
 endif()
 
 if(CONFIG_TREADMILL_BLE)
-  target_sources(app PRIVATE src/treadmill_ble.c)
+  target_sources(app PRIVATE src/treadmill_ble.c
+                             src/treadmill_ftms_actuate.c)
 endif()
 
 # ── The control-owner token ─────────────────────────────────────────────────

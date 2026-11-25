@@ -2498,6 +2498,8 @@ def main() -> int:
 
     extra: dict = {}
     records: list = []
+    # Faults the run itself establishes, joined to window_faults() below.
+    run_faults: list[str] = []
 
     if args.replay:
         # WHICH CHANNEL A REPLAYED STREAM WAS HEARD ON IS NOT IN THE FILE - the
@@ -2537,6 +2539,12 @@ def main() -> int:
             for t, payload in packets:
                 analyzer.feed(t, payload)
             ordered.append(analyzer)
+
+        # A capture with no packets in it would otherwise pass: every check
+        # below is "all channels pass", and all() of nothing is true. An empty
+        # replay measures nothing, so it is a failure, not a clean result.
+        if not ordered:
+            run_faults.append("replay holds no sensor streams")
 
         if verbose:
             print(f"replayed {args.replay}: {len(ordered)} sensor stream(s)")
@@ -2656,7 +2664,7 @@ def main() -> int:
     # After accounting (unexplained_loss comes from it), before report()
     # (which prints derive()'s per-channel table).
     result["derived"] = derive(result)
-    faults = window_faults(result)
+    faults = run_faults + window_faults(result)
     if faults:
         result["window_faults"] = faults
     result["pass"] = (all(c["pass"] for c in result["channels"])
