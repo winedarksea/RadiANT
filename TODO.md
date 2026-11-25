@@ -869,8 +869,8 @@ group.
   fails closed; SCAN and tracking ignore it), one-shot as in ANT (cleared on
   acquisition, kept on a search timeout). Bins 1..10, 1 closest, at Nordic's
   approximate nRF51 levels -44..-80 dBm in 4 dB steps; 11+ refused; the
-  C-API custom form `0x80` + magnitude is `[inferred]`. A three-byte host
-  `0x71` is now refused (the protocol has no custom byte). The capability bit
+  C-API custom form `0x80` + magnitude is `[inferred]`, reachable through
+  the optional third byte of `0x71` (kept, as since build 1). The capability bit
   and the setter follow `caps.has_rssi`. The RSSI field's byte 2 reports the
   threshold in force. Self channels: every discovery open sets
   `CONFIG_ANT_DONGLE_PAIRING_PROX_BIN` (provisional default 3, about -52 dBm)

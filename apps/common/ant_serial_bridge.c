@@ -137,11 +137,28 @@ static inline bool body_len_ok(uint8_t id, uint8_t len)
 	case RADIANT_WIRE_MESG_RADIANT_EPOCH_ID:
 		return len == 14U;
 	case RADIANT_WIRE_MESG_PROX_SEARCH_CONFIG_ID:
-		/* [channel, threshold]: the protocol has no custom byte. */
-		return len == 2U;
+		/* [channel, threshold, (custom)]: see prox_search_args(). */
+		return len == 2U || len == 3U;
 	default:
 		return true;
 	}
+}
+
+/*
+ * 0x71's threshold and custom byte. The ANT Message Protocol (Rev 5.1,
+ * section 9.5.2.22) defines [channel, threshold] only; the optional third byte
+ * is Nordic's custom threshold, which hosts that model Nordic's API send and
+ * which this bridge has accepted since build 1. It is passed on as `custom`,
+ * which radiant_ant_prox_search_set() reads only with threshold 0x80 (a
+ * positive magnitude, [inferred]) and ignores otherwise. Without it custom is
+ * 0, so a two-byte 0x80 is refused there. Outside ANT_BRIDGE_PARSER_ONLY so
+ * test_bridge_parser.c checks it.
+ */
+static inline void prox_search_args(const uint8_t *body, uint8_t len,
+				    uint8_t *threshold, uint8_t *custom)
+{
+	*threshold = body[1];
+	*custom = (len >= 3U) ? body[2] : 0U;
 }
 
 /* ── Host trace (CONFIG_ANT_DONGLE_HOST_TRACE) ─────────────────────────────── */
@@ -1532,13 +1549,13 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		break;
 
 	case RADIANT_WIRE_MESG_PROX_SEARCH_CONFIG_ID:
-		/* body: [ch, threshold]. Two bytes exactly: the ANT Message
-		 * Protocol (Rev 5.1, section 9.5.2.22) defines no custom byte on
-		 * the wire - that exists only in Nordic's C API - so a third
-		 * byte is refused by body_len_ok(), not read as one. The custom
-		 * form (0x80) arrives with custom 0 and is refused. */
-		if (len == 2) {
-			err = radiant_ant_prox_search_set(body[0], body[1], 0u);
+		/* body: [ch, threshold, (custom)]: see prox_search_args(). */
+		if (len >= 2) {
+			uint8_t threshold;
+			uint8_t custom;
+
+			prox_search_args(body, len, &threshold, &custom);
+			err = radiant_ant_prox_search_set(body[0], threshold, custom);
 		}
 		break;
 

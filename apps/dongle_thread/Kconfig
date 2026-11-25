@@ -501,7 +501,7 @@ config ANT_DONGLE_PAIRING_PROX_DBM
 	  When non-zero, this is the minimum RSSI in dBm a discovering self
 	  channel accepts, in place of ANT_DONGLE_PAIRING_PROX_BIN: Nordic's
 	  custom proximity threshold (threshold 0x80 plus a magnitude), which
-	  radiant_ant_prox_search_set() takes and the serial message does not.
+	  radiant_ant_prox_search_set() and the optional third byte of 0x71 take.
 	  A board whose RSSI reads several dB off another's (an external
 	  antenna, a different radio) is the reason to set it. PROVISIONAL,
 	  pending the B4 bench calibration.

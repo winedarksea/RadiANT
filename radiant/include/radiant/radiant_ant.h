@@ -660,8 +660,8 @@ radiant_ant_err_t radiant_ant_search_waveform_set(uint8_t channel, uint16_t wave
  *                   closest (strongest signal): on the radiant backend bin n
  *                   accepts a frame at or above -44 - 4 (n - 1) dBm, Nordic's
  *                   approximate nRF51 figures. 0x80 selects the custom
- *                   threshold below (Nordic's C API; the serial message has
- *                   no custom byte).
+ *                   threshold below (Nordic's C API, and the optional third
+ *                   byte of the serial message).
  * @param custom     Read only with threshold 0x80: the minimum RSSI as a
  *                   positive magnitude, 1..127, so 60 is -60 dBm [inferred:
  *                   no encoding is published].

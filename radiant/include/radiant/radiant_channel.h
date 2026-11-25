@@ -572,8 +572,8 @@ radiant_channel_err_t radiant_channel_search_waveform_get(uint8_t channel,
  * the channel. Tracking and background scans ignore it.
  *
  * threshold 0 turns it off; 1..10 are the bins, 1 closest; and
- * RADIANT_CH_PROX_THRESHOLD_CUSTOM (0x80, Nordic's C API only - the wire
- * message has no custom byte) takes `custom` as the threshold, a positive
+ * RADIANT_CH_PROX_THRESHOLD_CUSTOM (0x80, Nordic's C API; on the wire the
+ * optional third byte of 0x71, which the Message Protocol does not define) takes `custom` as the threshold, a positive
  * magnitude in dB below 0 dBm [inferred], 1..127. `custom` is stored only
  * with 0x80. ONE-SHOT: radiant_channel_on_acquired() clears the threshold;
  * a search timeout keeps it.

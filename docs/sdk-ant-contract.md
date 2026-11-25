@@ -366,8 +366,9 @@ public S212 API documentation for the C form):
   accepts anything at or above its level. Out-of-range behaviour is unpublished; the radiant
   backend refuses 11..`0x7F` and `0x81`..`0xFF` with `RADIANT_WIRE_INVALID_PARAMETER_PROVIDED`.
 - **custom** is read only with `0x80`. Its encoding is unpublished; the radiant backend takes it
-  as a positive magnitude (60 = -60 dBm) `[inferred]` and refuses 0 and anything above 127. The
-  serial message has no custom byte, so a host can never reach this form (`docs/ant-serial-protocol.md`).
+  as a positive magnitude (60 = -60 dBm) `[inferred]` and refuses 0 and anything above 127. A
+  host reaches it through the optional third byte of `0x71`, which the Message Protocol does not
+  define but this bridge has always accepted (`docs/ant-serial-protocol.md`).
 - **One-shot**: a successful acquisition clears the threshold, a search timeout keeps it, a
   background scan keeps it, and tracking never filters on it.
 - **Never store what cannot run**: a backend with no RSSI on search frames refuses any non-zero

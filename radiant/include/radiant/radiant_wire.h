@@ -414,13 +414,15 @@
 #define RADIANT_WIRE_MESG_AUTO_FREQ_CONFIG_ID                0x70
 
 /*
- * [channel, threshold]. Proximity search: only acquire something close by.
- * threshold 0 is off, 1..10 are bins, 1 the closest (bin n accepts a frame at
- * or above -44 - 4 (n - 1) dBm on radiant, Nordic's approximate nRF51
- * figures; the Message Protocol publishes no table). One-shot: an acquisition
- * clears it, a search timeout keeps it. Exactly two bytes - the protocol has
- * no custom-threshold byte, which exists only in Nordic's C API - and 11 and
- * up are refused. [bridge, rev5.1 sec 9.5.2.22 + sec 6.4]
+ * [channel, threshold, (custom threshold)]. Proximity search: only acquire
+ * something close by. threshold 0 is off, 1..10 are bins, 1 the closest (bin
+ * n accepts a frame at or above -44 - 4 (n - 1) dBm on radiant, Nordic's
+ * approximate nRF51 figures; the Message Protocol publishes no table); 11 and
+ * up are refused except 0x80. One-shot: an acquisition clears it, a search
+ * timeout keeps it. The Message Protocol defines two bytes; the optional
+ * third is Nordic's custom threshold, used only when threshold is 0x80 (a
+ * positive magnitude, 60 = -60 dBm, inferred) and ignored otherwise. [bridge,
+ * rev5.1 sec 9.5.2.22 + sec 6.4]
  */
 #define RADIANT_WIRE_MESG_PROX_SEARCH_CONFIG_ID              0x71
 

@@ -8573,6 +8573,15 @@ ZTEST(api, test_prox_search_is_advertised_and_a_bin_is_accepted)
 		      radiant_ant_prox_search_set(CH, 0x80u, 60u));
 	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_INVALID_PARAMETER_PROVIDED,
 		      radiant_ant_prox_search_set(CH, 0x80u, 0u));
+	/* A bin ignores the custom byte (a three-byte host 0x71). */
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_prox_search_set(CH, 3u, 0x55u));
+	{
+		int8_t dbm = 0;
+
+		zassert_equal(RADIANT_CH_OK, radiant_channel_prox_min_rssi(CH, &dbm));
+		zassert_equal(-52, dbm, "the custom byte leaked into a bin");
+	}
 	api_assert_no_viol();
 }
 

@@ -189,10 +189,12 @@ received-data tails, so nothing on the bench pins either value.
 
 ## Proximity search (`0x71`)
 
-`MESG_PROX_SEARCH_CONFIG` is `[channel, threshold]`, **exactly two bytes**
-(Message Protocol Rev 5.1, section 9.5.2.22). The protocol defines no third,
-custom-threshold byte; one exists only in Nordic's C API, so the bridge refuses
-a three-byte `0x71` with `INVALID_MESSAGE` rather than reading it as one.
+`MESG_PROX_SEARCH_CONFIG` is `[channel, threshold]` in the Message Protocol
+(Rev 5.1, section 9.5.2.22), which defines no third byte. The bridge also
+accepts `[channel, threshold, custom]`, as it has since build 1: hosts that
+model Nordic's API send Nordic's custom threshold there. The third byte is
+used only with threshold `0x80` and ignored with any other threshold; a
+two-byte `0x80` arrives with custom 0 and is refused.
 
 - **threshold 0** turns it off. **1..10** are bins, **1 the closest**
   (strongest signal). A bin accepts any frame at or above its level. 11 and up
@@ -222,10 +224,10 @@ calibrated range:
 |---|---|---|---|---|---|---|---|---|---|---|
 | Minimum RSSI (dBm) | -44 | -48 | -52 | -56 | -60 | -64 | -68 | -72 | -76 | -80 |
 
-`radiant_ant_prox_search_set()` also takes Nordic's custom form, threshold
-`0x80` plus a custom byte. Its encoding is unpublished, and `radiant` reads it
-as a positive magnitude, so 60 is -60 dBm `[inferred]`; 0 and values above 127
-are refused. Only the C API reaches it: the serial message has no byte for it.
+Nordic's custom form is threshold `0x80` plus the custom byte, through
+`radiant_ant_prox_search_set()` or the optional third byte of `0x71`. Its
+encoding is unpublished, and `radiant` reads it as a positive magnitude, so 60
+is -60 dBm `[inferred]`; 0 and values above 127 are refused.
 
 ## Burst
 
@@ -396,7 +398,7 @@ constant.
 | `0x6E` | `RADIANT_WIRE_MESG_ANTLIB_CONFIG_ID` | both | 2 | yes | - | [filler, config bits]. Sets the extended output fields to exactly these bits, replacing the previous value (so 0xE0 then 0x80 leaves 0x80). Zero clears everything - there is no separate clear message on the wire. 0xE0 is channel id + RSSI + RX timestamp; 0x80 is device id only. An unknown bit is refused with no side effect. | bridge, tools |
 | `0x6F` | `RADIANT_WIRE_MESG_STARTUP_MESG_ID` | d2h | 1 | yes | - | [reason]. Sent once after the stack has reset. A host that does not see this concludes the dongle is dead. | bridge, tools |
 | `0x70` | `RADIANT_WIRE_MESG_AUTO_FREQ_CONFIG_ID` | h2d | 4 | yes | `MESG_RESPONSE_EVENT_ID` | [channel, freq0, freq1, freq2]. Frequency-agility hop table. | bridge |
-| `0x71` | `RADIANT_WIRE_MESG_PROX_SEARCH_CONFIG_ID` | h2d | 2 | yes | `MESG_RESPONSE_EVENT_ID` | [channel, threshold]. Proximity search: only acquire something close by. threshold 0 is off, 1..10 are bins, 1 the closest (bin n accepts a frame at or above -44 - 4 (n - 1) dBm on radiant, Nordic's approximate nRF51 figures; the Message Protocol publishes no table). One-shot: an acquisition clears it, a search timeout keeps it. Exactly two bytes - the protocol has no custom-threshold byte, which exists only in Nordic's C API - and 11 and up are refused. | bridge, rev5.1 sec 9.5.2.22 + sec 6.4 |
+| `0x71` | `RADIANT_WIRE_MESG_PROX_SEARCH_CONFIG_ID` | h2d | 2..3 | yes | `MESG_RESPONSE_EVENT_ID` | [channel, threshold, (custom threshold)]. Proximity search: only acquire something close by. threshold 0 is off, 1..10 are bins, 1 the closest (bin n accepts a frame at or above -44 - 4 (n - 1) dBm on radiant, Nordic's approximate nRF51 figures; the Message Protocol publishes no table); 11 and up are refused except 0x80. One-shot: an acquisition clears it, a search timeout keeps it. The Message Protocol defines two bytes; the optional third is Nordic's custom threshold, used only when threshold is 0x80 (a positive magnitude, 60 = -60 dBm, inferred) and ignored otherwise. | bridge, rev5.1 sec 9.5.2.22 + sec 6.4 |
 | `0x72` | `RADIANT_WIRE_MESG_ADV_BURST_DATA_ID` | both | 9..25 | yes | - | Same header byte as MESG_BURST_DATA, but 8, 16 or 24 data bytes. Accepting this while never bridging 0x78 gives a dongle that takes 24-byte packets and can never send one. | bridge, readme |
 | `0x74` | `RADIANT_WIRE_MESG_EVENT_BUFFERING_CONFIG_ID` | h2d | 6 | no | - | Not bridged - sdk-ant exposes no API for it - and correspondingly NOT advertised in the capabilities reply. The one advanced-options-3 bit that is honestly zero. | tools, readme |
 | `0x75` | `RADIANT_WIRE_MESG_SET_SEARCH_CH_PRIORITY_ID` | both | 2 | yes | - | [channel, priority]. | bridge, rev5.1 sec 9.5 + verify:sdk-ant-shim |

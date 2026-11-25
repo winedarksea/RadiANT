@@ -297,13 +297,15 @@ MESG_STARTUP_MESG_ID = 0x6F
 # [channel, freq0, freq1, freq2]. Frequency-agility hop table. [bridge]
 MESG_AUTO_FREQ_CONFIG_ID = 0x70
 
-# [channel, threshold]. Proximity search: only acquire something close by.
-# threshold 0 is off, 1..10 are bins, 1 the closest (bin n accepts a frame at
-# or above -44 - 4 (n - 1) dBm on radiant, Nordic's approximate nRF51 figures;
-# the Message Protocol publishes no table). One-shot: an acquisition clears it,
-# a search timeout keeps it. Exactly two bytes - the protocol has no custom-
-# threshold byte, which exists only in Nordic's C API - and 11 and up are
-# refused. [bridge, rev5.1 sec 9.5.2.22 + sec 6.4]
+# [channel, threshold, (custom threshold)]. Proximity search: only acquire
+# something close by. threshold 0 is off, 1..10 are bins, 1 the closest (bin n
+# accepts a frame at or above -44 - 4 (n - 1) dBm on radiant, Nordic's
+# approximate nRF51 figures; the Message Protocol publishes no table); 11 and
+# up are refused except 0x80. One-shot: an acquisition clears it, a search
+# timeout keeps it. The Message Protocol defines two bytes; the optional third
+# is Nordic's custom threshold, used only when threshold is 0x80 (a positive
+# magnitude, 60 = -60 dBm, inferred) and ignored otherwise. [bridge, rev5.1 sec
+# 9.5.2.22 + sec 6.4]
 MESG_PROX_SEARCH_CONFIG_ID = 0x71
 
 # Same header byte as MESG_BURST_DATA, but 8, 16 or 24 data bytes. Accepting
@@ -1973,10 +1975,10 @@ MESSAGES = {
     0x71: {
         "name": 'MESG_PROX_SEARCH_CONFIG_ID',
         "direction": 'h2d',
-        "payload_len": 2,
+        "payload_len": '2..3',
         "bridged": True,
         "reply": 'MESG_RESPONSE_EVENT_ID',
-        "desc": "[channel, threshold]. Proximity search: only acquire something close by. threshold 0 is off, 1..10 are bins, 1 the closest (bin n accepts a frame at or above -44 - 4 (n - 1) dBm on radiant, Nordic's approximate nRF51 figures; the Message Protocol publishes no table). One-shot: an acquisition clears it, a search timeout keeps it. Exactly two bytes - the protocol has no custom-threshold byte, which exists only in Nordic's C API - and 11 and up are refused.",
+        "desc": "[channel, threshold, (custom threshold)]. Proximity search: only acquire something close by. threshold 0 is off, 1..10 are bins, 1 the closest (bin n accepts a frame at or above -44 - 4 (n - 1) dBm on radiant, Nordic's approximate nRF51 figures; the Message Protocol publishes no table); 11 and up are refused except 0x80. One-shot: an acquisition clears it, a search timeout keeps it. The Message Protocol defines two bytes; the optional third is Nordic's custom threshold, used only when threshold is 0x80 (a positive magnitude, 60 = -60 dBm, inferred) and ignored otherwise.",
     },
     0x72: {
         "name": 'MESG_ADV_BURST_DATA_ID',
