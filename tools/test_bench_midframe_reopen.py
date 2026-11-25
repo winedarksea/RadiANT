@@ -164,6 +164,63 @@ class Summary(unittest.TestCase):
         self.assertEqual(s["round_trip_ms"], {})
         self.assertFalse(b.passed(s))
 
+    def test_an_interrupted_run_does_not_pass(self):
+        s = b.summarise([row(0), row(1)])
+        self.assertTrue(b.passed(s))
+        self.assertFalse(b.passed(s, interrupted=True))
+
+
+class AFailedReopen(unittest.TestCase):
+    """A reopen that cannot open or write is a failed row, not the end of
+    the run (open_device() calls sys.exit; a write can raise USBError)."""
+
+    def test_an_open_that_exits_is_recorded(self):
+        def request(args, info):
+            sys.exit("no RadiANT device found")
+        rtt, err = b.guarded_request(argparse.Namespace(), {}, request)
+        self.assertIsNone(rtt)
+        self.assertIn("open failed", err)
+        self.assertIn("no RadiANT device", err)
+
+    def test_a_usb_error_is_recorded(self):
+        def request(args, info):
+            raise OSError("pipe error")
+        rtt, err = b.guarded_request(argparse.Namespace(), {}, request)
+        self.assertIsNone(rtt)
+        self.assertIn("pipe error", err)
+
+    def test_an_answer_passes_through(self):
+        rtt, err = b.guarded_request(argparse.Namespace(), {},
+                                     lambda a, i: 4.5)
+        self.assertEqual((rtt, err), (4.5, None))
+
+
+class TheDrain(unittest.TestCase):
+    """Frames already queued before the request are thrown away, so a late
+    reply from an earlier request cannot answer this one."""
+
+    @staticmethod
+    def reader_of(frames):
+        class FakeReader:
+            def __init__(self, dev, timeout_ms=0):
+                self.left = list(frames)
+
+            def next_frame(self, deadline):
+                return self.left.pop(0) if self.left else None
+        return FakeReader
+
+    def test_stale_frames_are_counted_and_dropped(self):
+        stale = [(0x54, b"\x00" * 8), (0x40, b"\x00" * 3)]
+        self.assertEqual(b.drain_stale(None, self.reader_of(stale)), 2)
+
+    def test_a_quiet_pipe_drains_nothing(self):
+        self.assertEqual(b.drain_stale(None, self.reader_of([])), 0)
+
+    def test_the_drain_is_capped(self):
+        endless = [(0x40, b"")] * 500
+        self.assertEqual(b.drain_stale(None, self.reader_of(endless), cap=5),
+                         5)
+
 
 if __name__ == "__main__":
     unittest.main()

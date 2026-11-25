@@ -81,6 +81,9 @@ CHILD_WRITE_FAILED = 3
 
 # How long the parent waits for the child to open, write and die.
 CHILD_TIMEOUT_S = 20.0
+# Stale-frame drain before each request (drain_stale()).
+DRAIN_QUIET_S = 0.05
+DRAIN_CAP = 64
 
 
 def partial_frame(n: int, request: bytes = CAPABILITIES_REQUEST) -> bytes:
@@ -208,8 +211,10 @@ def summarise(rows: list[dict]) -> dict:
     }
 
 
-def passed(summary: dict) -> bool:
-    return (summary["iterations"] > 0
+def passed(summary: dict, interrupted: bool = False) -> bool:
+    """Every iteration ran to the end: an interrupted run never passes."""
+    return (not interrupted
+            and summary["iterations"] > 0
             and summary["child_failures"] == 0
             and summary["failures"] == 0)
 
@@ -244,17 +249,40 @@ def spawn_child(args: argparse.Namespace) -> int | None:
         return None
 
 
-def request_capabilities(args: argparse.Namespace) -> float | None:
-    """Open fresh, send one capabilities request, close.
+def drain_stale(dev, reader_cls, quiet_s: float = DRAIN_QUIET_S,
+                cap: int = DRAIN_CAP) -> int:
+    """Read and discard whatever the dongle already queued, until it has
+    been quiet for `quiet_s` (at most `cap` frames). Without this, a reply
+    that missed the last iteration's timeout, or the reply to the control
+    arm's complete request (whose child never reads it), would be taken as
+    this request's answer. Returns the number of frames thrown away."""
+    reader = reader_cls(dev, timeout_ms=max(1, int(quiet_s * 1000)))
+    n = 0
+    while n < cap:
+        if reader.next_frame(time.monotonic() + quiet_s) is None:
+            break
+        n += 1
+    return n
+
+
+def request_capabilities(args: argparse.Namespace,
+                         info: dict | None = None) -> float | None:
+    """Open fresh, drain stale frames, send one capabilities request, close.
 
     Returns the round trip in ms, or None if no 0x54 came back within
-    --reply-timeout. Frames other than 0x54 are read past.
+    --reply-timeout. Frames other than 0x54 are read past. A failed open
+    (open_device() calls sys.exit) or a USB error is NOT caught here; the
+    caller records it as a failed iteration. `info`, if given, receives
+    "drained": the stale frames discarded before the request.
     """
     from ant_probe import EP_OUT, FrameReader, close_device, open_device
 
     dev = open_device(False, wait_s=args.open_wait, serial=args.serial,
                       port=args.port, baud=args.baud)
     try:
+        drained = drain_stale(dev, FrameReader)
+        if info is not None:
+            info["drained"] = drained
         reader = FrameReader(dev)
         t0 = time.perf_counter()
         dev.write(EP_OUT, CAPABILITIES_REQUEST)
@@ -268,6 +296,23 @@ def request_capabilities(args: argparse.Namespace) -> float | None:
                 return round(elapsed * 1000.0, 3)
     finally:
         close_device(dev)
+
+
+def guarded_request(args: argparse.Namespace, info: dict | None = None,
+                    request=None) -> tuple[float | None, str | None]:
+    """request_capabilities() with a failed reopen recorded, not fatal.
+
+    A reopen that cannot open (open_device()'s sys.exit) or write (a USB
+    error) is the very failure this tool counts, so it must become a failed
+    row rather than end the run and lose every row so far. Returns
+    (round trip ms or None, error text or None)."""
+    request = request or request_capabilities
+    try:
+        return request(args, info), None
+    except SystemExit as exc:
+        return None, f"open failed: {exc.code}"
+    except Exception as exc:  # noqa: BLE001 - usb.core.USBError and kin
+        return None, f"{type(exc).__name__}: {exc}"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -291,8 +336,12 @@ def main(argv: list[str] | None = None) -> int:
     }
 
     print("Pre-check: one request with no partial frame in front of it")
-    pre = request_capabilities(args)
+    pre_info: dict = {}
+    pre, pre_err = guarded_request(args, pre_info)
     report["precheck_round_trip_ms"] = pre
+    if pre_err:
+        report["precheck_error"] = pre_err
+        print(f"  pre-check failed: {pre_err}")
     if pre is None:
         print(f"  no capabilities reply within {args.reply_timeout} s: the "
               "dongle is not answering even a clean open, so this run "
@@ -315,10 +364,16 @@ def main(argv: list[str] | None = None) -> int:
             row = {"i": i, "delay_s": delay, "child_rc": child_rc,
                    "ok": False, "round_trip_ms": None}
             if child_rc == CHILD_WROTE:
-                rtt = request_capabilities(args)
+                info: dict = {}
+                rtt, err = guarded_request(args, info)
                 row["round_trip_ms"] = rtt
                 row["ok"] = rtt is not None
-                if rtt is None:
+                row["drained"] = info.get("drained")
+                if err:
+                    row["error"] = err
+                    print(f"  iteration {i}: REOPEN FAILED: {err}",
+                          flush=True)
+                elif rtt is None:
                     print(f"  iteration {i}: NO REPLY within "
                           f"{args.reply_timeout} s after the mid-frame death",
                           flush=True)
@@ -335,7 +390,7 @@ def main(argv: list[str] | None = None) -> int:
 
     summary = summarise(rows)
     report["summary"] = summary
-    report["passed"] = passed(summary)
+    report["passed"] = passed(summary, report.get("interrupted", False))
     report["rows"] = rows
 
     print(f"\n{summary['answered']}/{summary['valid']} reopens answered "
