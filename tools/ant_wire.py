@@ -732,9 +732,8 @@ EXT_FLAG_CHANNEL_ID = 0x80
 
 # 3 bytes follow: measurement type, value, threshold configuration. The last is
 # a signed dBm: the proximity threshold in force (rev5.1 sec 7.1.1.2.3, AN16
-# sec 4.3.3). With proximity search off radiant sends 0x00, where those
-# documents give -128 (0x80); that difference is an open owner decision. [tools
-# (ant_verify)]
+# sec 4.3.3). With proximity search off it is -128 (0x80), as those documents
+# give. [tools (ant_verify)]
 EXT_FLAG_RSSI = 0x40
 
 # 2 bytes follow: the 32768 Hz receive timestamp, little endian. [tools

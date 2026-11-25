@@ -182,10 +182,10 @@ The RSSI field is three bytes: measurement type (`0x20` = dBm), the RSSI as a
 signed dBm, and the **threshold configuration value**, the proximity threshold
 in force as a signed dBm (ANT Message Protocol and Usage Rev 5.1, section
 7.1.1.2.3; AN16 RSSI Extended Information, section 4.3.3). With proximity
-search off, `radiant` sends `0x00` there. The ANT documents give -128 (`0x80`)
-for "off"; that difference predates proximity search here and is an open owner
-decision, so it is not changed. `tools/ant_conformance.py` does not compare
-received-data tails, so nothing on the bench pins either value.
+search off it is -128 (`0x80`), the documents' "off" value (AN16 section 4.3.3,
+worked example `[20][DD][80]`). `radiant` sent `0x00` there until 2026-11-25,
+when the owner ruled to follow the ANT documents. No host in this repository
+reads the byte.
 
 ## Proximity search (`0x71`)
 
@@ -542,7 +542,7 @@ Byte 9 of a received data message - immediately after the 8-byte payload - when 
 | Constant | Value | Meaning | Provenance |
 |---|---|---|---|
 | `RADIANT_WIRE_EXT_FLAG_CHANNEL_ID` | `0x80` | 4 bytes follow: device number lo, device number hi, device type (bit 7 is the pairing bit), transmission type. | tools (ant_verify, ant_scan) |
-| `RADIANT_WIRE_EXT_FLAG_RSSI` | `0x40` | 3 bytes follow: measurement type, value, threshold configuration. The last is a signed dBm: the proximity threshold in force (rev5.1 sec 7.1.1.2.3, AN16 sec 4.3.3). With proximity search off radiant sends 0x00, where those documents give -128 (0x80); that difference is an open owner decision. | tools (ant_verify) |
+| `RADIANT_WIRE_EXT_FLAG_RSSI` | `0x40` | 3 bytes follow: measurement type, value, threshold configuration. The last is a signed dBm: the proximity threshold in force (rev5.1 sec 7.1.1.2.3, AN16 sec 4.3.3). With proximity search off it is -128 (0x80), as those documents give. | tools (ant_verify) |
 | `RADIANT_WIRE_EXT_FLAG_RX_TIMESTAMP` | `0x20` | 2 bytes follow: the 32768 Hz receive timestamp, little endian. | tools (ant_verify) |
 
 ## RSSI measurement types

@@ -889,13 +889,15 @@ group.
   Default bin 3 kept; distance calibration was waived by the owner. Not on air:
   the bridge's long press (needs a hand on the button) and fail-closed with no
   RSSI (the TI always reports it).
-- [ ] **Owner decision: the RSSI field's byte 2 with proximity search off.**
-  radiant sends `0x00`; AN16 RSSI Extended Information section 4.3.3 (and ANT
-  MP Rev 5.1 section 7.1.1.2.3) give -128 (`0x80`) for "off". Kept at 0x00
-  (`RSSI_THRESHOLD_CFG_NONE`, `radiant_event.c`) because changing it alters
-  every RSSI tail hosts have seen; `tools/ant_conformance.py` compares no
-  received-data tails, so nothing pins either value. A Garmin ANTUSB-m
-  (supports proximity search, MP p. 58) would show the reference behaviour.
+- [x] **Owner decision: the RSSI field's byte 2 with proximity search off.**
+  radiant sent `0x00`; AN16 RSSI Extended Information section 4.3.3 (and ANT
+  MP Rev 5.1 section 7.1.1.2.3) give -128 (`0x80`) for "off".
+  *Done 2026-11-25:* the owner ruled to follow the ANT documents unless there
+  is a clearly better way, and there isn't one: 0x00 reads as a 0 dBm
+  threshold. `RSSI_THRESHOLD_CFG_NONE` is now 0x80 (`radiant_event.c`), and
+  test_event asserts it. No host in the repo reads the byte. Open: confirm on
+  a Garmin ANTUSB-m (it supports proximity search, MP p. 58) that it also sends
+  0x80 with proximity search off.
 - [x] **Zwift shim installer cannot replace an older shim, and the installed
   one predates key masking.** `scripts/zwift_ant_shim.ps1` (~:143) treats "same
   file length" as "ours" and refuses anything else, and `-Uninstall` (~:81)

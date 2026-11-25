@@ -374,7 +374,7 @@ public S212 API documentation for the C form):
 - **Never store what cannot run**: a backend with no RSSI on search frames refuses any non-zero
   threshold and does not advertise `CAPABILITIES_PROX_SEARCH_ENABLED` (`docs/gotchas.md`).
 - The RSSI extended field's byte 2 reports the threshold in force as a signed dBm while it is set.
-  Off is `0x00` on radiant today, where the ANT documents give -128; that is an open owner call.
+  Off is -128 (`0x80`), as the ANT documents give (AN16 section 4.3.3; radiant sent `0x00` before 2026-11-25).
 
 The sdk-ant backend passes all three straight to `ant_prox_search_set()`, whose bins are Nordic's
 own. The radiant bin levels are Nordic's approximate nRF51 figures, so a bin means roughly, not

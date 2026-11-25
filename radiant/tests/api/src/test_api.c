@@ -8798,8 +8798,8 @@ ZTEST(api, test_prox_search_far_device_is_not_acquired)
 	api_assert_no_viol();
 }
 
-/* Proximity off: byte 2 stays what it has always been (0x00 here; see
- * RSSI_THRESHOLD_CFG_NONE in radiant_event.c). */
+/* Proximity off: byte 2 is -128 (0x80), the ANT documents' "off" (AN16
+ * section 4.3.3; RSSI_THRESHOLD_CFG_NONE in radiant_event.c). */
 ZTEST(api, test_prox_search_off_reports_threshold_none)
 {
 	const struct fake_radio_arm *w;
@@ -8817,6 +8817,7 @@ ZTEST(api, test_prox_search_off_reports_threshold_none)
 	m = first_bcast();
 	zassert_not_null(m);
 	zassert_true(m->len > EXT_RSSI_THRESHOLD);
-	zassert_equal(0x00u, m->data[EXT_RSSI_THRESHOLD]);
+	zassert_equal(0x80u, m->data[EXT_RSSI_THRESHOLD],
+		      "byte 2 is 0x%02x", m->data[EXT_RSSI_THRESHOLD]);
 	api_assert_no_viol();
 }

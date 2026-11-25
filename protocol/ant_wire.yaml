@@ -1290,9 +1290,8 @@ constant_groups:
          desc: "3 bytes follow: measurement type, value, threshold
                 configuration. The last is a signed dBm: the proximity
                 threshold in force (rev5.1 sec 7.1.1.2.3, AN16 sec 4.3.3).
-                With proximity search off radiant sends 0x00, where those
-                documents give -128 (0x80); that difference is an open owner
-                decision.",
+                With proximity search off it is -128 (0x80), as those
+                documents give.",
          source: "tools (ant_verify)"}
       - {name: EXT_FLAG_RX_TIMESTAMP, value: 0x20,
          desc: "2 bytes follow: the 32768 Hz receive timestamp, little endian.",

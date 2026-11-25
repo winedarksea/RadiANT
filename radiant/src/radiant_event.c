@@ -287,14 +287,14 @@ enum radiant_event_ts_policy radiant_event_get_ts_policy(void)
  * Byte 2 of the RSSI field: the proximity-search threshold configuration in
  * force, a signed dBm (ANT Message Protocol Rev 5.1, section 7.1.1.2.3; AN16
  * RSSI Extended Information, section 4.3.3). With proximity search on it is
- * the threshold's level (radiant_channel_prox_min_rssi()).
- *
- * OFF IS 0x00 HERE, and the ANT documents say -128 (0x80). Kept at 0 on
- * purpose until the owner rules on it: changing it changes every RSSI tail
- * a host has ever seen from this stack. tools/ant_conformance.py does not
- * compare received-data tails, so nothing on the bench pins either value.
+ * the threshold's level (radiant_channel_prox_min_rssi()). With it off it is
+ * -128 (0x80), the documents' "off" value (AN16 section 4.3.3 and its worked
+ * example [20][DD][80]). Owner ruling 2026-11-25: follow the ANT documents.
+ * Before that radiant sent 0x00, which reads as a 0 dBm threshold. Internally
+ * prox_dbm 0 still means off; no real threshold is 0 dBm (bins run -44 to -80,
+ * and a custom 0 is refused).
  */
-#define RSSI_THRESHOLD_CFG_NONE  0x00u
+#define RSSI_THRESHOLD_CFG_NONE  0x80u
 
 int radiant_event_build_ext(uint8_t config, const struct radiant_event_ext *in,
 			uint8_t *out, size_t out_len)
