@@ -634,6 +634,30 @@ uint8_t radiant_ctrl_reply_for(uint8_t data_ctrl);
  * unmeasured combination is RADIANT_MSG_UNKNOWN and the frame still decodes. */
 enum radiant_msg_type radiant_frame_msg_type(uint8_t ctrl_byte);
 
+/*
+ * A frame a MASTER opens its slot with: the slot bit set AND a master's
+ * message kind - a broadcast (0x0A), a burst's first packet (0x8A) or
+ * acknowledged data (0xAA). radiant_ctrl_is_slot_opener() above reads the one
+ * bit only, so it also passes 0x2A/0x4A/0x6A (b7 clear with b6 or b5 set),
+ * which radiant_frame_msg_type() calls UNKNOWN: never transmitted, so a bit
+ * error or a foreign stack, and no grounds to claim or anchor a channel. This
+ * is the test wherever a slave takes a frame as its master's slot: the
+ * search's ACQUIRE claim, the tracked re-anchor and the held command's opener.
+ * The retried burst packet 0 caveat of radiant_ctrl_is_slot_opener() applies
+ * here too.
+ */
+static inline bool radiant_ctrl_is_master_opener(uint8_t ctrl)
+{
+	enum radiant_msg_type mt;
+
+	if (!radiant_ctrl_is_slot_opener(ctrl)) {
+		return false;
+	}
+	mt = radiant_frame_msg_type(ctrl);
+	return mt == RADIANT_MSG_BROADCAST || mt == RADIANT_MSG_BURST_DATA ||
+	       mt == RADIANT_MSG_BURST_LAST;
+}
+
 /* Geometry queries. Each returns a length, or RADIANT_FRAME_EINVAL for an unknown
  * configuration or a payload no configuration can express. */
 int radiant_frame_addr_len(enum radiant_frame_cfg cfg);

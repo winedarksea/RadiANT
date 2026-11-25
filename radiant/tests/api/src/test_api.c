@@ -3410,11 +3410,10 @@ ZTEST(api, test_a_tracked_channel_reposts_its_next_window_without_a_pump)
 
 /* The setup every test below shares: a wildcard slave that finds one sensor and
  * settles into TRACKING. Written out once here rather than folded into
- * open_channel(), which configures a known device ID and never searches. */
-static void open_and_acquire_slave_of_type(uint8_t type, uint16_t *out_dev)
+ * open_channel(), which configures a known device ID and never searches.
+ * open_wildcard_slave_of_type() is the half before anything is aired. */
+static void open_wildcard_slave_of_type(uint8_t type)
 {
-	const struct fake_radio_arm *w;
-
 	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      radiant_ant_network_address_set(0u, ant_plus_key));
 	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
@@ -3428,7 +3427,13 @@ static void open_and_acquire_slave_of_type(uint8_t type, uint16_t *out_dev)
 	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
 		      radiant_ant_channel_radio_freq_set(CH, RF_INDEX));
 	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR, radiant_ant_channel_open(CH));
+}
 
+static void open_and_acquire_slave_of_type(uint8_t type, uint16_t *out_dev)
+{
+	const struct fake_radio_arm *w;
+
+	open_wildcard_slave_of_type(type);
 	w = armed_search_window();
 	air_device(w, 0u, 0x0500u, 0x0Bu, 1000u, out_dev);
 	fake_radio_advance_past_close(w->t_close);
@@ -4473,6 +4478,12 @@ ZTEST(api, test_a_one_packet_burst_raises_no_tx_start)
 	end_of_test();
 }
 
+static void clear_msglog(void)
+{
+	memset(msglog, 0, sizeof(msglog));
+	n_msg = 0u;
+}
+
 #if defined(CONFIG_RADIANT_CRC_REPAIR)
 /* One tracked-window frame of `ctrl`, one payload bit off the CRC it carries,
  * so the repair path recovers it. Returns once the window has ended.
@@ -4509,12 +4520,6 @@ static void air_one_bit_off_tt(uint16_t dev, uint8_t ctrl, uint8_t trans_type)
 static void air_one_bit_off(uint16_t dev, uint8_t ctrl)
 {
 	air_one_bit_off_tt(dev, ctrl, 5u);
-}
-
-static void clear_msglog(void)
-{
-	memset(msglog, 0, sizeof(msglog));
-	n_msg = 0u;
 }
 
 /*
@@ -4851,6 +4856,177 @@ ZTEST(api, test_only_another_sensors_frames_send_the_channel_back_to_search)
 }
 
 /*
+ * A tracked window counts as heard only after a decode (A1). A clean frame on
+ * the tracked address whose control byte does not decode (0x0B: bits 2:0 are
+ * not 010) or decodes to no message kind (0x2A: the slot bit with b5 and no
+ * b7, never transmitted) is not the sensor: no host message, no re-anchor, and
+ * the window is a miss with its RX_FAIL. Until 2026-11-25 the first counted as
+ * heard (a matched address and a valid CRC were taken as enough) and the
+ * second re-anchored the slot clock on the slot bit alone. The broadcast after
+ * it is the control.
+ */
+static void tracked_bad_ctrl_is_a_miss(uint8_t ctrl)
+{
+	const struct radiant_api_stats *s = radiant_api_stats_get();
+	uint16_t       dev;
+	uint32_t       undecoded;
+	uint32_t       missed;
+	radiant_time_t t;
+
+	open_and_acquire_slave(&dev);
+	run_housekeeping();
+	clear_msglog();
+	undecoded = s->rx_undecoded;
+	missed = s->slots_missed;
+
+	t = air_clean_tt(dev, 0x0Bu, ctrl, 5u);
+
+	zassert_equal(0u, count_msgs((uint8_t)RADIANT_WIRE_MESG_BROADCAST_DATA_ID) +
+				  count_msgs((uint8_t)RADIANT_WIRE_MESG_ACKNOWLEDGED_DATA_ID) +
+				  count_msgs((uint8_t)RADIANT_WIRE_MESG_BURST_DATA_ID),
+		      "ctrl 0x%02x: the frame reached the host", ctrl);
+	zassert_not_equal(t + PERIOD_US, radiant_channel_next_slot(CH),
+			  "ctrl 0x%02x re-anchored the slot clock", ctrl);
+	zassert_equal(missed + 1u, s->slots_missed,
+		      "ctrl 0x%02x: the window was counted heard", ctrl);
+	zassert_equal(1u, count_channel_events(CH, (uint8_t)RADIANT_WIRE_EVENT_RX_FAIL),
+		      "ctrl 0x%02x: the window raised no RX_FAIL", ctrl);
+	zassert_equal(undecoded + 1u, s->rx_undecoded,
+		      "ctrl 0x%02x was not counted undecoded", ctrl);
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH));
+
+	/* Control: the sensor's broadcast is heard and re-anchors. */
+	t = air_clean_tt(dev, 0x0Bu, RADIANT_CTRL_BROADCAST, 5u);
+	zassert_equal(1u, count_bcast_from(dev),
+		      "control: the broadcast did not reach the host");
+	zassert_equal(t + PERIOD_US, radiant_channel_next_slot(CH),
+		      "control: the broadcast did not re-anchor");
+	zassert_equal(undecoded + 1u, s->rx_undecoded);
+
+	end_of_test();
+}
+
+ZTEST(api, test_a_clean_frame_that_does_not_decode_is_a_miss)
+{
+	tracked_bad_ctrl_is_a_miss(0x0Bu);
+}
+
+ZTEST(api, test_a_tracked_slave_does_not_re_anchor_on_an_unknown_opener)
+{
+	tracked_bad_ctrl_is_a_miss(0x2Au);
+}
+
+/* Windows that hear only undecodable frames add up to RX_FAIL_GO_TO_SEARCH,
+ * as windows hearing only another sensor do. */
+ZTEST(api, test_only_undecodable_frames_send_the_channel_back_to_search)
+{
+	const struct radiant_api_stats *s = radiant_api_stats_get();
+	uint16_t dev;
+	uint32_t undecoded;
+	uint32_t i;
+
+	open_and_acquire_slave(&dev);
+	run_housekeeping();
+	clear_msglog();
+	undecoded = s->rx_undecoded;
+
+	for (i = 0u; i < 16u &&
+		     radiant_channel_state_get(CH) == RADIANT_CH_STATE_TRACKING;
+	     i++) {
+		(void)air_clean_tt(dev, 0x0Bu, 0x0Bu, 5u);
+	}
+
+	zassert_equal(RADIANT_CH_STATE_SEARCHING, radiant_channel_state_get(CH),
+		      "%u windows of undecodable frames kept the channel "
+		      "tracking", (unsigned int)i);
+	zassert_equal(1u, count_channel_events(CH,
+			(uint8_t)RADIANT_WIRE_EVENT_RX_FAIL_GO_TO_SEARCH));
+	/* Every window heard its frame and judged it: the misses are the
+	 * frames', not windows the slot clock walked away from. */
+	zassert_equal(i, s->rx_undecoded - undecoded,
+		      "a window did not hear exactly the undecodable frame");
+
+	end_of_test();
+}
+
+#if defined(CONFIG_RADIANT_CRC_REPAIR)
+/*
+ * The other half of A1: a bad frame does not undo a good one. A broadcast one
+ * bit off, repaired, then a clean undecodable frame in the same tracked window
+ * (a CRC failure does not end the window, so both are heard): the window keeps
+ * the repaired frame's heard mark (api_sched_rx() puts back what the window
+ * had) and raises no RX_FAIL. rx_undecoded proves the second frame was heard.
+ */
+ZTEST(api, test_a_bad_frame_after_a_repaired_one_keeps_the_window_heard)
+{
+	const struct radiant_api_stats *s = radiant_api_stats_get();
+	const struct fake_radio_arm    *w;
+	struct fake_radio_air           a;
+	uint8_t                         frame[FAKE_RADIO_AIR_FRAME_MAX];
+	uint8_t                         len;
+	uint16_t                        crc;
+	uint16_t                        dev;
+	uint32_t                        repaired;
+	uint32_t                        undecoded;
+	uint32_t                        missed;
+
+	api_long_match();
+
+	open_and_acquire_slave(&dev);
+	run_housekeeping();
+	clear_msglog();
+	if (fake_radio_is_idle()) {
+		run_housekeeping();
+	}
+	w = last_arm_of(FAKE_RADIO_ARM_RX);
+	zassert_not_null(w, "setup: no tracked window armed");
+	zassert_false(w->terminated, "setup: the tracked window had already ended");
+	zassert_true(w->t_close - w->t_open >= 400u,
+		     "setup: the window (%u us) is too short for two frames",
+		     (unsigned int)(w->t_close - w->t_open));
+
+	repaired = s->crc_repaired;
+	undecoded = s->rx_undecoded;
+	missed = s->slots_missed;
+
+	/* The repaired broadcast, early in the window. */
+	fake_radio_air_init(&a);
+	a.t_sync = w->t_open + ((w->t_close - w->t_open) / 8u);
+	a.len = build_peer_frame_for(a.bytes, dev, RADIANT_CTRL_BROADCAST,
+				     peer_payload);
+	crc = radiant_crc16(RADIANT_CRC_INIT, a.bytes, a.len);
+	a.bytes[9] ^= 0x01u;
+	a.crc_bad = true;
+	a.crc_rx_set = true;
+	a.crc_rx = crc;
+	zassert_ok(fake_radio_air_add(&a));
+
+	/* The undecodable frame, late in the same window. */
+	len = fake_radio_build_ant_frame(frame, dev, 0x0Bu, 5u, peer_payload);
+	frame[6] = 0x0Bu;
+	zassert_equal(RADIANT_RADIO_OK_RC,
+		      fake_radio_air_frame(w->t_open + ((w->t_close - w->t_open) *
+							7u / 8u),
+					   frame, len));
+
+	fake_radio_advance_to(w->t_close + RADIANT_TRANSFER_REPLY_US + 1000u);
+	drain();
+
+	zassert_equal(repaired + 1u, s->crc_repaired,
+		      "setup: the broadcast was not repaired");
+	zassert_equal(undecoded + 1u, s->rx_undecoded,
+		      "setup: the undecodable frame was not heard in the window");
+	zassert_equal(missed, s->slots_missed,
+		      "the undecodable frame undid the repaired frame's heard mark");
+	zassert_equal(0u, count_channel_events(CH, (uint8_t)RADIANT_WIRE_EVENT_RX_FAIL),
+		      "RX_FAIL for a window that heard a repaired broadcast");
+	zassert_equal(1u, count_bcast_from(dev));
+
+	end_of_test();
+}
+#endif /* CONFIG_RADIANT_CRC_REPAIR */
+
+/*
  * Acknowledged data of another transmission type: an ACK on air would end the
  * other sensor's own failure report for a message this node then drops (or,
  * before the fix, delivered as this channel's). Type 5 is the control.
@@ -5022,6 +5198,388 @@ ZTEST(api, test_a_search_does_not_acquire_on_an_ack)
 	zassert_equal(1u, count_bcast_from(number));
 
 	end_of_test();
+}
+
+/* ---------------------------------------------------------------------------
+ * The acquiring frame keeps its message kind (A3)
+ *
+ * The search acquires on any master's slot opener: a broadcast (0x0A), a
+ * burst's packet 0 (0x8A) or acknowledged data (0xAA). Until 2026-11-25 all
+ * three went to the host as BROADCAST_DATA, and nothing acknowledged the
+ * exchange, so its sender counted it failed and resent it.
+ * ---------------------------------------------------------------------------
+ */
+
+/* Device 0x05xx on `ctrl` in the armed search window, 1 ms in. The low byte
+ * is the window's first filter's (any, on a wild_last window). Returns its
+ * t_sync; nothing is advanced. */
+static radiant_time_t air_acquiring(uint8_t ctrl, uint16_t *dev)
+{
+	const struct fake_radio_arm *w = armed_search_window();
+	uint8_t                      frame[FAKE_RADIO_AIR_FRAME_MAX];
+	uint8_t                      len;
+	radiant_time_t               t = w->t_open + 1000u;
+
+	*dev = (uint16_t)(0x0500u | (w->filters[0].wild_last
+					     ? 0u
+					     : w->filters[0].addr[2]));
+	len = fake_radio_build_ant_frame(frame, *dev, 0x0Bu, 5u, peer_payload);
+	frame[6] = ctrl;
+	zassert_equal(RADIANT_RADIO_OK_RC, fake_radio_air_frame(t, frame, len),
+		      "could not put device %u on the air", (unsigned int)*dev);
+	return t;
+}
+
+/* Host messages `id` on CH carrying device `dev` in their extended tail
+ * (count_bcast_from() for any message kind). */
+static uint32_t count_msgs_from(uint8_t id, uint16_t dev)
+{
+	uint32_t n = 0u;
+
+	for (uint32_t i = 0u; i < n_msg && i < MSGLOG_MAX; i++) {
+		const struct msg_rec *m = &msglog[i];
+
+		if (m->id != id || m->len < (EXT_DTYPE + 1u) ||
+		    (m->data[EXT_FLAG] & (uint8_t)RADIANT_WIRE_EXT_FLAG_CHANNEL_ID) == 0u) {
+			continue;
+		}
+		if ((uint16_t)((uint16_t)m->data[EXT_NUM_LO] |
+			       ((uint16_t)m->data[EXT_NUM_HI] << 8)) == dev) {
+			n++;
+		}
+	}
+	return n;
+}
+
+/* The n-th (from 0) BURST_DATA in the log, or NULL. */
+static const struct msg_rec *nth_burst(uint32_t nth)
+{
+	for (uint32_t i = 0u; i < n_msg && i < MSGLOG_MAX; i++) {
+		if (msglog[i].id != (uint8_t)RADIANT_WIRE_MESG_BURST_DATA_ID) {
+			continue;
+		}
+		if (nth-- == 0u) {
+			return &msglog[i];
+		}
+	}
+	return NULL;
+}
+
+static uint8_t burst_seq_of(const struct msg_rec *m)
+{
+	return (uint8_t)((m->data[0] >> RADIANT_WIRE_BURST_HEADER_SEQ_SHIFT) &
+			 RADIANT_WIRE_BURST_HEADER_SEQ_MASK);
+}
+
+static bool burst_last_of(const struct msg_rec *m)
+{
+	return (m->data[0] & RADIANT_WIRE_BURST_HEADER_LAST) != 0u;
+}
+
+/* Bidirectional: delivered once as ACKNOWLEDGED_DATA, never as a broadcast,
+ * and acknowledged on the slot-reply turnaround (0xF2 at +2190). */
+ZTEST(api, test_acquiring_on_acknowledged_data_delivers_and_acks_it)
+{
+	const struct radiant_api_stats *s = radiant_api_stats_get();
+	const uint8_t  reply = radiant_ctrl_reply_for(RADIANT_CTRL_ACK_DATA_OPEN);
+	const struct fake_radio_arm *ack;
+	uint16_t       dev;
+	uint32_t       dropped;
+	radiant_time_t t;
+
+	open_wildcard_slave_of_type((uint8_t)RADIANT_WIRE_CHANNEL_TYPE_SLAVE);
+	dropped = s->acq_exchange_dropped;
+
+	t = air_acquiring(RADIANT_CTRL_ACK_DATA_OPEN, &dev);
+	fake_radio_advance_to(t + RADIANT_TRANSFER_OPENER_REPLY_US + 1000u);
+	drain();
+
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH),
+		      "acknowledged data did not acquire the channel");
+	zassert_equal(1u, count_msgs((uint8_t)RADIANT_WIRE_MESG_ACKNOWLEDGED_DATA_ID),
+		      "the acquiring acknowledged data was not delivered once");
+	zassert_equal(1u, count_msgs_from((uint8_t)RADIANT_WIRE_MESG_ACKNOWLEDGED_DATA_ID,
+					  dev),
+		      "the acknowledged data went up without its sender");
+	zassert_equal(0u, count_msgs((uint8_t)RADIANT_WIRE_MESG_BROADCAST_DATA_ID),
+		      "the acquiring acknowledged data went up as a broadcast");
+	ack = last_tx_with_ctrl(reply);
+	zassert_not_null(ack, "the acquiring acknowledged data was not ACKed");
+	zassert_equal(1u, count_tx_with_ctrl(reply));
+	zassert_equal(t + RADIANT_TRANSFER_OPENER_REPLY_US, ack->t_sync_at,
+		      "the ACK missed the opener's reply turnaround");
+	zassert_equal(dropped, s->acq_exchange_dropped);
+	zassert_equal(t + PERIOD_US, radiant_channel_next_slot(CH),
+		      "the channel did not anchor on the opener");
+
+	end_of_test();
+}
+
+/* SLAVE_RX_ONLY: delivered as ACKNOWLEDGED_DATA, and nothing transmitted. */
+ZTEST(api, test_acquiring_on_acknowledged_data_rx_only_delivers_without_tx)
+{
+	uint16_t       dev;
+	uint32_t       arms_tx;
+	radiant_time_t t;
+
+	open_wildcard_slave_of_type((uint8_t)RADIANT_WIRE_CHANNEL_TYPE_SLAVE_RX_ONLY);
+	arms_tx = fake_radio_stats()->arms_tx;
+
+	t = air_acquiring(RADIANT_CTRL_ACK_DATA_OPEN, &dev);
+	fake_radio_advance_to(t + RADIANT_TRANSFER_OPENER_REPLY_US + 1000u);
+	drain();
+
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH));
+	zassert_equal(1u, count_msgs_from((uint8_t)RADIANT_WIRE_MESG_ACKNOWLEDGED_DATA_ID,
+					  dev),
+		      "the acquiring acknowledged data was not delivered once");
+	zassert_equal(0u, count_msgs((uint8_t)RADIANT_WIRE_MESG_BROADCAST_DATA_ID),
+		      "the acquiring acknowledged data went up as a broadcast");
+	zassert_equal(arms_tx, fake_radio_stats()->arms_tx,
+		      "a receive-only channel transmitted");
+
+	end_of_test();
+}
+
+/* A burst's packet 0 (0x8A) acquires and opens the burst: BURST_DATA
+ * sequence 0 with its sender, ACKed at +2190, and the continuation, aired
+ * RADIANT_TRANSFER_NEXT_PACKET_US after that ACK, arrives as sequence 1, LAST. */
+ZTEST(api, test_acquiring_on_a_burst_opener_delivers_the_burst)
+{
+	const struct radiant_api_stats *s = radiant_api_stats_get();
+	const struct fake_radio_arm *ack;
+	const struct msg_rec        *m;
+	uint8_t        frame[AIR_LEN];
+	uint8_t        ctrl1 = 0u;
+	uint16_t       dev;
+	uint32_t       dropped;
+	radiant_time_t t;
+	radiant_time_t t1;
+
+	open_wildcard_slave_of_type((uint8_t)RADIANT_WIRE_CHANNEL_TYPE_SLAVE);
+	dropped = s->acq_exchange_dropped;
+
+	t = air_acquiring(RADIANT_CTRL_BURST_OPEN_SEQ0, &dev);
+	zassert_ok(radiant_transfer_ctrl(1u, true, true, &ctrl1));
+	t1 = t + RADIANT_TRANSFER_OPENER_REPLY_US + RADIANT_TRANSFER_NEXT_PACKET_US;
+	(void)build_peer_frame_for(frame, dev, ctrl1, peer_payload);
+	zassert_equal(RADIANT_RADIO_OK_RC, fake_radio_air_frame(t1, frame, AIR_LEN));
+	fake_radio_advance_to(t1 + RADIANT_TRANSFER_REPLY_US + 3000u);
+	drain();
+
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH));
+	zassert_equal(0u, count_msgs((uint8_t)RADIANT_WIRE_MESG_BROADCAST_DATA_ID),
+		      "the burst's packet 0 went up as a broadcast");
+	ack = last_tx_with_ctrl(radiant_ctrl_reply_for(RADIANT_CTRL_BURST_OPEN_SEQ0));
+	zassert_not_null(ack, "packet 0 was not ACKed");
+	zassert_equal(t + RADIANT_TRANSFER_OPENER_REPLY_US, ack->t_sync_at);
+	zassert_equal(1u, count_msgs_from((uint8_t)RADIANT_WIRE_MESG_BURST_DATA_ID, dev),
+		      "packet 0 went up without its sender");
+	m = nth_burst(0u);
+	zassert_not_null(m, "packet 0 was not delivered");
+	zassert_equal(0u, burst_seq_of(m));
+	zassert_false(burst_last_of(m));
+	m = nth_burst(1u);
+	zassert_not_null(m, "the continuation was not delivered");
+	zassert_equal(1u, burst_seq_of(m));
+	zassert_true(burst_last_of(m));
+	zassert_not_null(last_tx_with_ctrl(radiant_ctrl_reply_for(ctrl1)),
+			 "the continuation was not ACKed");
+	zassert_equal(0u, count_channel_events(CH, RADIANT_WIRE_EVENT_TRANSFER_RX_FAILED));
+	zassert_equal(dropped, s->acq_exchange_dropped);
+
+	end_of_test();
+}
+
+/* The burst opened by the acquiring 0x8A, then abandoned by its sender:
+ * packet 0 as BURST_DATA sequence 0, then exactly one TRANSFER_RX_FAILED. */
+ZTEST(api, test_acquiring_on_a_burst_opener_then_abandoned_raises_rx_failed)
+{
+	const struct msg_rec *m;
+	uint16_t       dev;
+	radiant_time_t t;
+
+	open_wildcard_slave_of_type((uint8_t)RADIANT_WIRE_CHANNEL_TYPE_SLAVE);
+
+	t = air_acquiring(RADIANT_CTRL_BURST_OPEN_SEQ0, &dev);
+	/* Twenty repeated acknowledgements, ~66 ms, then the burst is over. */
+	fake_radio_advance_to(t + 100000u);
+	drain();
+
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH));
+	zassert_equal(1u, count_msgs((uint8_t)RADIANT_WIRE_MESG_BURST_DATA_ID));
+	m = nth_burst(0u);
+	zassert_not_null(m);
+	zassert_equal(0u, burst_seq_of(m));
+	zassert_equal(0u, count_msgs((uint8_t)RADIANT_WIRE_MESG_BROADCAST_DATA_ID));
+	zassert_equal(1u, count_channel_events(CH, RADIANT_WIRE_EVENT_TRANSFER_RX_FAILED),
+		      "an abandoned burst must raise RX_FAILED exactly once");
+
+	end_of_test();
+}
+
+/* The callback runs past the arm lead (an MPSL search frame can reach it
+ * ~23 ms late): the ACK slot cannot be reached, so the channel acquires and
+ * the message is dropped, unacknowledged and undelivered, and counted. */
+ZTEST(api, test_acquiring_on_acknowledged_data_too_late_to_ack_drops_it)
+{
+	const struct radiant_api_stats *s = radiant_api_stats_get();
+	uint16_t       dev;
+	uint32_t       dropped;
+	uint32_t       arms_tx;
+	radiant_time_t t;
+
+	open_wildcard_slave_of_type((uint8_t)RADIANT_WIRE_CHANNEL_TYPE_SLAVE);
+	dropped = s->acq_exchange_dropped;
+	arms_tx = fake_radio_stats()->arms_tx;
+
+	fake_radio_set_rx_frame_delay_us(RADIANT_TRANSFER_OPENER_REPLY_US + 1000u);
+	t = air_acquiring(RADIANT_CTRL_ACK_DATA_OPEN, &dev);
+	fake_radio_advance_to(t + RADIANT_TRANSFER_OPENER_REPLY_US + 3000u);
+	drain();
+	fake_radio_restore_delays();
+
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH),
+		      "a late acquiring frame must still acquire");
+	zassert_equal(0u, count_msgs((uint8_t)RADIANT_WIRE_MESG_ACKNOWLEDGED_DATA_ID),
+		      "an exchange that could not be ACKed was delivered");
+	zassert_equal(0u, count_msgs((uint8_t)RADIANT_WIRE_MESG_BROADCAST_DATA_ID),
+		      "the exchange went up as a broadcast");
+	zassert_equal(arms_tx, fake_radio_stats()->arms_tx,
+		      "something was transmitted for an unreachable ACK slot");
+	zassert_equal(dropped + 1u, s->acq_exchange_dropped,
+		      "the dropped exchange was not counted");
+
+	end_of_test();
+}
+
+/* A background scan reports each frame as its kind (Rev 5.1 section 9.5.4.5;
+ * api_scan_msg()). One frame of `ctrl` in the scan's window; returns how many
+ * data messages it produced and the last one in *out. */
+static uint32_t scan_hears(uint8_t ctrl, const struct msg_rec **out)
+{
+	const struct fake_radio_arm *w;
+	uint8_t  frame[FAKE_RADIO_AIR_FRAME_MAX];
+	uint8_t  len;
+	uint16_t dev;
+	uint32_t n = 0u;
+
+	open_background_scan_channel();
+	clear_msglog();
+	w = armed_search_window();
+	dev = (uint16_t)(0x0500u | (w->filters[0].wild_last ? 0x37u
+							    : w->filters[0].addr[2]));
+	len = fake_radio_build_ant_frame(frame, dev, 0x0Bu, 5u, peer_payload);
+	frame[6] = ctrl;
+	zassert_equal(RADIANT_RADIO_OK_RC,
+		      fake_radio_air_frame(w->t_open + 1000u, frame, len));
+	fake_radio_advance_past_close(w->t_close);
+	drain();
+	zassert_equal(RADIANT_CH_STATE_SEARCHING, radiant_channel_state_get(CH));
+
+	*out = NULL;
+	for (uint32_t i = 0u; i < n_msg && i < MSGLOG_MAX; i++) {
+		uint8_t id = msglog[i].id;
+
+		if (id == (uint8_t)RADIANT_WIRE_MESG_BROADCAST_DATA_ID ||
+		    id == (uint8_t)RADIANT_WIRE_MESG_ACKNOWLEDGED_DATA_ID ||
+		    id == (uint8_t)RADIANT_WIRE_MESG_BURST_DATA_ID) {
+			n++;
+			*out = &msglog[i];
+		}
+	}
+	return n;
+}
+
+ZTEST(api, test_a_scan_reports_a_broadcast_as_broadcast_data)
+{
+	const struct msg_rec *m;
+
+	zassert_equal(1u, scan_hears(RADIANT_CTRL_BROADCAST, &m));
+	zassert_equal((uint8_t)RADIANT_WIRE_MESG_BROADCAST_DATA_ID, m->id);
+	end_of_test();
+}
+
+ZTEST(api, test_a_scan_reports_acknowledged_data_as_acknowledged_data)
+{
+	const struct msg_rec *m;
+
+	zassert_equal(1u, scan_hears(RADIANT_CTRL_ACK_DATA_OPEN, &m));
+	zassert_equal((uint8_t)RADIANT_WIRE_MESG_ACKNOWLEDGED_DATA_ID, m->id,
+		      "0xAA reached the host as message 0x%02x", m->id);
+	zassert_true(m->len > 9u, "acknowledged data lost its extended data");
+	end_of_test();
+}
+
+ZTEST(api, test_a_scan_reports_a_burst_opener_as_burst_packet_0)
+{
+	const struct msg_rec *m;
+
+	zassert_equal(1u, scan_hears(RADIANT_CTRL_BURST_OPEN_SEQ0, &m));
+	zassert_equal((uint8_t)RADIANT_WIRE_MESG_BURST_DATA_ID, m->id,
+		      "0x8A reached the host as message 0x%02x", m->id);
+	zassert_equal(0u, burst_seq_of(m));
+	zassert_false(burst_last_of(m));
+	zassert_true(m->len > 9u, "burst packet 0 lost its extended data");
+	end_of_test();
+}
+
+/* In-slot burst packets: sequence 1 for the on-air sequence bit set, 2 for
+ * it clear, LAST from bit 5; no extended data on a continuation (7.1.1). */
+ZTEST(api, test_a_scan_reports_an_in_slot_burst_packet_with_its_sequence)
+{
+	static const struct {
+		uint8_t ctrl;
+		uint8_t seq;
+		bool    last;
+	} k[] = {
+		{ RADIANT_CTRL_BURST_SEQ1, 1u, false },
+		{ RADIANT_CTRL_BURST_SEQ0, 2u, false },
+		{ RADIANT_CTRL_BURST_LAST_SEQ1, 1u, true },
+		{ RADIANT_CTRL_BURST_LAST_SEQ0, 2u, true },
+	};
+
+	for (size_t i = 0; i < ARRAY_SIZE(k); i++) {
+		const struct msg_rec *m;
+
+		api_reset(false);
+		zassert_equal(1u, scan_hears(k[i].ctrl, &m), "ctrl 0x%02x",
+			      k[i].ctrl);
+		zassert_equal((uint8_t)RADIANT_WIRE_MESG_BURST_DATA_ID, m->id,
+			      "ctrl 0x%02x reached the host as message 0x%02x",
+			      k[i].ctrl, m->id);
+		zassert_equal(k[i].seq, burst_seq_of(m), "ctrl 0x%02x", k[i].ctrl);
+		zassert_equal(k[i].last, burst_last_of(m), "ctrl 0x%02x",
+			      k[i].ctrl);
+		zassert_equal(9u, m->len, "ctrl 0x%02x: a continuation carried "
+			      "extended data", k[i].ctrl);
+		end_of_test();
+	}
+}
+
+/* An ACK carries the acknowledger's buffer, not a message, and an unknown
+ * control byte is no message: neither is posted; both are counted. */
+ZTEST(api, test_a_scan_does_not_report_an_ack_or_an_unknown_frame)
+{
+	static const uint8_t ctrls[] = {
+		RADIANT_CTRL_ACK_LAST_SEQ0, /* 0xE2 */
+		RADIANT_CTRL_ACK_SEQ1,      /* 0xD2 */
+		0x2Au,                      /* unknown */
+	};
+	const struct radiant_api_stats *s = radiant_api_stats_get();
+
+	for (size_t i = 0; i < ARRAY_SIZE(ctrls); i++) {
+		const struct msg_rec *m;
+		uint32_t              unposted;
+
+		api_reset(false);
+		unposted = s->scan_unposted;
+		zassert_equal(0u, scan_hears(ctrls[i], &m),
+			      "ctrl 0x%02x reached the host", ctrls[i]);
+		zassert_equal(unposted + 1u, s->scan_unposted,
+			      "ctrl 0x%02x was not counted", ctrls[i]);
+		end_of_test();
+	}
 }
 
 /*

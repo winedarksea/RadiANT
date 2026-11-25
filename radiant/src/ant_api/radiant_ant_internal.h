@@ -152,6 +152,19 @@ struct radiant_api_stats {
 	/* Pending slave command sent from the frame that reacquired its
 	 * channel, rather than from a tracked frame. */
 	uint32_t xfer_pending_reacquired;
+	/* An acknowledged-data or burst opener (0x8A/0xAA) that acquired a
+	 * bidirectional channel when its acknowledgement could no longer be
+	 * armed (late callback, inexact timestamp, busy engine, or a carrier
+	 * that could not be released): the channel acquired, the message was
+	 * dropped unacknowledged, as a missed packet is (api_search_acquired()). */
+	uint32_t acq_exchange_dropped;
+	/* Frames a background scan heard and did not post: an acknowledgement
+	 * or an unknown control byte, which carry no message of their own. */
+	uint32_t scan_unposted;
+	/* Clean tracked frames not counted as heard because they did not decode
+	 * or decoded to RADIANT_MSG_UNKNOWN (api_tracked_frame()): not posted,
+	 * no re-anchor. */
+	uint32_t rx_undecoded;
 	uint32_t xfer_no_ack;
 	uint32_t xfer_bad_ack;
 	uint32_t xfer_radio_failed;

@@ -482,7 +482,9 @@ struct radiant_search_stats {
 	uint32_t permit_rejected;
 	/* Offers an ACQUIRE channel withheld because the frame was not a slot
 	 * opener (a slave reply, an ACK, an in-slot burst packet), which sits
-	 * 2.19 ms or a burst step off the master's grid. Counted per channel
+	 * 2.19 ms or a burst step off the master's grid, or had the slot bit
+	 * with no master's message kind (0x2A/0x4A/0x6A,
+	 * radiant_ctrl_is_master_opener()). Counted per channel
 	 * offered, like permit_rejected. SCAN channels are never counted. A
 	 * retried burst packet 0 carries the opener bit and is NOT caught here
 	 * (radiant_ctrl_is_slot_opener()). */

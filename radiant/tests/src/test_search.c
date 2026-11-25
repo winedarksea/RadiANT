@@ -1245,6 +1245,12 @@ ZTEST(radiant_search, test_acquire_does_not_claim_on_a_non_opener)
 		RADIANT_CTRL_ACK_LAST_SEQ0,   /* 0xE2 */
 		RADIANT_CTRL_BURST_LAST_SEQ0, /* 0xA2 */
 		RADIANT_CTRL_BURST_SEQ0,      /* 0x82 */
+		/* The slot bit with no master's message kind (b7 clear, b6
+		 * and/or b5 set): RADIANT_MSG_UNKNOWN, never transmitted.
+		 * radiant_ctrl_is_slot_opener() alone passed these. */
+		0x2Au,
+		0x4Au,
+		0x6Au,
 	};
 	const struct radiant_search_stats *st;
 
