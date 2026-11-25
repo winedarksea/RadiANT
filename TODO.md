@@ -42,7 +42,10 @@ Checks and decisions left over from work that has otherwise landed.
      endpoint for a new sensor. Restore a valid 2-byte value: the next bind
      retry (within 1 s) gets an id at or above it.
 - [ ] **Zwift shim key redaction end to end.** Run `ant_zwift_visible.py --dll`
-  on the bench against the redacting shim (sec review 2026-11-20).
+  on the bench against the redacting shim (sec review 2026-11-20). The
+  2026-11-24 Zwift rides do not cover it: their log ran at level 1, which
+  logs message ids only (none of the 33 MB holds key bytes). The masking
+  is level 2.
 - [ ] **Nordic report on MPSL assert 69:108.** A draft is in
   `archive/benchmarks/2026-11-15-assert-69108/nordic-report-draft.md`; posting
   it is your call. DevZone thread 128550 reports the same `69, 108` from
@@ -165,6 +168,20 @@ noticeably degrade primary functionality, such as receiving a heart rate strap.
 
 # TI (CC26xx)
 
+- [ ] **Possible: the first Zwift probe of the XDS110 auxiliary port stalls
+  the LaunchXL** (low; a hypothesis from two failed rides, 2026-11-23 and
+  2026-11-24 16:38). Both failed rides ran on a heavily loaded host, so this
+  is unconfirmed. The clean ride after a restart (16:49) passed.
+  - Zwift probes every COM port: it opens the XDS110 Auxiliary Data Port
+    (COM10), sets 115200 and writes `8a9a0800 "RideOn" 0204`, every 1.5-2 s,
+    starting at the same moment as the HR/power ASSIGN burst on COM11.
+  - In both failures COM10 first read 115190 baud, and that first
+    SET_LINE_CODING completed about 100 ms late in USBPcap, while the ANT
+    port's traffic stalled and the ch1 responses were lost. In both passes it
+    already read 115200. Host load can skew USBPcap timestamps and starve IN
+    URBs, so the two causes are not separated.
+  - Cheap test if it recurs: reset the XDS110, then ride on an idle host.
+    Workaround: open COM10 once at 115200 before Zwift, or disable COM10.
 - [ ] **The Pro Micro -> TI link loses 8-13 %; other links lose 0.25-4 %.**
   Unexplained. It is not RX buffering and not the masked pass
   (`archive/benchmarks/2026-11-16-b4-pair/gate_extra/`).
@@ -864,7 +881,8 @@ group.
   install (both checked before either is copied) and `-Uninstall` (foreign
   files kept and reported). `test_shim_log.py` refuses to run when a source
   is newer than `out/` or a DLL lacks the resource; `RADIANT_SHIM_OUT` points
-  it elsewhere. Rebuild-and-reinstall is the owner's step (not installed).
+  it elsewhere. Rebuilt and reinstalled 2026-11-24 (2026.11.24.2 in the
+  Zwift ride logs).
 - [x] **Zwift shim: the level-2 read dump is not masked.** `SI_Read`
   (`dsi_siusbxp.c` ~:318) logs raw hex, so a device that echoes (a console on
   another CP210x, which is what the unbound-port item allows) puts a
@@ -1022,6 +1040,11 @@ group.
   `ant_sim` HR #12345 type 0x15 at -600 ppm as the impostor, 480 s each. Ship
   430562b posted 8 impostor frames (2 s of following it); ship d94d07e posted
   0 of 2049. A +3000 ppm drift jumps the ~150 us guard and shows nothing.
+  Zwift on d94d07e (`captures/zwift-20261124-164925.pcap`): FE-C, named with a
+  wildcard type, tracked #52233 type 5 for the whole capture with no
+  GO_TO_SEARCH. Its 42 % loss came from the link: the Kicker was heard about
+  5 dB weaker than on 11-23 (-74 against -69 dBm) on the scan channel as well,
+  and its other device types never pass the address match.
 - [ ] **Acquisition and re-anchor accept any control byte.** `handle_ok()` and
   `api_search_acquired()` anchor on slave replies, ACKs and non-opener burst
   packets, and the tracked path sets `slot_heard` before discarding ACK types.
