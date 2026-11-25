@@ -881,8 +881,14 @@ group.
   closes, and restarts the window; repeated presses walk back. The treadmill
   HR floor read the bins backwards (10 nearest) and now relaxes 3 -> 10 -> off.
   Tests: test_self_policy, test_channel, test_search, test_event, test_api,
-  test_bridge_parser, treadmill hr_rx. Open: B4 calibration of the default
-  bin on Feather and L15; full native_sim twister run (Bluefin unreachable).
+  test_bridge_parser, treadmill hr_rx. Twister (cassandra) 9589/9589 on
+  d3f39f7. Host 0x71 on air PASS 2026-11-25
+  (`archive/benchmarks/2026-11-25-prox-search/`): 0/140 too-weak acquired,
+  140/140 strong acquired, one-shot and timeout-keeps 6/6, cap bit set, and a
+  far real HR strap never taken under bin 3 (30/30 went to the near one).
+  Default bin 3 kept; distance calibration was waived by the owner. Not on air:
+  the bridge's long press (needs a hand on the button) and fail-closed with no
+  RSSI (the TI always reports it).
 - [ ] **Owner decision: the RSSI field's byte 2 with proximity search off.**
   radiant sends `0x00`; AN16 RSSI Extended Information section 4.3.3 (and ANT
   MP Rev 5.1 section 7.1.1.2.3) give -128 (`0x80`) for "off". Kept at 0x00
