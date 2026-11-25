@@ -1082,6 +1082,18 @@ static void handle_ok(struct radiant_search *s, const struct radiant_rx_event *e
 		    (uint8_t)(ch->rf_plus1 - 1u) != s->cfg.rf_index) {
 			continue;
 		}
+		/* An ACQUIRE claim anchors the channel's slot clock on this
+		 * frame, so only a slot opener may make it. A slave reply or an
+		 * ACK sits 2.19 ms into the master's period and an in-slot burst
+		 * packet a burst step past it; claiming on one puts the channel
+		 * off the grid, and posts that frame to the host as its first
+		 * broadcast. Skipped before the claim and the permit call, so a
+		 * non-opener spends neither. SCAN reports every frame. */
+		if (ch->mode == RADIANT_SEARCH_MODE_ACQUIRE &&
+		    !radiant_ctrl_is_slot_opener(f.ctrl_byte)) {
+			s->stats.non_opener_skipped++;
+			continue;
+		}
 		if (ch->mode == RADIANT_SEARCH_MODE_ACQUIRE && acquire_claimed) {
 			continue;
 		}
