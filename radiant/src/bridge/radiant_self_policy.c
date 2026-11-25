@@ -128,3 +128,25 @@ uint8_t radiant_self_pick_evict(const struct radiant_self_evict_in *chans, uint8
 	}
 	return best;
 }
+
+uint8_t radiant_self_pick_evict_forced(const struct radiant_self_evict_in *chans, uint8_t n)
+{
+	uint8_t best = RADIANT_SELF_EVICT_NONE;
+	uint32_t best_seq = 0u;
+
+	if (chans == NULL) {
+		return RADIANT_SELF_EVICT_NONE;
+	}
+	for (uint8_t i = 0u; i < n; i++) {
+		/* bind_seq 0 is "no bind recorded": a binding this caller did
+		 * not make, which it has no order for. */
+		if (!chans[i].owned || !chans[i].bound || chans[i].bind_seq == 0u) {
+			continue;
+		}
+		if (chans[i].bind_seq > best_seq) {
+			best = i;
+			best_seq = chans[i].bind_seq;
+		}
+	}
+	return best;
+}

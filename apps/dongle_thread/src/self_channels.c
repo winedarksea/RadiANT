@@ -29,6 +29,15 @@
  * sensor that has been absent longest is EVICTED to make room (once per window
  * opening; a sensor being tracked is never evicted).
  *
+ * Two things keep the WRONG sensor from owning a channel. A discovering
+ * channel searches with ANT proximity search (CONFIG_ANT_DONGLE_PAIRING_PROX_BIN),
+ * so a neighbour's sensor across the room is not acquired at all; a pinned
+ * one searches at any distance. And holding the button down for
+ * CONFIG_ANT_DONGLE_PAIRING_LONG_PRESS_MS EVICTS the most recently bound
+ * sensor even while it transmits, keeps it from binding again for the rest of
+ * that window, and restarts the window; each further long press walks back
+ * one bind.
+ *
  * Every decision is a pure function in radiant/src/bridge/radiant_self_policy.c
  * (tested in radiant/tests/src/test_self_policy.c); this file keeps the radiant_ant_*
  * calls.
@@ -198,7 +207,12 @@ struct self_chan {
 	bool     open_pinned;   /* the current open is configure_pinned_and_open()'s */
 	bool     open_discover; /* the current open is a discovery search */
 	uint32_t last_tracking_ms; /* the last poll that saw it TRACKING its bound sensor */
+	/* Order of binding, from bind_counter: larger = bound later, 0 = no
+	 * binding of ours. What the long press evicts by. */
+	uint32_t bind_seq;
 };
+
+static uint32_t bind_counter;
 
 static struct self_chan self[SELF_N];
 
@@ -231,6 +245,12 @@ static uint8_t self_channel_index(uint8_t i)
  */
 static atomic_t window_until;
 
+/*
+ * Raised by the long press (long_press_fn()), taken - read and cleared in one
+ * step - by the polling thread. An atomic for the same reason window_until is.
+ */
+static atomic_t force_evict;
+
 static atomic_val_t window_deadline(void)
 {
 	uint32_t until = k_uptime_get_32() +
@@ -262,6 +282,27 @@ static const struct gpio_dt_spec pair_button =
 	GPIO_DT_SPEC_GET(DT_ALIAS(sw0), gpios);
 static struct gpio_callback pair_cb;
 
+static struct k_work_delayable long_press_work;
+
+/*
+ * The long press, CONFIG_ANT_DONGLE_PAIRING_LONG_PRESS_MS after the press
+ * edge. Runs on the system work queue, never in the ISR. It acts if the button
+ * is still held, so it fires at 3 s rather than waiting for a release edge,
+ * and a bounce on release cannot fake one. A bounce on the press restarts the
+ * delay (k_work_reschedule()), which only moves it a few milliseconds later.
+ * Like the ISR it decides nothing: it raises force_evict and restarts the
+ * window, and the polling thread does the rest.
+ */
+static void long_press_fn(struct k_work *work)
+{
+	ARG_UNUSED(work);
+
+	if (gpio_pin_get_dt(&pair_button) > 0) {
+		(void)atomic_set(&force_evict, 1);
+		(void)atomic_set(&window_until, window_deadline());
+	}
+}
+
 static void pair_pressed(const struct device *dev, struct gpio_callback *cb,
 			 uint32_t pins)
 {
@@ -269,10 +310,12 @@ static void pair_pressed(const struct device *dev, struct gpio_callback *cb,
 	ARG_UNUSED(cb);
 	ARG_UNUSED(pins);
 
-	/* ISR context. Only a timestamp is written; every decision that
-	 * follows is taken on the polling thread below, where an radiant_ant_* call
-	 * is legal. */
+	/* ISR context. Only a timestamp is written and a work item scheduled;
+	 * every decision that follows is taken on the polling thread below,
+	 * where an radiant_ant_* call is legal. */
 	(void)atomic_set(&window_until, window_deadline());
+	(void)k_work_reschedule(&long_press_work,
+				K_MSEC(CONFIG_ANT_DONGLE_PAIRING_LONG_PRESS_MS));
 }
 
 static void button_init(void)
@@ -284,6 +327,8 @@ static void button_init(void)
 			"this build");
 		return;
 	}
+
+	k_work_init_delayable(&long_press_work, long_press_fn);
 
 	rc = gpio_pin_configure_dt(&pair_button, GPIO_INPUT);
 	if (rc == 0) {
@@ -298,7 +343,8 @@ static void button_init(void)
 
 	gpio_init_callback(&pair_cb, pair_pressed, BIT(pair_button.pin));
 	(void)gpio_add_callback(pair_button.port, &pair_cb);
-	LOG_INF("pairing button ready");
+	LOG_INF("pairing button ready (hold %d ms to evict the newest paired "
+		"sensor)", CONFIG_ANT_DONGLE_PAIRING_LONG_PRESS_MS);
 }
 #else
 static void button_init(void)
@@ -448,6 +494,66 @@ static void log_assign_refusal(uint8_t ch, int res, radiant_ant_err_t rc,
 #define SELF_ID_LIST_MAX 4u
 
 /*
+ * Devices a long press evicted while the current window has been open. Each
+ * is kept from binding again until the window closes: on the discovery
+ * exclusion list (exclude_pinned()) and, as the backstop, in try_bind(). A
+ * long press restarts the window, so a second one inside it keeps the first
+ * eviction too. Written and read by the polling thread only.
+ *
+ * SELF_ID_LIST_MAX entries, the oldest overwritten. With the shipping two
+ * self channels the exclusion list then holds at most one pinned device and
+ * three evicted ones, all within its four; a build with more channels can
+ * overflow it, and try_bind() catches what the list could not hold.
+ */
+struct self_evicted {
+	uint16_t devnum;
+	uint8_t  devtype;
+	uint8_t  trans;
+};
+
+static struct self_evicted evicted[SELF_ID_LIST_MAX];
+static uint8_t evicted_n;    /* valid entries, at most SELF_ID_LIST_MAX */
+static uint8_t evicted_next; /* the slot the next eviction overwrites */
+
+static void evicted_remember(const struct radiant_binding *b)
+{
+	evicted[evicted_next].devnum = b->devnum;
+	evicted[evicted_next].devtype = b->devtype;
+	evicted[evicted_next].trans = b->trans_type;
+	evicted_next = (uint8_t)((evicted_next + 1u) % SELF_ID_LIST_MAX);
+	if (evicted_n < SELF_ID_LIST_MAX) {
+		evicted_n++;
+	}
+}
+
+static bool evicted_holds(uint16_t devnum, uint8_t devtype, uint8_t trans)
+{
+	for (uint8_t k = 0u; k < evicted_n; k++) {
+		if (evicted[k].devnum == devnum && evicted[k].devtype == devtype &&
+		    evicted[k].trans == trans) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool exclude_add(uint8_t ch, uint8_t n, uint16_t devnum, uint8_t devtype,
+			uint8_t trans)
+{
+	/* Wire order: [devnum_lo, devnum_hi, devtype, trans_type]. */
+	uint8_t id[4] = {
+		(uint8_t)(devnum & 0xFFu), (uint8_t)(devnum >> 8), devtype, trans,
+	};
+	radiant_ant_err_t rc = radiant_ant_id_list_add(ch, id, n);
+
+	if (rc != 0u) {
+		LOG_WRN("channel %u exclusion list add %u: %u", ch, n, rc);
+		return false;
+	}
+	return true;
+}
+
+/*
  * Give a discovering channel an EXCLUSION list of the devices bound to the
  * other self channels, so its wildcard search cannot acquire them.
  *
@@ -487,7 +593,6 @@ static void exclude_pinned(uint8_t ch)
 		uint8_t other = self_channel_index(j);
 		uint32_t source;
 		const struct radiant_binding *b;
-		uint8_t id[4];
 
 		if (other == ch) {
 			continue;
@@ -514,15 +619,16 @@ static void exclude_pinned(uint8_t ch)
 			break;
 		}
 
-		/* Wire order: [devnum_lo, devnum_hi, devtype, trans_type]. */
-		id[0] = (uint8_t)(b->devnum & 0xFFu);
-		id[1] = (uint8_t)(b->devnum >> 8);
-		id[2] = b->devtype;
-		id[3] = b->trans_type;
-		rc = radiant_ant_id_list_add(ch, id, n);
-		if (rc != 0u) {
-			LOG_WRN("channel %u exclusion list add %u: %u", ch, n,
-				rc);
+		if (!exclude_add(ch, n, b->devnum, b->devtype, b->trans_type)) {
+			break;
+		}
+		n++;
+	}
+
+	/* Then what a long press evicted in this window (see `evicted`). */
+	for (j = 0u; j < evicted_n && n < SELF_ID_LIST_MAX; j++) {
+		if (!exclude_add(ch, n, evicted[j].devnum, evicted[j].devtype,
+				 evicted[j].trans)) {
 			break;
 		}
 		n++;
@@ -532,6 +638,42 @@ static void exclude_pinned(uint8_t ch)
 	if (rc != 0u) {
 		LOG_WRN("channel %u exclusion list (%u entries): %u - a pinned "
 			"device may be found again and rotated away", ch, n, rc);
+	}
+}
+
+/*
+ * Proximity search on a discovering channel: only a sensor heard at least as
+ * strongly as CONFIG_ANT_DONGLE_PAIRING_PROX_BIN (or, when set,
+ * CONFIG_ANT_DONGLE_PAIRING_PROX_DBM) is acquired, so the one held next to the
+ * dongle binds and the next bike's does not. Set on EVERY discovery open:
+ * ANT proximity search is one-shot (ANT Message Protocol Rev 5.1, section
+ * 6.4), so an acquisition clears it - including one this file then refuses
+ * and rotates away from - while a search timeout keeps it.
+ *
+ * Not fatal when refused - the window still works, it just binds the first
+ * device heard, near or far - but said as an error, once, because a user who
+ * set the bin is relying on it: a backend with no RSSI on its search frames
+ * refuses rather than store a filter it cannot run.
+ */
+static void discover_prox(uint8_t ch)
+{
+	static bool refusal_logged;
+	/* The custom form is Nordic's C-API threshold 0x80 with a positive
+	 * magnitude: -60 dBm is passed as 60 (radiant_ant.h). */
+	uint8_t threshold = (CONFIG_ANT_DONGLE_PAIRING_PROX_DBM != 0)
+				    ? 0x80u
+				    : (uint8_t)CONFIG_ANT_DONGLE_PAIRING_PROX_BIN;
+	uint8_t custom = (uint8_t)(-CONFIG_ANT_DONGLE_PAIRING_PROX_DBM);
+	radiant_ant_err_t rc;
+
+	rc = radiant_ant_prox_search_set(ch, threshold, custom);
+	if (rc != 0u && !refusal_logged) {
+		refusal_logged = true;
+		LOG_ERR("channel %u proximity search (bin %u, custom %d dBm) "
+			"refused: %u - this backend cannot enforce it, so the "
+			"pairing window will bind the FIRST device heard, near or "
+			"far", ch, (unsigned int)CONFIG_ANT_DONGLE_PAIRING_PROX_BIN,
+			CONFIG_ANT_DONGLE_PAIRING_PROX_DBM, rc);
 	}
 }
 
@@ -589,6 +731,8 @@ static int configure_and_open(uint8_t ch, const struct self_profile *p)
 	 * one state the list calls accept. */
 	exclude_pinned(ch);
 
+	discover_prox(ch);
+
 	rc = radiant_ant_channel_open(ch);
 	if (rc != 0u) {
 		LOG_WRN("channel %u open: %u", ch, rc);
@@ -596,8 +740,9 @@ static int configure_and_open(uint8_t ch, const struct self_profile *p)
 	}
 
 	LOG_INF("self channel %u searching for %s (devtype 0x%02x, period %u, "
-		"wildcard device number)", ch, p->name, p->device_type,
-		p->period_counts);
+		"wildcard device number, proximity bin %u)", ch, p->name,
+		p->device_type, p->period_counts,
+		(unsigned int)CONFIG_ANT_DONGLE_PAIRING_PROX_BIN);
 	return 0;
 }
 
@@ -700,6 +845,16 @@ static int configure_pinned_and_open(uint8_t i, const struct radiant_binding *b)
 	if (rc != 0u) {
 		LOG_WRN("channel %u id list off: %u", ch, rc);
 	}
+	/* And no proximity gate. A paired sensor must be found again at any
+	 * distance - the rider who walks the bike to the far side of the room
+	 * is still the rider. Mostly redundant: proximity search is one-shot,
+	 * so the acquisition this channel bound from has already cleared it.
+	 * Kept as cheap insurance against a backend that does not clear it
+	 * (and a bind made some other way). */
+	rc = radiant_ant_prox_search_set(ch, 0u, 0u);
+	if (rc != 0u) {
+		LOG_WRN("channel %u proximity off: %u", ch, rc);
+	}
 	rc = radiant_ant_channel_open(ch);
 	if (rc != 0u) {
 		LOG_WRN("channel %u open: %u", ch, rc);
@@ -731,6 +886,7 @@ static void release_binding(uint8_t i)
 	uint8_t ch = self_channel_index(i);
 	uint32_t source = ant_bridge_channel_source(ch);
 
+	self[i].bind_seq = 0u;
 	ant_bridge_channel_unbind(ch);
 	if (source != RADIANT_BINDING_NONE) {
 		(void)radiant_binding_unbind(source);
@@ -796,6 +952,16 @@ static bool try_bind(uint8_t ch)
 	 * past the list's four entries, or a backend that refused the list.
 	 * The pinned channel gets it back; this one moves on (false).
 	 */
+	/* A device a long press evicted in this window does not come straight
+	 * back. exclude_pinned() keeps the search off it when the list has
+	 * room; this is the backstop, and it rotates the same way. */
+	if (evicted_holds(devnum, devtype, trans)) {
+		LOG_INF("channel %u is tracking device %u, evicted by a long press "
+			"in this window - not binding it, rotating instead", ch,
+			devnum);
+		return false;
+	}
+
 	existing = radiant_binding_find(devnum, devtype, trans);
 	if (existing != RADIANT_BINDING_NONE) {
 		uint8_t i;
@@ -998,6 +1164,7 @@ static void act(uint8_t i, enum radiant_self_action a, bool booting)
 		} else if (ant_bridge_channel_source(ch) != RADIANT_BINDING_NONE) {
 			/* Bound: close, and the next poll reopens it pinned. */
 			self[i].last_tracking_ms = k_uptime_get_32();
+			self[i].bind_seq = ++bind_counter;
 			close_one(i);
 		}
 		break;
@@ -1089,6 +1256,7 @@ static void self_thread_fn(void *a, void *b, void *c)
 		uint32_t until;
 		uint32_t gen;
 		uint8_t pick;
+		uint8_t forced = RADIANT_SELF_EVICT_NONE;
 
 		if (self_key_poll(&gen)) {
 			/* A host reset wiped every channel. Whatever the host
@@ -1149,6 +1317,11 @@ static void self_thread_fn(void *a, void *b, void *c)
 			last_window = until;
 			opened = win;
 		}
+		/* A long press's evictions last until the window closes. */
+		if (!win) {
+			evicted_n = 0u;
+			evicted_next = 0u;
+		}
 
 		for (i = 0u; i < SELF_N; i++) {
 			uint8_t status = 0u;
@@ -1168,11 +1341,45 @@ static void self_thread_fn(void *a, void *b, void *c)
 			evict[i].tracking = !self[i].owned ||
 					    radio[i] == RADIANT_SELF_RADIO_TRACKING;
 			evict[i].last_tracking_ms = self[i].last_tracking_ms;
+			evict[i].owned = self[i].owned;
+			evict[i].bind_seq = self[i].bind_seq;
 		}
 
-		pick = opened ? radiant_self_pick_evict(evict, SELF_N, win, false, now)
-			      : RADIANT_SELF_EVICT_NONE;
-		if (opened && pick == RADIANT_SELF_EVICT_NONE) {
+		/*
+		 * The long press: evict the newest bind, tracking or not, and
+		 * keep it out for the rest of the window. It replaces the
+		 * ordinary pick on this poll - it has just freed a channel, so
+		 * that pick has nothing to do, and the window restart that came
+		 * with it would otherwise read as a fresh press and take a
+		 * second, absent sensor too.
+		 */
+		if (atomic_cas(&force_evict, 1, 0)) {
+			forced = radiant_self_pick_evict_forced(evict, SELF_N);
+			if (forced == RADIANT_SELF_EVICT_NONE) {
+				LOG_INF("long press: no paired sensor to evict");
+			} else {
+				const struct radiant_binding *fb = radiant_binding_get(
+					ant_bridge_channel_source(self_channel_index(forced)));
+
+				if (fb != NULL) {
+					evicted_remember(fb);
+				}
+				LOG_INF("long press: evicting device %u (type 0x%02x) "
+					"from self channel %u, the newest pairing; it "
+					"cannot pair again in this window",
+					fb != NULL ? fb->devnum : 0u,
+					fb != NULL ? fb->devtype : 0u,
+					self_channel_index(forced));
+				release_binding(forced);
+				close_one(forced);
+			}
+		}
+
+		pick = (opened && forced == RADIANT_SELF_EVICT_NONE)
+			       ? radiant_self_pick_evict(evict, SELF_N, win, false, now)
+			       : RADIANT_SELF_EVICT_NONE;
+		if (opened && forced == RADIANT_SELF_EVICT_NONE &&
+		    pick == RADIANT_SELF_EVICT_NONE) {
 			bool full = true;
 
 			for (i = 0u; i < SELF_N; i++) {
@@ -1196,6 +1403,10 @@ static void self_thread_fn(void *a, void *b, void *c)
 				(now - self[pick].last_tracking_ms) / 1000u);
 			release_binding(pick);
 			close_one(pick);
+		}
+
+		if (forced != RADIANT_SELF_EVICT_NONE) {
+			pick = forced;
 		}
 
 		for (i = 0u; i < SELF_N; i++) {

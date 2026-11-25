@@ -857,12 +857,39 @@ group.
   strap still gets WORN), `test_rules.c` (WORN skipped for bound 0x19 and
   0x99, kept unbound and for 0x78), `matter_storage` (formatter). Red on
   master first. Residual: on-air Matter check is an owner step.
-- [ ] **Bridge pairing window binds the first device heard, and a transmitter
+- [x] **Bridge pairing window binds the first device heard, and a transmitter
   that keeps sending cannot be evicted.** `try_bind()` (`self_channels.c`
   ~:758) has no RSSI or proximity threshold, and `radiant_self_pick_evict()`
   skips tracking channels. Recovery is a power cycle, and on the Matter image
   the endpoints persist. Fix: a proximity threshold for discovery, and a
   deliberate "evict even if tracking" gesture such as a long press.
+  *Done in code 2026-11-24 (wip/s24-bridge-prox); BENCH PENDING (plan B4).*
+  radiant now enforces `0x71` proximity search at the ACQUIRE claim
+  (`radiant_search_id_filter.min_rssi_dbm`, `stats.prox_rejected`; no RSSI
+  fails closed; SCAN and tracking ignore it), one-shot as in ANT (cleared on
+  acquisition, kept on a search timeout). Bins 1..10, 1 closest, at Nordic's
+  approximate nRF51 levels -44..-80 dBm in 4 dB steps; 11+ refused; the
+  C-API custom form `0x80` + magnitude is `[inferred]`. A three-byte host
+  `0x71` is now refused (the protocol has no custom byte). The capability bit
+  and the setter follow `caps.has_rssi`. The RSSI field's byte 2 reports the
+  threshold in force. Self channels: every discovery open sets
+  `CONFIG_ANT_DONGLE_PAIRING_PROX_BIN` (provisional default 3, about -52 dBm)
+  or `_PROX_DBM`; a pinned open sets 0. A long press
+  (`CONFIG_ANT_DONGLE_PAIRING_LONG_PRESS_MS`, 3000) evicts the most recently
+  bound owned sensor even while it tracks (`radiant_self_pick_evict_forced()`),
+  keeps it off the exclusion list and out of `try_bind()` until the window
+  closes, and restarts the window; repeated presses walk back. The treadmill
+  HR floor read the bins backwards (10 nearest) and now relaxes 3 -> 10 -> off.
+  Tests: test_self_policy, test_channel, test_search, test_event, test_api,
+  test_bridge_parser, treadmill hr_rx. Open: B4 calibration of the default
+  bin on Feather and L15; full native_sim twister run (Bluefin unreachable).
+- [ ] **Owner decision: the RSSI field's byte 2 with proximity search off.**
+  radiant sends `0x00`; AN16 RSSI Extended Information section 4.3.3 (and ANT
+  MP Rev 5.1 section 7.1.1.2.3) give -128 (`0x80`) for "off". Kept at 0x00
+  (`RSSI_THRESHOLD_CFG_NONE`, `radiant_event.c`) because changing it alters
+  every RSSI tail hosts have seen; `tools/ant_conformance.py` compares no
+  received-data tails, so nothing pins either value. A Garmin ANTUSB-m
+  (supports proximity search, MP p. 58) would show the reference behaviour.
 - [x] **Zwift shim installer cannot replace an older shim, and the installed
   one predates key masking.** `scripts/zwift_ant_shim.ps1` (~:143) treats "same
   file length" as "ours" and refuses anything else, and `-Uninstall` (~:81)

@@ -314,3 +314,94 @@ ZTEST(self_policy, test_eviction_orders_across_an_uptime_wrap)
 
 	zassert_equal(0u, radiant_self_pick_evict(c, 2u, true, false, 0x00001000u));
 }
+
+/* ---------------------------------------------------------------------------
+ * Forced eviction (the long press)
+ * ---------------------------------------------------------------------------
+ */
+
+ZTEST(self_policy, test_forced_eviction_takes_the_newest_bind_even_tracking)
+{
+	struct radiant_self_evict_in c[3] = {
+		{ .bound = true, .tracking = true, .owned = true, .bind_seq = 4u },
+		{ .bound = true, .tracking = true, .owned = true, .bind_seq = 9u },
+		{ .bound = true, .tracking = false, .owned = true, .bind_seq = 2u },
+	};
+
+	/* The ordinary pick refuses a tracking sensor; this one does not. */
+	zassert_equal(1u, radiant_self_pick_evict_forced(c, 3u));
+}
+
+ZTEST(self_policy, test_forced_eviction_never_takes_a_host_channel)
+{
+	struct radiant_self_evict_in c[2] = {
+		/* The host took this number after a reset: bound as far as the
+		 * caller's map says, with the newest sequence, and not ours. */
+		{ .bound = true, .tracking = true, .owned = false, .bind_seq = 7u },
+		{ .bound = true, .tracking = true, .owned = true,  .bind_seq = 3u },
+	};
+
+	zassert_equal(1u, radiant_self_pick_evict_forced(c, 2u));
+
+	c[1].owned = false;
+	zassert_equal(RADIANT_SELF_EVICT_NONE, radiant_self_pick_evict_forced(c, 2u));
+}
+
+ZTEST(self_policy, test_forced_eviction_picks_nothing_when_nothing_is_bound)
+{
+	struct radiant_self_evict_in c[2] = {
+		{ .bound = false, .owned = true, .bind_seq = 0u },
+		/* A bound flag with no recorded bind is not one of ours to
+		 * order: nothing to pick. */
+		{ .bound = true, .owned = true, .bind_seq = 0u },
+	};
+
+	zassert_equal(RADIANT_SELF_EVICT_NONE, radiant_self_pick_evict_forced(c, 2u));
+	zassert_equal(RADIANT_SELF_EVICT_NONE, radiant_self_pick_evict_forced(c, 0u));
+	zassert_equal(RADIANT_SELF_EVICT_NONE, radiant_self_pick_evict_forced(NULL, 2u));
+}
+
+ZTEST(self_policy, test_repeated_forced_evictions_walk_back_one_bind_at_a_time)
+{
+	struct radiant_self_evict_in c[3] = {
+		{ .bound = true, .tracking = true, .owned = true, .bind_seq = 1u },
+		{ .bound = true, .tracking = true, .owned = true, .bind_seq = 3u },
+		{ .bound = true, .tracking = true, .owned = true, .bind_seq = 2u },
+	};
+	uint8_t pick;
+
+	/* What the caller does with each pick: release_binding() clears both. */
+	pick = radiant_self_pick_evict_forced(c, 3u);
+	zassert_equal(1u, pick);
+	c[pick].bound = false;
+	c[pick].bind_seq = 0u;
+
+	pick = radiant_self_pick_evict_forced(c, 3u);
+	zassert_equal(2u, pick);
+	c[pick].bound = false;
+	c[pick].bind_seq = 0u;
+
+	pick = radiant_self_pick_evict_forced(c, 3u);
+	zassert_equal(0u, pick);
+	c[pick].bound = false;
+	c[pick].bind_seq = 0u;
+
+	zassert_equal(RADIANT_SELF_EVICT_NONE, radiant_self_pick_evict_forced(c, 3u));
+}
+
+ZTEST(self_policy, test_forced_eviction_ignores_the_ordinary_picks_inputs)
+{
+	/* No window and every channel tracking: the ordinary pick says NONE.
+	 * The forced pick takes no window and no absence time - the hold is
+	 * the request. */
+	struct radiant_self_evict_in c[2] = {
+		{ .bound = true, .tracking = true, .last_tracking_ms = 0u,
+		  .owned = true, .bind_seq = 5u },
+		{ .bound = true, .tracking = true, .last_tracking_ms = 0u,
+		  .owned = true, .bind_seq = 6u },
+	};
+
+	zassert_equal(RADIANT_SELF_EVICT_NONE,
+		      radiant_self_pick_evict(c, 2u, false, false, 100000u));
+	zassert_equal(1u, radiant_self_pick_evict_forced(c, 2u));
+}
