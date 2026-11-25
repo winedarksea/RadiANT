@@ -210,6 +210,44 @@ class MultiChannelReplay(unittest.TestCase):
 
 
 @unittest.skipIf(ant_verify is None, "pyusb is not installed")
+class AnEmptyReplayFails(unittest.TestCase):
+    """A capture with no packets measured nothing, so it cannot pass.
+
+    Every pass check is "all channels pass", and all() of no channels is
+    true: before this fault existed an empty capture reported PASS.
+    """
+
+    def run_main(self, path: str, *extra: str) -> tuple[int, str]:
+        # main() directly, not replay(): the exit code is the point here.
+        argv = ["ant_verify.py", "--replay", path, *extra]
+        out, err = io.StringIO(), io.StringIO()
+        with (contextlib.redirect_stdout(out), contextlib.redirect_stderr(err),
+                unittest.mock.patch.object(sys, "argv", argv)):
+            rc = ant_verify.main()
+        return rc, out.getvalue()
+
+    def setUp(self):
+        holder = tempfile.TemporaryDirectory()
+        self.addCleanup(holder.cleanup)
+        self.path = os.path.join(holder.name, "empty.antcap")
+        ap.write_capture(self.path, [])
+
+    def test_the_json_fails_and_names_the_fault(self):
+        rc, out = self.run_main(self.path, "--json", "-")
+        result = json.loads(out)
+        self.assertEqual(rc, 1)
+        self.assertFalse(result["pass"])
+        self.assertIn("replay holds no sensor streams",
+                      result["window_faults"])
+
+    def test_the_text_report_fails_and_names_the_fault(self):
+        rc, out = self.run_main(self.path)
+        self.assertEqual(rc, 1)
+        self.assertIn("! replay holds no sensor streams", out)
+        self.assertIn("FAILED", out)
+
+
+@unittest.skipIf(ant_verify is None, "pyusb is not installed")
 class ChannelsAreNotInventedOnReplay(unittest.TestCase):
     """A capture carries no channel numbers, and none are guessed."""
 
