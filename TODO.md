@@ -26,9 +26,18 @@ Checks and decisions left over from work that has otherwise landed.
   `publish` hardening below). `publish` now runs in a `release` environment,
   which the first tag run creates *unprotected*: add a required reviewer and a
   `v*`-tags-only deployment rule. Also turn on immutable releases and add a tag
-  ruleset for `v*` (restrict creation and deletion). After the next tag, run
-  `gh attestation verify <image> -R winedarksea/RadiANT` on one downloaded
-  image.
+  ruleset for `v*` (restrict creation, updates and deletion). The in-workflow
+  checks (`verify-tag`, the tag re-check in `publish`) run from the tagged
+  commit, so this ruleset and the environment reviewer are the real control:
+  confirm both before tagging v1.3.0.
+  After the v1.3.0 tag run publishes, download one image and run
+  `gh attestation verify <image> -R winedarksea/RadiANT --signer-workflow winedarksea/RadiANT/.github/workflows/release.yml --source-ref refs/tags/v1.3.0`:
+  it must pass. **Negative check:** the same command on the same image with
+  `--source-ref refs/tags/v1.2.0` must reject it. If it passes,
+  `--source-ref` is not enforced or wants another ref form (the gh manual
+  gives none), and `SECURITY.md`'s documented check must be fixed.
+- [ ] **Release notes.** `publish` creates the release with no body: paste the
+  `[1.3.0]` section of `CHANGELOG.md` into the GitHub release by hand.
 - [ ] **Matter endpoint ids, on an L15 Matter image** (sec reviews 2026-11-20,
   2026-11-21):
   1. Bind 3 sensors, unbind the newest, reboot, bind one: it must get a new id.
@@ -53,10 +62,15 @@ Checks and decisions left over from work that has otherwise landed.
 - [ ] **Hardware test round on a Mac.** Most host testing runs on Windows here
   and Linux (Bluefin); repeat the device tests from macOS.
 - [ ] **Windows: a host tool that dies mid-frame swallowing the next tool's
-  first command** (low). Probably fixed by the 2026-11-16 host-frame parser
-  change (LEN 39-255 dropped, `0xA4` resync), but never re-tested. Re-run the
-  reopen-without-bus-reset test (0 of 10 before) and drop the CHANGELOG known
-  issue if it passes.
+  first command** (low, firmware). Re-tested 2026-11-25
+  (`tools/bench_midframe_reopen.py`,
+  `archive/benchmarks/2026-11-25-release-1.3.0/`): a stale frame cut at its
+  checksum byte is fixed by the `0xA4` resync (1.3.0 10/10, v1.2.0 0/10), but
+  one cut inside the payload (4 bytes, LEN 2) still swallows the next command
+  on both (0/10). The host parser has no inter-byte timeout; a stale partial
+  frame should be dropped after a gap (a few ms at USB rates). Still a
+  CHANGELOG known issue. Not measured: whether the command after the
+  swallowed one is answered.
 
 # MPSL
 
@@ -1219,9 +1233,12 @@ group.
   invalid values not echoed; `SI_SetTimeouts` clamps the read timeout to
   1..60000 ms (0 used to mean forever); `SECURITY.md` "The Zwift shim" section. A `SHIM_TEST_PIPES` build in
   `out/test/` (never installed) keeps the named-pipe tests.
-- [ ] **udev rule.** The driver-unbind line in `host/linux/70-radiant-ant.rules`
+- [x] **udev rule.** The driver-unbind line in `host/linux/70-radiant-ant.rules`
   matches vendor 0fcf with no product filter, wider than the three access
   lines; add the product ids and `ENV{ID_MM_DEVICE_IGNORE}="1"`.
+  *Done 2026-11-25 (wip/s25-host-fixes, fb5914d):* unbind limited to
+  `1009|1008|1004`, the three access lines set `ID_MM_DEVICE_IGNORE`;
+  `udevadm verify` passes. Not tried on a device (Bluefin unreachable).
 - [ ] **Release provenance.** Add `actions/attest-build-provenance` in
   `publish` only, which covers the "attacker who can write to the release"
   case `SECURITY.md` lists as unaddressed, and a `github-actions` dependabot
