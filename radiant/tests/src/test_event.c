@@ -406,6 +406,31 @@ ZTEST(radiant_event, test_ext_all_three_fields_in_order)
 	zassert_equal(0x80u, out[9]);
 }
 
+/* Proximity search on: byte 2 of the RSSI field is the threshold in force, a
+ * signed dBm (ANT MP Rev 5.1 7.1.1.2.3, AN16 4.3.3). Off it stays 0x00. */
+ZTEST(radiant_event, test_ext_rssi_byte_two_is_the_proximity_threshold)
+{
+	struct radiant_event_ext ext = mk_ext();
+	uint8_t              out[RADIANT_EVENT_EXT_MAX];
+	int                  n;
+
+	ext.prox_dbm = -52;
+	n = radiant_event_build_ext(
+		(uint8_t)RADIANT_WIRE_LIB_CONFIG_MESG_OUT_INC_RSSI, &ext, out,
+		sizeof(out));
+	zassert_equal(4, n);
+	zassert_equal((uint8_t)RADIANT_WIRE_EXT_FLAG_RSSI, out[0]);
+	zassert_equal(0xEFu, out[2]);
+	zassert_equal((uint8_t)(int8_t)-52, out[3]);
+
+	ext.prox_dbm = 0;
+	n = radiant_event_build_ext(
+		(uint8_t)RADIANT_WIRE_LIB_CONFIG_MESG_OUT_INC_RSSI, &ext, out,
+		sizeof(out));
+	zassert_equal(4, n);
+	zassert_equal(0x00u, out[3]);
+}
+
 ZTEST(radiant_event, test_ext_device_id_only)
 {
 	struct radiant_event_ext ext = mk_ext();

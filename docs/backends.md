@@ -1139,6 +1139,7 @@ expensive than starting at 32.
 |---|---|---|
 | Simultaneous channels | 8 configured (`CONFIG_ANT_TOTAL_CHANNELS_ALLOCATED`), **15 maximum** (`MAX_ANT_CHANNELS`) | **32** |
 | Background scan mode | advertised **off**, not implemented | **on** |
+| Proximity search (`0x71`) | native (`ant_prox_search_set`), Nordic's bins | **on** where `caps.has_rssi` (nRF, cc26xx); refused and not advertised on a radio without RSSI (the null backend) |
 
 32 is the serial protocol's natural ceiling — the burst header uses the low
 5 bits for the channel number. At 4 Hz with ~400 µs windows, 8 channels is 4.8 %
@@ -1195,6 +1196,17 @@ transcript still records `MESG_OPEN_RX_SCAN_MODE` as excluded, deliberately —
 see `tools/ant_conformance.py`'s `EXCLUDED` list — because opening a real
 scanning channel puts the radio on air and breaks the transcript's
 determinism, independent of whether the message is implemented.
+
+**Proximity search, as of 2026-11-24.** `radiant` enforces `0x71` at the
+ACQUIRE claim in `radiant_search.c` (`radiant_search_id_filter.min_rssi_dbm`,
+counted in `stats.prox_rejected`), with Nordic's approximate nRF51 bin levels
+(table in [`ant-serial-protocol.md`](ant-serial-protocol.md#proximity-search-0x71)),
+and clears it on acquisition as ANT does. The capability bit and the setter
+follow `caps.has_rssi`, so the advertisement and the filter cannot disagree.
+The two stacks do not share a bin table: sdk-ant's bins are its own, and their
+levels are not published beyond Nordic's approximate figures, so a bin is
+"about the same distance" on both and not more. Before this date `radiant`
+refused every non-zero threshold and did not advertise the bit.
 
 The optional features below are the other axis: what exists past the messages a
 fitness app sends. The answer is a backend property too — sdk-ant can do

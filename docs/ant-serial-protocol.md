@@ -178,6 +178,57 @@ Two settings matter in practice:
 Sending `0x6E` with a zero configuration byte clears all of them; there is no
 separate clear message on the wire.
 
+The RSSI field is three bytes: measurement type (`0x20` = dBm), the RSSI as a
+signed dBm, and the **threshold configuration value**, the proximity threshold
+in force as a signed dBm (ANT Message Protocol and Usage Rev 5.1, section
+7.1.1.2.3; AN16 RSSI Extended Information, section 4.3.3). With proximity
+search off, `radiant` sends `0x00` there. The ANT documents give -128 (`0x80`)
+for "off"; that difference predates proximity search here and is an open owner
+decision, so it is not changed. `tools/ant_conformance.py` does not compare
+received-data tails, so nothing on the bench pins either value.
+
+## Proximity search (`0x71`)
+
+`MESG_PROX_SEARCH_CONFIG` is `[channel, threshold]` in the Message Protocol
+(Rev 5.1, section 9.5.2.22), which defines no third byte. The bridge also
+accepts `[channel, threshold, custom]`, as it has since build 1: hosts that
+model Nordic's API send Nordic's custom threshold there. The third byte is
+used only with threshold `0x80` and ignored with any other threshold; a
+two-byte `0x80` arrives with custom 0 and is refused.
+
+- **threshold 0** turns it off. **1..10** are bins, **1 the closest**
+  (strongest signal). A bin accepts any frame at or above its level. 11 and up
+  are refused (`INVALID_PARAMETER_PROVIDED`); the protocol gives the range as
+  0..10 and publishes nothing for anything else, so refusing is this stack's
+  choice.
+- **One-shot** (Rev 5.1 sections 6.4 and 9.5.2.22; AN12 Proximity Search,
+  section 4): a successful acquisition clears the threshold, a search timeout
+  keeps it, and a background-scanning channel keeps it. A host re-sends `0x71`
+  before every search that needs it. Tracking never filters on it: once
+  acquired, distance does not matter.
+- It does not apply to continuous scanning (Rev 5.1, section 6.4), and
+  `radiant` enforces it at the ACQUIRE claim only. A frame below the threshold,
+  or one with no RSSI at all, cannot acquire the channel and does not use up
+  the frame for another searching channel.
+- The capability bit (`advanced_options_2`, `0x10`) is set, and a non-zero
+  threshold is accepted, only on a radio that reports RSSI on search frames.
+  Elsewhere the threshold is refused rather than stored and never run.
+
+The levels `radiant` uses for the bins are Nordic's published approximate
+nRF51 figures (S212 SoftDevice API documentation, `PROXIMITY_THRESHOLD_1..10`).
+The Message Protocol (section 6.4) publishes no table and says the bins do not
+map to distances, so treat these as a radio's approximate levels, not a
+calibrated range:
+
+| Bin | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Minimum RSSI (dBm) | -44 | -48 | -52 | -56 | -60 | -64 | -68 | -72 | -76 | -80 |
+
+Nordic's custom form is threshold `0x80` plus the custom byte, through
+`radiant_ant_prox_search_set()` or the optional third byte of `0x71`. Its
+encoding is unpublished, and `radiant` reads it as a positive magnitude, so 60
+is -60 dBm `[inferred]`; 0 and values above 127 are refused.
+
 ## Burst
 
 `MESG_BURST_DATA` (`0x50`) and `MESG_ADV_BURST_DATA` (`0x72`) stream a transfer
@@ -347,7 +398,7 @@ constant.
 | `0x6E` | `RADIANT_WIRE_MESG_ANTLIB_CONFIG_ID` | both | 2 | yes | - | [filler, config bits]. Sets the extended output fields to exactly these bits, replacing the previous value (so 0xE0 then 0x80 leaves 0x80). Zero clears everything - there is no separate clear message on the wire. 0xE0 is channel id + RSSI + RX timestamp; 0x80 is device id only. An unknown bit is refused with no side effect. | bridge, tools |
 | `0x6F` | `RADIANT_WIRE_MESG_STARTUP_MESG_ID` | d2h | 1 | yes | - | [reason]. Sent once after the stack has reset. A host that does not see this concludes the dongle is dead. | bridge, tools |
 | `0x70` | `RADIANT_WIRE_MESG_AUTO_FREQ_CONFIG_ID` | h2d | 4 | yes | `MESG_RESPONSE_EVENT_ID` | [channel, freq0, freq1, freq2]. Frequency-agility hop table. | bridge |
-| `0x71` | `RADIANT_WIRE_MESG_PROX_SEARCH_CONFIG_ID` | h2d | 2..3 | yes | `MESG_RESPONSE_EVENT_ID` | [channel, threshold, (custom threshold)]. Only pair with something close by. | bridge |
+| `0x71` | `RADIANT_WIRE_MESG_PROX_SEARCH_CONFIG_ID` | h2d | 2..3 | yes | `MESG_RESPONSE_EVENT_ID` | [channel, threshold, (custom threshold)]. Proximity search: only acquire something close by. threshold 0 is off, 1..10 are bins, 1 the closest (bin n accepts a frame at or above -44 - 4 (n - 1) dBm on radiant, Nordic's approximate nRF51 figures; the Message Protocol publishes no table); 11 and up are refused except 0x80. One-shot: an acquisition clears it, a search timeout keeps it. The Message Protocol defines two bytes; the optional third is Nordic's custom threshold, used only when threshold is 0x80 (a positive magnitude, 60 = -60 dBm, inferred) and ignored otherwise. | bridge, rev5.1 sec 9.5.2.22 + sec 6.4 |
 | `0x72` | `RADIANT_WIRE_MESG_ADV_BURST_DATA_ID` | both | 9..25 | yes | - | Same header byte as MESG_BURST_DATA, but 8, 16 or 24 data bytes. Accepting this while never bridging 0x78 gives a dongle that takes 24-byte packets and can never send one. | bridge, readme |
 | `0x74` | `RADIANT_WIRE_MESG_EVENT_BUFFERING_CONFIG_ID` | h2d | 6 | no | - | Not bridged - sdk-ant exposes no API for it - and correspondingly NOT advertised in the capabilities reply. The one advanced-options-3 bit that is honestly zero. | tools, readme |
 | `0x75` | `RADIANT_WIRE_MESG_SET_SEARCH_CH_PRIORITY_ID` | both | 2 | yes | - | [channel, priority]. | bridge, rev5.1 sec 9.5 + verify:sdk-ant-shim |
@@ -491,7 +542,7 @@ Byte 9 of a received data message - immediately after the 8-byte payload - when 
 | Constant | Value | Meaning | Provenance |
 |---|---|---|---|
 | `RADIANT_WIRE_EXT_FLAG_CHANNEL_ID` | `0x80` | 4 bytes follow: device number lo, device number hi, device type (bit 7 is the pairing bit), transmission type. | tools (ant_verify, ant_scan) |
-| `RADIANT_WIRE_EXT_FLAG_RSSI` | `0x40` | 3 bytes follow: measurement type, value, threshold configuration. | tools (ant_verify) |
+| `RADIANT_WIRE_EXT_FLAG_RSSI` | `0x40` | 3 bytes follow: measurement type, value, threshold configuration. The last is a signed dBm: the proximity threshold in force (rev5.1 sec 7.1.1.2.3, AN16 sec 4.3.3). With proximity search off radiant sends 0x00, where those documents give -128 (0x80); that difference is an open owner decision. | tools (ant_verify) |
 | `RADIANT_WIRE_EXT_FLAG_RX_TIMESTAMP` | `0x20` | 2 bytes follow: the 32768 Hz receive timestamp, little endian. | tools (ant_verify) |
 
 ## RSSI measurement types
@@ -687,7 +738,7 @@ Not a bitfield: the value is 8.
 | 0 | `0x01` | `RADIANT_WIRE_CAPABILITIES_LED_ENABLED` | no | MESG_ENABLE_LED_FLASH. Reported OFF here, which is why a host that has ANT_EnableLED never sends 0x68. |
 | 1 | `0x02` | `RADIANT_WIRE_CAPABILITIES_EXT_MESSAGE_ENABLED` | **yes** | Extended output fields - the whole lib config mechanism. |
 | 2 | `0x04` | `RADIANT_WIRE_CAPABILITIES_SCAN_MODE_ENABLED` | no | MESG_OPEN_RX_SCAN_MODE. Reported OFF in this generated reply, which is why a host that has ANT_OpenRxScanMode never sends 0x5B on this build. radiant reports the bit on instead, and as of 2026-08-10 0x5B is bridged there to match - see the 0x5B message row and docs/backends.md. |
-| 4 | `0x10` | `RADIANT_WIRE_CAPABILITIES_PROX_SEARCH_ENABLED` | **yes** | MESG_PROX_SEARCH_CONFIG. |
+| 4 | `0x10` | `RADIANT_WIRE_CAPABILITIES_PROX_SEARCH_ENABLED` | **yes** | MESG_PROX_SEARCH_CONFIG. radiant sets it where the radio reports RSSI, which is where the threshold is enforced. |
 | 5 | `0x20` | `RADIANT_WIRE_CAPABILITIES_EXT_ASSIGN_ENABLED` | **yes** | The optional fourth byte of MESG_ASSIGN_CHANNEL. |
 | 6 | `0x40` | `RADIANT_WIRE_CAPABILITIES_FS_ANTFS_ENABLED` | no | ANT-FS file system. |
 | 7 | `0x80` | `RADIANT_WIRE_CAPABILITIES_FIT1_ENABLED` | no | FIT1 support. |
@@ -807,10 +858,11 @@ These are used at a visible site in this repository but their numeric value is n
 | Phase 1.4; tools/ab_gates.toml unexplained_loss | 1 |
 | Security review 2026-11-13 item 3 (docs/radiant-security.md sec 3.2 and 9) | 1 |
 | Security review 2026-11-13 item 4 (docs/radiant-security.md sec 7.4) | 4 |
-| bridge | 33 |
+| bridge | 32 |
 | bridge, observed | 1 |
 | bridge, readme | 3 |
 | bridge, rev5.1 sec 9.5 | 2 |
+| bridge, rev5.1 sec 9.5.2.22 + sec 6.4 | 1 |
 | bridge, rev5.1 sec 9.5.6 | 2 |
 | bridge, stub | 1 |
 | bridge, tools | 33 |

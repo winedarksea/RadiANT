@@ -326,6 +326,11 @@ struct radiant_event_ext {
 
 	bool   has_rssi;
 	int8_t rssi_dbm;
+	/* The RSSI field's byte 2: the proximity threshold in force, in dBm, 0
+	 * when proximity search is off (see RSSI_THRESHOLD_CFG_NONE in
+	 * radiant_event.c for why off is 0, not the -128 the ANT documents
+	 * give). */
+	int8_t prox_dbm;
 
 	/* Straight from radiant_rx_event. t_sync_exact is false when inferred
 	 * rather than captured. */
@@ -409,6 +414,10 @@ struct radiant_event_rx {
 	 * straight in. */
 	const uint8_t *payload;
 	uint8_t        payload_len;
+
+	/* The channel's proximity threshold for this frame, in dBm, 0 = off:
+	 * byte 2 of the RSSI extended field (radiant_event_ext.prox_dbm). */
+	int8_t prox_dbm;
 };
 
 /*

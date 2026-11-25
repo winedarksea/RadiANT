@@ -1078,7 +1078,8 @@ radiant_channel_err_t radiant_channel_search_waveform_get(uint8_t channel,
 }
 
 radiant_channel_err_t radiant_channel_prox_search_set(uint8_t channel,
-					      uint8_t threshold, uint8_t custom)
+					      uint8_t threshold, uint8_t custom,
+					      bool rssi_capable)
 {
 	struct chan *c = NULL;
 	radiant_channel_err_t err = require_assigned(channel, &c);
@@ -1086,18 +1087,66 @@ radiant_channel_err_t radiant_channel_prox_search_set(uint8_t channel,
 	if (err != RADIANT_CH_OK) {
 		return err;
 	}
-	if (threshold > RADIANT_CH_PROX_THRESHOLD_MAX) {
+	if (threshold > RADIANT_CH_PROX_THRESHOLD_MAX &&
+	    threshold != RADIANT_CH_PROX_THRESHOLD_CUSTOM) {
 		return RADIANT_CH_ERR_INVALID_PARAM;
 	}
-	/* PERMANENT LIMITATION - see the header. Nothing reads prox_threshold
-	 * back, so accepting non-zero would advertise a filter that never
-	 * runs. 0 asks for the behaviour this stack already has (no RSSI gate). */
-	if (threshold != 0u) {
+	if (threshold == RADIANT_CH_PROX_THRESHOLD_CUSTOM &&
+	    (custom == 0u || custom > RADIANT_CH_PROX_CUSTOM_MAX)) {
+		return RADIANT_CH_ERR_INVALID_PARAM;
+	}
+	/* Never advertise a filter that does not run (docs/gotchas.md): the
+	 * gate reads the RSSI of each search frame, and a backend that has
+	 * none would fail every frame closed, i.e. never acquire. */
+	if (threshold != 0u && !rssi_capable) {
 		return RADIANT_CH_ERR_INVALID_PARAM;
 	}
 
 	c->prox_threshold = threshold;
-	c->prox_custom = custom;
+	if (threshold == RADIANT_CH_PROX_THRESHOLD_CUSTOM) {
+		c->prox_custom = custom;
+	}
+	return RADIANT_CH_OK;
+}
+
+/*
+ * The proximity bins as dBm. Bin n accepts a frame heard at or above
+ * prox_bin_dbm[n - 1]; bin 1 is the closest (strongest), bin 10 the farthest.
+ *
+ * Provenance: Nordic's public S212 SoftDevice API documentation,
+ * PROXIMITY_THRESHOLD_1..10 in ant_parameters.h, which gives each bin as an
+ * APPROXIMATE level "on nRF51". The ANT Message Protocol and Usage Rev 5.1,
+ * section 6.4, publishes no table and says the bins do not map to distances.
+ * So these are a radio's approximate levels, not a calibrated distance, and
+ * the bridge's default bin is set from bench data (TODO.md, B4).
+ */
+static const int8_t prox_bin_dbm[RADIANT_CH_PROX_THRESHOLD_MAX] = {
+	-44, -48, -52, -56, -60, -64, -68, -72, -76, -80,
+};
+
+radiant_channel_err_t radiant_channel_prox_min_rssi(uint8_t channel, int8_t *dbm)
+{
+	struct chan *c = NULL;
+	radiant_channel_err_t err = require_range(channel, &c);
+
+	if (err != RADIANT_CH_OK) {
+		return err;
+	}
+	if (dbm == NULL) {
+		return RADIANT_CH_ERR_INVALID_PARAM;
+	}
+
+	if (c->prox_threshold == 0u) {
+		*dbm = 0;
+	} else if (c->prox_threshold == RADIANT_CH_PROX_THRESHOLD_CUSTOM) {
+		/* [inferred] The custom byte is a positive magnitude: 60 is
+		 * -60 dBm. Nordic's API names the byte "custom minimum RSSI
+		 * threshold" and publishes no encoding; the setter refuses 0
+		 * and anything past 127, so this never overflows. */
+		*dbm = (int8_t)(-(int)c->prox_custom);
+	} else {
+		*dbm = prox_bin_dbm[c->prox_threshold - 1u];
+	}
 	return RADIANT_CH_OK;
 }
 
@@ -1654,6 +1703,14 @@ void radiant_channel_on_acquired(uint8_t channel, const struct radiant_channel_i
 	if (c->state != RADIANT_CH_STATE_SEARCHING) {
 		return;
 	}
+
+	/* Proximity search is ONE-SHOT (ANT Message Protocol Rev 5.1, sections
+	 * 6.4 and 9.5.2.22; AN12 Proximity Search, section 4): a successful
+	 * acquisition clears it, so a search after a drop, or the next open,
+	 * finds the device at any distance unless the host sets it again. A
+	 * search timeout keeps it. A background scan never comes through here
+	 * (it never acquires), so it keeps it too. */
+	c->prox_threshold = 0u;
 
 	/* The wildcards resolve here and nowhere else: the configured ID stays
 	 * untouched so closing and reopening searches again instead of

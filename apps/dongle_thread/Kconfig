@@ -467,6 +467,59 @@ config ANT_DONGLE_PAIRING_WINDOW_S
 	  the promiscuous ingest the rule forbids, arrived at through a board
 	  file.
 
+config ANT_DONGLE_PAIRING_PROX_BIN
+	int "Proximity bin a discovering self channel searches with (0 = off)"
+	default 3
+	range 0 10
+	depends on ANT_DONGLE_SELF_CHANNELS > 0
+	help
+	  The window is opt-in, but it used to bind the FIRST device heard of
+	  a searched type, which beside a neighbour's bike is often the
+	  neighbour's. Each discovery open now sets ANT proximity search
+	  (MESG_PROX_SEARCH_CONFIG, 0x71, through radiant_ant_prox_search_set())
+	  with this bin, so only a sensor heard at least that strongly can be
+	  acquired, and hence bound. 1 is the closest bin (the strongest
+	  signal, about -44 dBm on the radiant backend), 10 the farthest
+	  (about -80 dBm); the table is in docs/ant-serial-protocol.md (0x71).
+	  0 turns proximity off and binds the first device heard, as before.
+
+	  Discovery only: a pinned channel (a sensor already paired) searches
+	  at any distance, so a rider's own sensor is found again from across
+	  the room.
+
+	  PROVISIONAL DEFAULT, pending the B4 bench calibration (held next to
+	  the dongle passes, the next bike fails). A backend that cannot
+	  enforce it (no RSSI on search frames) refuses it, and that is logged
+	  as an error.
+
+config ANT_DONGLE_PAIRING_PROX_DBM
+	int "Custom proximity threshold in dBm (0 = use the bin's)"
+	default 0
+	range -127 0
+	depends on ANT_DONGLE_SELF_CHANNELS > 0
+	help
+	  When non-zero, this is the minimum RSSI in dBm a discovering self
+	  channel accepts, in place of ANT_DONGLE_PAIRING_PROX_BIN: Nordic's
+	  custom proximity threshold (threshold 0x80 plus a magnitude), which
+	  radiant_ant_prox_search_set() and the optional third byte of 0x71 take.
+	  A board whose RSSI reads several dB off another's (an external
+	  antenna, a different radio) is the reason to set it. PROVISIONAL,
+	  pending the B4 bench calibration.
+
+config ANT_DONGLE_PAIRING_LONG_PRESS_MS
+	int "Milliseconds sw0 must be held to evict the newest paired sensor"
+	default 3000
+	range 500 30000
+	depends on ANT_DONGLE_SELF_CHANNELS > 0
+	help
+	  A press opens the pairing window. Held this long, it also EVICTS the
+	  most recently bound sensor, even one that is transmitting now: the
+	  way out when the wrong device paired. The evicted device cannot bind
+	  again for the rest of that window (it goes on the discovery
+	  exclusion list), the window restarts, and a second long press walks
+	  back to the bind before it. Acts while the button is still held,
+	  not on release.
+
 config ANT_DONGLE_PAIRING_WINDOW_AT_BOOT
 	bool "BENCH ONLY: open the pairing window at boot, with no button press"
 	depends on ANT_DONGLE_SELF_CHANNELS > 0

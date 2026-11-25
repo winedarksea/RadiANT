@@ -115,12 +115,32 @@ struct radiant_self_evict_in {
 	bool     bound;
 	bool     tracking;
 	uint32_t last_tracking_ms;
+	/* Read by radiant_self_pick_evict_forced() only. owned is the caller's
+	 * record that it assigned this channel (struct radiant_self_chan_in);
+	 * bind_seq is its order of binding, larger = bound later, 0 = no bind
+	 * recorded. */
+	bool     owned;
+	uint32_t bind_seq;
 };
 
 #define RADIANT_SELF_EVICT_NONE 0xFFu
 
 uint8_t radiant_self_pick_evict(const struct radiant_self_evict_in *chans, uint8_t n,
 				bool window_open, bool evicted_this_window, uint32_t now_ms);
+
+/*
+ * Forced eviction: the button held down (CONFIG_ANT_DONGLE_PAIRING_LONG_PRESS_MS).
+ * The way out when the wrong sensor bound - a neighbour's strap that happened
+ * to be first in the window - and it is still transmitting, so the ordinary
+ * pick above, which never takes a tracking sensor, will never free it.
+ *
+ * Picks the MOST RECENTLY BOUND channel: the largest bind_seq among channels
+ * that are owned and bound with a non-zero bind_seq, tracking or not. The
+ * caller releases the binding, so the next forced pick walks back one bind at
+ * a time. A channel the host took (owned false) is never picked, whatever its
+ * bind_seq says. RADIANT_SELF_EVICT_NONE when nothing qualifies.
+ */
+uint8_t radiant_self_pick_evict_forced(const struct radiant_self_evict_in *chans, uint8_t n);
 
 /*
  * The network key after a host SYSTEM_RESET.

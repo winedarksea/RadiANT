@@ -220,3 +220,36 @@ ZTEST(bridge_parser, test_exact_length_messages_refuse_any_other_length)
 	zassert_true(body_len_ok(RADIANT_WIRE_MESG_ASSIGN_CHANNEL_ID, 4u));
 	zassert_true(body_len_ok(RADIANT_WIRE_MESG_CONFIG_ADV_BURST_ID, 12u));
 }
+
+/* 0x71 takes two bytes or three: the optional third is Nordic's custom
+ * threshold, accepted since build 1 from hosts that model Nordic's API. */
+ZTEST(bridge_parser, test_prox_search_takes_an_optional_custom_byte)
+{
+	static const uint8_t two[] = { 3u, 0x80u };
+	static const uint8_t custom3[] = { 3u, 0x80u, 60u };
+	static const uint8_t bin3[] = { 3u, 3u, 0x55u };
+	uint8_t threshold = 0xEEu;
+	uint8_t custom = 0xEEu;
+
+	zassert_false(body_len_ok(RADIANT_WIRE_MESG_PROX_SEARCH_CONFIG_ID, 1u));
+	zassert_true(body_len_ok(RADIANT_WIRE_MESG_PROX_SEARCH_CONFIG_ID, 2u));
+	zassert_true(body_len_ok(RADIANT_WIRE_MESG_PROX_SEARCH_CONFIG_ID, 3u));
+	zassert_false(body_len_ok(RADIANT_WIRE_MESG_PROX_SEARCH_CONFIG_ID, 4u));
+
+	/* 0x80 + 60: the custom form reaches the API whole (and the API test
+	 * test_prox_search_is_advertised_and_a_bin_is_accepted answers it
+	 * NO_ERROR). */
+	prox_search_args(custom3, sizeof(custom3), &threshold, &custom);
+	zassert_equal(0x80u, threshold);
+	zassert_equal(60u, custom);
+
+	/* A bin with a third byte: passed on, and the API ignores it. */
+	prox_search_args(bin3, sizeof(bin3), &threshold, &custom);
+	zassert_equal(3u, threshold);
+	zassert_equal(0x55u, custom);
+
+	/* Two bytes: custom 0, so a two-byte 0x80 is refused by the API. */
+	prox_search_args(two, sizeof(two), &threshold, &custom);
+	zassert_equal(0x80u, threshold);
+	zassert_equal(0u, custom);
+}

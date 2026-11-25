@@ -273,6 +273,19 @@ struct radiant_search_id_filter {
 	uint16_t device_number; /* 0 = any */
 	uint8_t  device_type;   /* 0 = any; compared without the pairing bit */
 	uint8_t  trans_type;    /* 0 = any */
+	/*
+	 * ANT proximity search (0x71) for this channel, in dBm; 0 = off. Not an
+	 * ID field: it rides here because this is the per-channel record a
+	 * begin publishes whole. An ACQUIRE channel is not offered a frame
+	 * weaker than this, nor one with no RSSI (fail closed), and such a
+	 * frame does not spend the frame's one ACQUIRE claim (stats
+	 * prox_rejected). SCAN channels ignore it (ANT: proximity search does
+	 * not apply to continuous scanning), and so does every seen-cache
+	 * lookup: the cache only steers, and the claim still needs a live
+	 * frame that passes. Unlike cfg.min_rssi_dbm, which drops a weak
+	 * frame for every channel before the offer loop.
+	 */
+	int8_t   min_rssi_dbm;
 };
 
 enum radiant_search_mode {
@@ -475,6 +488,10 @@ struct radiant_search_stats {
 	 * RADIANT_SCHED_ARMED_STALE_US past their close). The backend had lost
 	 * them, so they credited no dwell. */
 	uint32_t reclaimed_chunks;
+	/* Offers withheld from an ACQUIRE channel by its own proximity
+	 * threshold (radiant_search_id_filter.min_rssi_dbm): too weak, or no
+	 * RSSI. Per channel offered, like permit_rejected. */
+	uint32_t prox_rejected;
 #if defined(CONFIG_RADIANT_SEARCH_DENIAL_ESCAPE)
 	/* Times a run of denials credited a quantum so the set could finish.
 	 * Nonzero means the sweep was refused the air long enough to have

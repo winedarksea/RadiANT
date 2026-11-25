@@ -2632,3 +2632,165 @@ ZTEST(radiant_search, test_all_channel_slots_can_search)
 	}
 	end_of_test();
 }
+
+/* ---------------------------------------------------------------------------
+ * Proximity search (0x71): radiant_search_id_filter.min_rssi_dbm
+ *
+ * The fake radio hears every frame at FAKE_RADIO_RSSI_BENCH_DBM (-17), so a
+ * threshold of -10 makes it "too far" and one of -30 "near enough".
+ * ---------------------------------------------------------------------------
+ */
+
+#define PROX_TOO_STRONG_DBM (-10) /* above the bench level: refuses */
+#define PROX_EASY_DBM       (-30) /* below it: passes */
+
+/* Device 0x0402 sits in set 0, the first window of a fresh sweep. */
+static void prox_air_in_window(void)
+{
+	uint8_t frame[FAKE_RADIO_AIR_FRAME_MAX];
+	uint8_t len = fake_radio_build_ant_frame(frame, 0x0402u, 0x0Bu, 5u, payload8);
+
+	zassert_equal(RADIANT_SEARCH_OK, win_open());
+	zassert_equal(0u, g_w.set_index);
+	zassert_ok(fake_radio_air_frame(g_w.t_open + 1000u, frame, len));
+	win_run();
+}
+
+ZTEST(radiant_search, test_prox_a_weak_frame_is_refused_and_a_strong_one_claims)
+{
+	struct radiant_search_id_filter want = { 0u, 0x0Bu, 0u, PROX_TOO_STRONG_DBM };
+
+	bring_up(false);
+	zassert_ok(radiant_search_begin(&g_s, 0u, RADIANT_SEARCH_MODE_ACQUIRE, &want,
+					radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+	prox_air_in_window();
+
+	zassert_equal(0u, g_cap.n_acquired, "acquired a device below its threshold");
+	zassert_equal(1u, radiant_search_get_stats(&g_s)->prox_rejected);
+	zassert_true(radiant_search_is_searching(&g_s, 0u));
+	/* Seen is presence, not permission: the cache still learned it. */
+	zassert_equal(1u, radiant_search_seen_count(&g_s, radiant_radio_now()));
+
+	/* The host lowers the threshold; the re-begin replaces it, steers to the
+	 * cached device's set, and the same transmitter now acquires. */
+	want.min_rssi_dbm = PROX_EASY_DBM;
+	zassert_ok(radiant_search_begin(&g_s, 0u, RADIANT_SEARCH_MODE_ACQUIRE, &want,
+					radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+	prox_air_in_window();
+
+	zassert_equal(1u, g_cap.n_acquired);
+	zassert_equal(0x0402u, g_cap.res[0].id.device_number);
+	zassert_equal(1u, radiant_search_get_stats(&g_s)->prox_rejected);
+	end_of_test();
+}
+
+ZTEST(radiant_search, test_prox_a_frame_with_no_rssi_is_refused)
+{
+	struct radiant_search_id_filter want = { 0u, 0x0Bu, 0u, PROX_EASY_DBM };
+
+	/* A radio that reports no RSSI: under a threshold, fail closed. */
+	fake_radio_caps_mut()->has_rssi = false;
+	bring_up(false);
+	zassert_ok(radiant_search_begin(&g_s, 0u, RADIANT_SEARCH_MODE_ACQUIRE, &want,
+					radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+	prox_air_in_window();
+
+	zassert_equal(0u, g_cap.n_acquired);
+	zassert_equal(1u, radiant_search_get_stats(&g_s)->prox_rejected);
+
+	/* And with the threshold off the same radio acquires as before. */
+	want.min_rssi_dbm = 0;
+	zassert_ok(radiant_search_begin(&g_s, 0u, RADIANT_SEARCH_MODE_ACQUIRE, &want,
+					radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+	prox_air_in_window();
+	zassert_equal(1u, g_cap.n_acquired);
+	end_of_test();
+}
+
+ZTEST(radiant_search, test_prox_a_refused_frame_leaves_the_claim_for_another_channel)
+{
+	struct radiant_search_id_filter near_only = { 0u, 0x0Bu, 0u, PROX_TOO_STRONG_DBM };
+	struct radiant_search_id_filter any = { 0u, 0x0Bu, 0u, 0 };
+
+	bring_up(false);
+	/* Channel 0 comes first in the offer loop, and refuses. */
+	zassert_ok(radiant_search_begin(&g_s, 0u, RADIANT_SEARCH_MODE_ACQUIRE, &near_only,
+					radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+	zassert_ok(radiant_search_begin(&g_s, 1u, RADIANT_SEARCH_MODE_ACQUIRE, &any,
+					radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+	prox_air_in_window();
+
+	zassert_equal(1u, g_cap.n_acquired);
+	zassert_equal(1u, g_cap.chan[0], "the refused frame spent the frame's claim");
+	zassert_equal(1u, radiant_search_get_stats(&g_s)->prox_rejected);
+	zassert_true(radiant_search_is_searching(&g_s, 0u));
+
+	zassert_ok(radiant_search_end(&g_s, 0u));
+	end_of_test();
+}
+
+ZTEST(radiant_search, test_prox_a_scan_channel_ignores_the_threshold)
+{
+	struct radiant_search_id_filter want = { 0u, 0x0Bu, 0u, PROX_TOO_STRONG_DBM };
+
+	bring_up(false);
+	zassert_ok(radiant_search_begin(&g_s, 0u, RADIANT_SEARCH_MODE_SCAN, &want,
+					radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+	prox_air_in_window();
+
+	/* ANT: proximity search does not apply to continuous scanning. */
+	zassert_equal(1u, g_cap.n_acquired);
+	zassert_equal(1u, radiant_search_get_stats(&g_s)->scan_reports);
+	zassert_equal(0u, radiant_search_get_stats(&g_s)->prox_rejected);
+
+	zassert_ok(radiant_search_end(&g_s, 0u));
+	end_of_test();
+}
+
+ZTEST(radiant_search, test_prox_threshold_zero_behaves_as_before)
+{
+	struct radiant_search_id_filter want = { 0u, 0x0Bu, 0u, 0 };
+
+	bring_up(false);
+	zassert_ok(radiant_search_begin(&g_s, 0u, RADIANT_SEARCH_MODE_ACQUIRE, &want,
+					radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+	prox_air_in_window();
+
+	zassert_equal(1u, g_cap.n_acquired);
+	zassert_equal(0u, radiant_search_get_stats(&g_s)->prox_rejected);
+	end_of_test();
+}
+
+/* The seen cache steers a thresholded search to a device it has heard, but
+ * steering is not acquiring: the claim still needs a live frame that passes. */
+ZTEST(radiant_search, test_prox_a_cache_steered_search_still_needs_a_passing_frame)
+{
+	struct radiant_search_id_filter want = { 0u, 0x0Bu, 0u, PROX_TOO_STRONG_DBM };
+	struct radiant_channel_id id = { 0x09A1u, 0x0Bu, 5u };
+	uint8_t frame[FAKE_RADIO_AIR_FRAME_MAX];
+	uint8_t len;
+	uint16_t target;
+
+	bring_up(false);
+	target = radiant_search_set_for_devnum(&g_s, id.device_number);
+	radiant_search_seen_note(&g_s, &id, radiant_radio_now());
+
+	zassert_ok(radiant_search_begin(&g_s, 0u, RADIANT_SEARCH_MODE_ACQUIRE, &want,
+					radiant_radio_now(), RADIANT_SEARCH_TIMEOUT_NONE));
+	zassert_equal(RADIANT_SEARCH_OK, win_open());
+	zassert_equal(target, g_w.set_index);
+	zassert_true(g_w.from_cache);
+
+	len = fake_radio_build_ant_frame(frame, id.device_number, id.device_type,
+					 id.trans_type, payload8);
+	zassert_ok(fake_radio_air_frame(g_w.t_open + 1000u, frame, len));
+	win_run();
+
+	zassert_equal(0u, g_cap.n_acquired, "a cache steer acquired a too-weak device");
+	zassert_equal(0u, radiant_search_get_stats(&g_s)->cache_acquires);
+	zassert_equal(1u, radiant_search_get_stats(&g_s)->prox_rejected);
+	zassert_true(radiant_search_is_searching(&g_s, 0u));
+
+	zassert_ok(radiant_search_end(&g_s, 0u));
+	end_of_test();
+}

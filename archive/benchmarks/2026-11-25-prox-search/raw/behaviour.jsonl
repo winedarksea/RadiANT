@@ -1,0 +1,68 @@
+{"meta": {"master_port": "COM4", "master_serial": null, "master_baud": 115200, "master_kind": "l15", "far_port": null, "far_serial": null, "far_baud": 115200, "far_kind": "garmin", "far_level": "w4", "far_device": 24602, "dut_port": "COM11", "dut_serial": null, "dut_baud": 57600, "device": 24601, "dev_type": 25, "trans_type": 1, "rf": 66, "period": 4096, "search_timeout": 2, "mode": ["behaviour"], "levels": "+8,0,-12,-20,-28", "cal": 20, "trials": 20, "margin": 6, "strong": "+8", "weak": "-20", "behaviour_bin": 3, "rounds": 6, "pair_bin": null, "pair_level": "+8", "acquire": 8.0, "watch": 1.0, "delay_max": 0.5, "seed": 2512, "out": "archive/benchmarks/2026-11-25-prox-search/raw/behaviour.jsonl"}, "t_start": 1795618395.0697174}
+{"set_level": "-20", "resp": 0}
+{"prox": [3], "prox_resp": 0, "sto_s": 5.023, "acquired": false, "sto": true, "closed": true, "later_thr": [], "n_msgs": 0, "label": "bh0_1_weak_set", "level": "-20", "i": 0, "thr": "bin3(-52)"}
+{"summary": "bh0_1_weak_set", "level": "-20", "thr": "bin3(-52)", "n": 1, "acquired": 0, "sto": 1, "thr0_mismatch": 0, "later_thr_nonzero": 0, "prox_resp": [0]}
+{"prox": null, "sto_s": 5.023, "acquired": false, "sto": true, "closed": true, "later_thr": [], "n_msgs": 0, "label": "bh0_2_weak_noset", "level": "-20", "i": 0, "thr": "off"}
+{"summary": "bh0_2_weak_noset", "level": "-20", "thr": "off", "n": 1, "acquired": 0, "sto": 1, "thr0_mismatch": 0, "later_thr_nonzero": 0, "prox_resp": []}
+{"set_level": "+8", "resp": 0}
+{"prox": null, "acq_s": 0.108, "dev": 24601, "rssi0": -37, "thr0": -52, "acquired": true, "sto": false, "closed": true, "later_thr": [0], "n_msgs": 9, "rssi_mean": -37, "rssi_min": -38, "rssi_max": -36, "label": "bh0_3_strong_noset", "level": "+8", "i": 0, "thr": "off"}
+{"summary": "bh0_3_strong_noset", "level": "+8", "thr": "off", "n": 1, "acquired": 1, "sto": 0, "thr0_mismatch": 1, "later_thr_nonzero": 0, "prox_resp": [], "acq_ms_median": 108, "rssi0_min": -37, "rssi0_median": -37, "rssi0_max": -37}
+{"set_level": "-20", "resp": 0}
+{"prox": null, "acq_s": 0.0923, "dev": 24601, "rssi0": -67, "thr0": 0, "acquired": true, "sto": false, "closed": true, "later_thr": [0], "n_msgs": 9, "rssi_mean": -67, "rssi_min": -68, "rssi_max": -66, "label": "bh0_4_weak_noset_after_acq", "level": "-20", "i": 0, "thr": "off"}
+{"summary": "bh0_4_weak_noset_after_acq", "level": "-20", "thr": "off", "n": 1, "acquired": 1, "sto": 0, "thr0_mismatch": 0, "later_thr_nonzero": 0, "prox_resp": [], "acq_ms_median": 92, "rssi0_min": -67, "rssi0_median": -67, "rssi0_max": -67}
+{"set_level": "-20", "resp": 0}
+{"prox": [3], "prox_resp": 0, "sto_s": 5.023, "acquired": false, "sto": true, "closed": true, "later_thr": [], "n_msgs": 0, "label": "bh1_1_weak_set", "level": "-20", "i": 0, "thr": "bin3(-52)"}
+{"summary": "bh1_1_weak_set", "level": "-20", "thr": "bin3(-52)", "n": 1, "acquired": 0, "sto": 1, "thr0_mismatch": 0, "later_thr_nonzero": 0, "prox_resp": [0]}
+{"prox": null, "sto_s": 5.023, "acquired": false, "sto": true, "closed": true, "later_thr": [], "n_msgs": 0, "label": "bh1_2_weak_noset", "level": "-20", "i": 0, "thr": "off"}
+{"summary": "bh1_2_weak_noset", "level": "-20", "thr": "off", "n": 1, "acquired": 0, "sto": 1, "thr0_mismatch": 0, "later_thr_nonzero": 0, "prox_resp": []}
+{"set_level": "+8", "resp": 0}
+{"prox": null, "acq_s": 0.0711, "dev": 24601, "rssi0": -36, "thr0": -52, "acquired": true, "sto": false, "closed": true, "later_thr": [0], "n_msgs": 9, "rssi_mean": -36.67, "rssi_min": -37, "rssi_max": -36, "label": "bh1_3_strong_noset", "level": "+8", "i": 0, "thr": "off"}
+{"summary": "bh1_3_strong_noset", "level": "+8", "thr": "off", "n": 1, "acquired": 1, "sto": 0, "thr0_mismatch": 1, "later_thr_nonzero": 0, "prox_resp": [], "acq_ms_median": 71, "rssi0_min": -36, "rssi0_median": -36, "rssi0_max": -36}
+{"set_level": "-20", "resp": 0}
+{"prox": null, "acq_s": 0.0082, "dev": 24601, "rssi0": -66, "thr0": 0, "acquired": true, "sto": false, "closed": true, "later_thr": [0], "n_msgs": 8, "rssi_mean": -66.62, "rssi_min": -67, "rssi_max": -66, "label": "bh1_4_weak_noset_after_acq", "level": "-20", "i": 0, "thr": "off"}
+{"summary": "bh1_4_weak_noset_after_acq", "level": "-20", "thr": "off", "n": 1, "acquired": 1, "sto": 0, "thr0_mismatch": 0, "later_thr_nonzero": 0, "prox_resp": [], "acq_ms_median": 8, "rssi0_min": -66, "rssi0_median": -66, "rssi0_max": -66}
+{"set_level": "-20", "resp": 0}
+{"prox": [3], "prox_resp": 0, "sto_s": 5.023, "acquired": false, "sto": true, "closed": true, "later_thr": [], "n_msgs": 0, "label": "bh2_1_weak_set", "level": "-20", "i": 0, "thr": "bin3(-52)"}
+{"summary": "bh2_1_weak_set", "level": "-20", "thr": "bin3(-52)", "n": 1, "acquired": 0, "sto": 1, "thr0_mismatch": 0, "later_thr_nonzero": 0, "prox_resp": [0]}
+{"prox": null, "sto_s": 5.023, "acquired": false, "sto": true, "closed": true, "later_thr": [], "n_msgs": 0, "label": "bh2_2_weak_noset", "level": "-20", "i": 0, "thr": "off"}
+{"summary": "bh2_2_weak_noset", "level": "-20", "thr": "off", "n": 1, "acquired": 0, "sto": 1, "thr0_mismatch": 0, "later_thr_nonzero": 0, "prox_resp": []}
+{"set_level": "+8", "resp": 0}
+{"prox": null, "acq_s": 0.056, "dev": 24601, "rssi0": -36, "thr0": -52, "acquired": true, "sto": false, "closed": true, "later_thr": [0], "n_msgs": 9, "rssi_mean": -36.78, "rssi_min": -37, "rssi_max": -36, "label": "bh2_3_strong_noset", "level": "+8", "i": 0, "thr": "off"}
+{"summary": "bh2_3_strong_noset", "level": "+8", "thr": "off", "n": 1, "acquired": 1, "sto": 0, "thr0_mismatch": 1, "later_thr_nonzero": 0, "prox_resp": [], "acq_ms_median": 56, "rssi0_min": -36, "rssi0_median": -36, "rssi0_max": -36}
+{"set_level": "-20", "resp": 0}
+{"prox": null, "acq_s": 0.0215, "dev": 24601, "rssi0": -67, "thr0": 0, "acquired": true, "sto": false, "closed": true, "later_thr": [0], "n_msgs": 8, "rssi_mean": -67.12, "rssi_min": -68, "rssi_max": -67, "label": "bh2_4_weak_noset_after_acq", "level": "-20", "i": 0, "thr": "off"}
+{"summary": "bh2_4_weak_noset_after_acq", "level": "-20", "thr": "off", "n": 1, "acquired": 1, "sto": 0, "thr0_mismatch": 0, "later_thr_nonzero": 0, "prox_resp": [], "acq_ms_median": 22, "rssi0_min": -67, "rssi0_median": -67, "rssi0_max": -67}
+{"set_level": "-20", "resp": 0}
+{"prox": [3], "prox_resp": 0, "sto_s": 5.023, "acquired": false, "sto": true, "closed": true, "later_thr": [], "n_msgs": 0, "label": "bh3_1_weak_set", "level": "-20", "i": 0, "thr": "bin3(-52)"}
+{"summary": "bh3_1_weak_set", "level": "-20", "thr": "bin3(-52)", "n": 1, "acquired": 0, "sto": 1, "thr0_mismatch": 0, "later_thr_nonzero": 0, "prox_resp": [0]}
+{"prox": null, "sto_s": 5.023, "acquired": false, "sto": true, "closed": true, "later_thr": [], "n_msgs": 0, "label": "bh3_2_weak_noset", "level": "-20", "i": 0, "thr": "off"}
+{"summary": "bh3_2_weak_noset", "level": "-20", "thr": "off", "n": 1, "acquired": 0, "sto": 1, "thr0_mismatch": 0, "later_thr_nonzero": 0, "prox_resp": []}
+{"set_level": "+8", "resp": 0}
+{"prox": null, "acq_s": 0.0497, "dev": 24601, "rssi0": -37, "thr0": -52, "acquired": true, "sto": false, "closed": true, "later_thr": [0], "n_msgs": 9, "rssi_mean": -36.67, "rssi_min": -37, "rssi_max": -36, "label": "bh3_3_strong_noset", "level": "+8", "i": 0, "thr": "off"}
+{"summary": "bh3_3_strong_noset", "level": "+8", "thr": "off", "n": 1, "acquired": 1, "sto": 0, "thr0_mismatch": 1, "later_thr_nonzero": 0, "prox_resp": [], "acq_ms_median": 50, "rssi0_min": -37, "rssi0_median": -37, "rssi0_max": -37}
+{"set_level": "-20", "resp": 0}
+{"prox": null, "acq_s": 0.0151, "dev": 24601, "rssi0": -66, "thr0": 0, "acquired": true, "sto": false, "closed": true, "later_thr": [0], "n_msgs": 9, "rssi_mean": -66.78, "rssi_min": -67, "rssi_max": -66, "label": "bh3_4_weak_noset_after_acq", "level": "-20", "i": 0, "thr": "off"}
+{"summary": "bh3_4_weak_noset_after_acq", "level": "-20", "thr": "off", "n": 1, "acquired": 1, "sto": 0, "thr0_mismatch": 0, "later_thr_nonzero": 0, "prox_resp": [], "acq_ms_median": 15, "rssi0_min": -66, "rssi0_median": -66, "rssi0_max": -66}
+{"set_level": "-20", "resp": 0}
+{"prox": [3], "prox_resp": 0, "sto_s": 5.023, "acquired": false, "sto": true, "closed": true, "later_thr": [], "n_msgs": 0, "label": "bh4_1_weak_set", "level": "-20", "i": 0, "thr": "bin3(-52)"}
+{"summary": "bh4_1_weak_set", "level": "-20", "thr": "bin3(-52)", "n": 1, "acquired": 0, "sto": 1, "thr0_mismatch": 0, "later_thr_nonzero": 0, "prox_resp": [0]}
+{"prox": null, "sto_s": 5.023, "acquired": false, "sto": true, "closed": true, "later_thr": [], "n_msgs": 0, "label": "bh4_2_weak_noset", "level": "-20", "i": 0, "thr": "off"}
+{"summary": "bh4_2_weak_noset", "level": "-20", "thr": "off", "n": 1, "acquired": 0, "sto": 1, "thr0_mismatch": 0, "later_thr_nonzero": 0, "prox_resp": []}
+{"set_level": "+8", "resp": 0}
+{"prox": null, "acq_s": 0.0606, "dev": 24601, "rssi0": -37, "thr0": -52, "acquired": true, "sto": false, "closed": true, "later_thr": [0], "n_msgs": 9, "rssi_mean": -36.78, "rssi_min": -37, "rssi_max": -36, "label": "bh4_3_strong_noset", "level": "+8", "i": 0, "thr": "off"}
+{"summary": "bh4_3_strong_noset", "level": "+8", "thr": "off", "n": 1, "acquired": 1, "sto": 0, "thr0_mismatch": 1, "later_thr_nonzero": 0, "prox_resp": [], "acq_ms_median": 61, "rssi0_min": -37, "rssi0_median": -37, "rssi0_max": -37}
+{"set_level": "-20", "resp": 0}
+{"prox": null, "acq_s": 0.09, "dev": 24601, "rssi0": -66, "thr0": 0, "acquired": true, "sto": false, "closed": true, "later_thr": [0], "n_msgs": 9, "rssi_mean": -66.78, "rssi_min": -67, "rssi_max": -66, "label": "bh4_4_weak_noset_after_acq", "level": "-20", "i": 0, "thr": "off"}
+{"summary": "bh4_4_weak_noset_after_acq", "level": "-20", "thr": "off", "n": 1, "acquired": 1, "sto": 0, "thr0_mismatch": 0, "later_thr_nonzero": 0, "prox_resp": [], "acq_ms_median": 90, "rssi0_min": -66, "rssi0_median": -66, "rssi0_max": -66}
+{"set_level": "-20", "resp": 0}
+{"prox": [3], "prox_resp": 0, "sto_s": 5.023, "acquired": false, "sto": true, "closed": true, "later_thr": [], "n_msgs": 0, "label": "bh5_1_weak_set", "level": "-20", "i": 0, "thr": "bin3(-52)"}
+{"summary": "bh5_1_weak_set", "level": "-20", "thr": "bin3(-52)", "n": 1, "acquired": 0, "sto": 1, "thr0_mismatch": 0, "later_thr_nonzero": 0, "prox_resp": [0]}
+{"prox": null, "sto_s": 5.023, "acquired": false, "sto": true, "closed": true, "later_thr": [], "n_msgs": 0, "label": "bh5_2_weak_noset", "level": "-20", "i": 0, "thr": "off"}
+{"summary": "bh5_2_weak_noset", "level": "-20", "thr": "off", "n": 1, "acquired": 0, "sto": 1, "thr0_mismatch": 0, "later_thr_nonzero": 0, "prox_resp": []}
+{"set_level": "+8", "resp": 0}
+{"prox": null, "acq_s": 0.0585, "dev": 24601, "rssi0": -36, "thr0": -52, "acquired": true, "sto": false, "closed": true, "later_thr": [0], "n_msgs": 9, "rssi_mean": -36.78, "rssi_min": -37, "rssi_max": -36, "label": "bh5_3_strong_noset", "level": "+8", "i": 0, "thr": "off"}
+{"summary": "bh5_3_strong_noset", "level": "+8", "thr": "off", "n": 1, "acquired": 1, "sto": 0, "thr0_mismatch": 1, "later_thr_nonzero": 0, "prox_resp": [], "acq_ms_median": 58, "rssi0_min": -36, "rssi0_median": -36, "rssi0_max": -36}
+{"set_level": "-20", "resp": 0}
+{"prox": null, "acq_s": 0.0873, "dev": 24601, "rssi0": -67, "thr0": 0, "acquired": true, "sto": false, "closed": true, "later_thr": [0], "n_msgs": 9, "rssi_mean": -67, "rssi_min": -68, "rssi_max": -66, "label": "bh5_4_weak_noset_after_acq", "level": "-20", "i": 0, "thr": "off"}
+{"summary": "bh5_4_weak_noset_after_acq", "level": "-20", "thr": "off", "n": 1, "acquired": 1, "sto": 0, "thr0_mismatch": 0, "later_thr_nonzero": 0, "prox_resp": [], "acq_ms_median": 87, "rssi0_min": -67, "rssi0_median": -67, "rssi0_max": -67}
+{"tail": {"master": {"tx": 701}, "far": null, "t_end": 1795618483.165409}}

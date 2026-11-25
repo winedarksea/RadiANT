@@ -213,7 +213,11 @@ ZTEST(treadmill_hr_rx, test_reopen_waits_for_channel_closed)
 		      "the slave was not reopened after its search timed out: "
 		      "no strap will ever be acquired again until reboot");
 	zassert_equal(opens + 1u, stub.open_calls, "reopened more than once");
-	zassert_equal(prox_at_open > 0u ? prox_at_open - 1u : 0u,
+	/* Bin 1 is the closest (ANT MP Rev 5.1 6.4), so relaxing is one bin
+	 * UP, and past 10 it turns proximity off. */
+	zassert_equal(prox_at_open == 0u    ? 0u
+		      : prox_at_open >= 10u ? 0u
+					    : prox_at_open + 1u,
 		      stub.last_prox,
 		      "the proximity floor did not relax by one bin");
 }

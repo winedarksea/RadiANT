@@ -297,8 +297,15 @@ MESG_STARTUP_MESG_ID = 0x6F
 # [channel, freq0, freq1, freq2]. Frequency-agility hop table. [bridge]
 MESG_AUTO_FREQ_CONFIG_ID = 0x70
 
-# [channel, threshold, (custom threshold)]. Only pair with something close by.
-# [bridge]
+# [channel, threshold, (custom threshold)]. Proximity search: only acquire
+# something close by. threshold 0 is off, 1..10 are bins, 1 the closest (bin n
+# accepts a frame at or above -44 - 4 (n - 1) dBm on radiant, Nordic's
+# approximate nRF51 figures; the Message Protocol publishes no table); 11 and
+# up are refused except 0x80. One-shot: an acquisition clears it, a search
+# timeout keeps it. The Message Protocol defines two bytes; the optional third
+# is Nordic's custom threshold, used only when threshold is 0x80 (a positive
+# magnitude, 60 = -60 dBm, inferred) and ignored otherwise. [bridge, rev5.1 sec
+# 9.5.2.22 + sec 6.4]
 MESG_PROX_SEARCH_CONFIG_ID = 0x71
 
 # Same header byte as MESG_BURST_DATA, but 8, 16 or 24 data bytes. Accepting
@@ -723,7 +730,10 @@ LIB_CONFIG_MASK_ALL = 0xFF
 # pairing bit), transmission type. [tools (ant_verify, ant_scan)]
 EXT_FLAG_CHANNEL_ID = 0x80
 
-# 3 bytes follow: measurement type, value, threshold configuration. [tools
+# 3 bytes follow: measurement type, value, threshold configuration. The last is
+# a signed dBm: the proximity threshold in force (rev5.1 sec 7.1.1.2.3, AN16
+# sec 4.3.3). With proximity search off radiant sends 0x00, where those
+# documents give -128 (0x80); that difference is an open owner decision. [tools
 # (ant_verify)]
 EXT_FLAG_RSSI = 0x40
 
@@ -1217,7 +1227,9 @@ CAPABILITIES_EXT_MESSAGE_ENABLED = 0x02
 # match - see the 0x5B message row and docs/backends.md. [stub, readme]
 CAPABILITIES_SCAN_MODE_ENABLED = 0x04
 
-# MESG_PROX_SEARCH_CONFIG. [rev5.1 sec 9.5.7.4 + verify:sdk-ant-shim]
+# MESG_PROX_SEARCH_CONFIG. radiant sets it where the radio reports RSSI, which
+# is where the threshold is enforced. [rev5.1 sec 9.5.7.4 + verify:sdk-ant-
+# shim]
 CAPABILITIES_PROX_SEARCH_ENABLED = 0x10
 
 # The optional fourth byte of MESG_ASSIGN_CHANNEL. [stub]
@@ -1966,7 +1978,7 @@ MESSAGES = {
         "payload_len": '2..3',
         "bridged": True,
         "reply": 'MESG_RESPONSE_EVENT_ID',
-        "desc": '[channel, threshold, (custom threshold)]. Only pair with something close by.',
+        "desc": "[channel, threshold, (custom threshold)]. Proximity search: only acquire something close by. threshold 0 is off, 1..10 are bins, 1 the closest (bin n accepts a frame at or above -44 - 4 (n - 1) dBm on radiant, Nordic's approximate nRF51 figures; the Message Protocol publishes no table); 11 and up are refused except 0x80. One-shot: an acquisition clears it, a search timeout keeps it. The Message Protocol defines two bytes; the optional third is Nordic's custom threshold, used only when threshold is 0x80 (a positive magnitude, 60 = -60 dBm, inferred) and ignored otherwise.",
     },
     0x72: {
         "name": 'MESG_ADV_BURST_DATA_ID',
@@ -2404,7 +2416,7 @@ CAPABILITY_BYTES = {
         (0x01, 'CAPABILITIES_LED_ENABLED', 'MESG_ENABLE_LED_FLASH. Reported OFF here, which is why a host that has ANT_EnableLED never sends 0x68.'),
         (0x02, 'CAPABILITIES_EXT_MESSAGE_ENABLED', 'Extended output fields - the whole lib config mechanism.'),
         (0x04, 'CAPABILITIES_SCAN_MODE_ENABLED', 'MESG_OPEN_RX_SCAN_MODE. Reported OFF in this generated reply, which is why a host that has ANT_OpenRxScanMode never sends 0x5B on this build. radiant reports the bit on instead, and as of 2026-08-10 0x5B is bridged there to match - see the 0x5B message row and docs/backends.md.'),
-        (0x10, 'CAPABILITIES_PROX_SEARCH_ENABLED', 'MESG_PROX_SEARCH_CONFIG.'),
+        (0x10, 'CAPABILITIES_PROX_SEARCH_ENABLED', 'MESG_PROX_SEARCH_CONFIG. radiant sets it where the radio reports RSSI, which is where the threshold is enforced.'),
         (0x20, 'CAPABILITIES_EXT_ASSIGN_ENABLED', 'The optional fourth byte of MESG_ASSIGN_CHANNEL.'),
         (0x40, 'CAPABILITIES_FS_ANTFS_ENABLED', 'ANT-FS file system.'),
         (0x80, 'CAPABILITIES_FIT1_ENABLED', 'FIT1 support.'),
