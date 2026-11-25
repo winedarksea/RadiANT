@@ -637,7 +637,9 @@ enum radiant_msg_type radiant_frame_msg_type(uint8_t ctrl_byte);
 /*
  * A frame a MASTER opens its slot with: the slot bit set AND a master's
  * message kind - a broadcast (0x0A), a burst's first packet (0x8A) or
- * acknowledged data (0xAA). radiant_ctrl_is_slot_opener() above reads the one
+ * acknowledged data (0xAA), with either sequence bit (so 0x1A/0x9A/0xBA pass
+ * too, though radiant_ctrl_observed() never saw them transmitted; the kind,
+ * not the sequence bit, is what this gate tests). radiant_ctrl_is_slot_opener() above reads the one
  * bit only, so it also passes 0x2A/0x4A/0x6A (b7 clear with b6 or b5 set),
  * which radiant_frame_msg_type() calls UNKNOWN: never transmitted, so a bit
  * error or a foreign stack, and no grounds to claim or anchor a channel. This

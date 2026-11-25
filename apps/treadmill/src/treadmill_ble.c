@@ -785,8 +785,11 @@ static void cp_work_fn(struct k_work *w)
 			if (data[1] == FTMS_STOP) {
 				/* A belt that refused speed 0 has not
 				 * stopped: Training Status stays, nothing
-				 * is notified, and the client is told
-				 * OPERATION_FAILED rather than SUCCESS. */
+				 * is notified, and the client is told the
+				 * refusal through ftms_result_for()
+				 * (OPERATION_FAILED for a failed actuator;
+				 * speed 0 is always in range, so never
+				 * INVALID_PARAM in practice), not SUCCESS. */
 				struct treadmill_ftms_outcome out =
 					treadmill_ftms_stop(&node_setters);
 

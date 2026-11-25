@@ -917,6 +917,16 @@ class TheWorkflowsThemselvesAreWellFormed(unittest.TestCase):
             self.assertIsNotNone(at, f"publish has no {prefix} step")
             self.assertLess(recheck, at, self.where(steps[at]))
 
+    def test_publish_runs_no_repo_script_before_the_tag_recheck(self):
+        # The header comment's trust order: every git-only trust check comes
+        # before the first repository script (check_release_artifacts.py).
+        steps = self.job_steps(self.RELEASE, "publish")
+        recheck = self.first_index(steps, self.is_tag_recheck)
+        self.assertIsNotNone(recheck, "publish does not re-check the tag")
+        early = [self.where(s) for s in steps[:recheck]
+                 if self.runs_repo_script(s)]
+        self.assertEqual(early, [])
+
 
 if __name__ == "__main__":
     unittest.main()
