@@ -2157,12 +2157,15 @@ ZTEST(api, test_sec_host_an_acked_acquiring_frame_follows_d15)
 ZTEST(api, test_sec_host_an_acked_clear_acquiring_frame_still_arrives)
 {
 	/* The control: acknowledged data outside the secured range is not the
-	 * secured stream, and reaches the host as it did before the hook. */
+	 * secured stream, and reaches the host at once - as ACKNOWLEDGED_DATA,
+	 * the kind it was sent as (A3, 2026-11-25; until then the acquiring
+	 * frame always went up as BROADCAST_DATA). */
 	static const uint8_t clear[8] = { 0x50u, 0x00u, 1u, 2u, 3u, 4u, 5u,
 					  6u };
 	struct acq_bd        n;
 	radiant_time_t       t;
 	uint32_t             from;
+	uint32_t             acked = 0u;
 
 	vd_setup(RADIANT_SEC_SW_AUTH | RADIANT_SEC_SW_DROP_UNVER, 2u);
 	from = api_msglog_count();
@@ -2173,10 +2176,22 @@ ZTEST(api, test_sec_host_an_acked_clear_acquiring_frame_still_arrives)
 		      radiant_channel_state_get(VD_RX_CH),
 		      "setup: the acked frame did not acquire the channel");
 	(void)radiant_event_drain(0u);
+	for (uint32_t k = from; k < api_msglog_count(); k++) {
+		const uint8_t *d;
+		uint8_t        id;
+		uint8_t        len;
+
+		d = api_msglog_get(k, &id, &len);
+		if (id == (uint8_t)RADIANT_WIRE_MESG_ACKNOWLEDGED_DATA_ID &&
+		    len >= 9u && d[0] == VD_RX_CH && d[1] == 0x50u) {
+			acked++;
+		}
+	}
+	zassert_equal(1u, acked,
+		      "a clear acked acquiring frame did not arrive at once as "
+		      "acknowledged data");
 	n = acq_count(from, 0x50u);
-	zassert_equal(1u, n.page,
-		      "a clear acked acquiring frame did not arrive at once");
-	zassert_equal(1u, n.all, "and nothing else did");
+	zassert_equal(0u, n.all, "and no broadcast did");
 	acq_done();
 
 	api_assert_no_viol();
