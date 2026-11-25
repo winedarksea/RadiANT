@@ -1907,6 +1907,35 @@ void radiant_channel_catch_up(uint8_t channel, radiant_time_t earliest)
 	skip_set(c, skip_get(c) + (uint32_t)((n > CHF_SKIP_MAX) ? CHF_SKIP_MAX : n));
 }
 
+void radiant_channel_on_heard_unanchored(uint8_t channel,
+					 radiant_time_t earliest)
+{
+	struct chan *c;
+
+	radiant_channel_catch_up(channel, earliest);
+
+	if (!ch_valid(channel)) {
+		return;
+	}
+	c = &channels[channel];
+	if (c->state != RADIANT_CH_STATE_TRACKING) {
+		return;
+	}
+	/*
+	 * The master was heard, so the misses and denials behind this window
+	 * stop counting toward SEARCHING, as radiant_channel_on_slot() retires
+	 * them. Nothing re-anchored, though, so the periods they extrapolated
+	 * still widen the guard: they move into the skip count, which carries
+	 * the same per-period weight in radiant_channel_guard_us() and is never
+	 * evidence for SEARCHING. skip_set() saturates; the guard's own ceiling
+	 * covers anything that loses.
+	 */
+	skip_set(c, skip_get(c) + (uint32_t)c->miss_count +
+			    (uint32_t)c->denied_count);
+	c->miss_count = 0u;
+	c->denied_count = 0u;
+}
+
 uint8_t radiant_channel_denied_count(uint8_t channel)
 {
 	if (!ch_valid(channel)) {

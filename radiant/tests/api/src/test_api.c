@@ -6832,8 +6832,9 @@ ZTEST(api, test_fec_pending_sent_on_reacquiring_frame)
 }
 
 /*
- * The negatives: the reacquiring frame does not send the held command, which
- * then still ends exactly once (here, at the close). `ctrl` is the frame's
+ * The negatives: the frame the search hears does not send the held command,
+ * whether it reacquires the channel (an opener) or not (a non-opener), and the
+ * command still ends exactly once (here, at the close). `ctrl` is the frame's
  * control byte; `exact` whether the backend timestamps it.
  */
 static void fec_reacquire_does_not_send(uint8_t ctrl, bool exact)
@@ -6886,7 +6887,7 @@ ZTEST(api, test_fec_pending_not_sent_on_inexact_reacquiring_frame)
 /* Another slave's 0x02 reply to the same master, heard by the continuous
  * search after it missed the master's frame, opens no reply slot. Since the
  * slot-opener gate it does not reacquire the channel either. */
-ZTEST(api, test_fec_pending_not_sent_on_reacquiring_slave_broadcast)
+ZTEST(api, test_fec_pending_not_sent_on_slave_broadcast_while_searching)
 {
 	api_long_match();
 	fec_reacquire_does_not_send(RADIANT_CTRL_SLAVE_BROADCAST, true);
@@ -8796,6 +8797,75 @@ ZTEST(api, test_prox_search_far_device_is_not_acquired)
 		      radiant_ant_channel_close(CH));
 	drain();
 	api_assert_no_viol();
+}
+
+/* A 0x71 sent after the open, to a channel already searching, applies to that
+ * search. The search record copied the threshold only when the search began,
+ * so this used to answer NO_ERROR and acquire the far device anyway. */
+ZTEST(api, test_prox_search_set_while_searching_applies_at_once)
+{
+	const struct fake_radio_arm *w;
+	uint16_t dev = 0u;
+
+	fake_radio_set_default_rssi(-75);
+	prox_slave_configured();
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_channel_open(CH));
+
+	/* The search is live (its window armed) with no threshold. */
+	w = armed_search_window();
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_prox_search_set(CH, 3u, 0u));
+
+	air_device(w, 0u, 0x0500u, 0x0Bu, 1000u, &dev);
+	fake_radio_advance_past_close(w->t_close);
+	drain();
+	zassert_equal(RADIANT_CH_STATE_SEARCHING, radiant_channel_state_get(CH),
+		      "a device at -75 dBm acquired under a bin 3 (-52 dBm) set "
+		      "mid-search");
+	zassert_is_null(first_bcast(), "a refused frame reached the host");
+
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_channel_close(CH));
+	drain();
+	api_assert_no_viol();
+}
+
+/* Set while tracking, the threshold waits for the next search: how a host
+ * keeps a floor across RX_FAIL_GO_TO_SEARCH, when the acquisition has cleared
+ * the last one (the treadmill's HR slave does this). */
+ZTEST(api, test_prox_search_set_while_tracking_floors_the_next_search)
+{
+	const struct fake_radio_arm *w;
+	uint16_t dev;
+	uint16_t far = 0u;
+	uint8_t  t = 0u;
+	uint8_t  c = 0u;
+
+	open_and_acquire_slave(&dev);
+	run_housekeeping();
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_prox_search_set(CH, 3u, 0u));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_prox_search_get(CH, &t, &c));
+	zassert_equal(3u, t, "not stored while tracking");
+
+	/* The sensor goes, and the channel is back in the sweep. */
+	drop_to_search(CH);
+	memset(msglog, 0, sizeof(msglog));
+	n_msg = 0u;
+
+	/* A far device in the re-search is refused. */
+	fake_radio_set_default_rssi(-75);
+	w = armed_search_window();
+	air_device(w, 0u, 0x0500u, 0x0Bu, 1000u, &far);
+	fake_radio_advance_past_close(w->t_close);
+	drain();
+	zassert_equal(RADIANT_CH_STATE_SEARCHING, radiant_channel_state_get(CH),
+		      "the re-search after a drop ran without the floor set "
+		      "while tracking");
+	zassert_is_null(first_bcast(), "a refused frame reached the host");
+
+	end_of_test();
 }
 
 /* Proximity off: byte 2 is -128 (0x80), the ANT documents' "off" (AN16

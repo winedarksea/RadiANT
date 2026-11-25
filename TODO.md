@@ -889,13 +889,26 @@ group.
   Default bin 3 kept; distance calibration was waived by the owner. Not on air:
   the bridge's long press (needs a hand on the button) and fail-closed with no
   RSSI (the TI always reports it).
+  *Review fixes 2026-11-25:* (1) a `0x71` sent to a channel already searching
+  answered OK but only applied from the next search start; it now goes into the
+  live search record (`radiant_search_set_min_rssi()`), and one sent while
+  tracking is stored for the next search. (2) The treadmill HR slave lost its
+  floor on `RX_FAIL_GO_TO_SEARCH` (the acquisition had cleared it, as ANT
+  says); it now sets it again on the first message after each acquisition.
+  (3) A long press on a full table evicted two sensors: the press edge opened
+  the window, the 1 s poll evicted an absent sensor, then the 3 s long press
+  took the newest. The ordinary eviction now waits until the press is known
+  to be short (`press_settling`). (4) A fifth long press in one window would
+  have overwritten the first eviction; it is refused instead. Not on air.
 - [x] **Owner decision: the RSSI field's byte 2 with proximity search off.**
   radiant sent `0x00`; AN16 RSSI Extended Information section 4.3.3 (and ANT
   MP Rev 5.1 section 7.1.1.2.3) give -128 (`0x80`) for "off".
   *Done 2026-11-25:* the owner ruled to follow the ANT documents unless there
   is a clearly better way, and there isn't one: 0x00 reads as a 0 dBm
   threshold. `RSSI_THRESHOLD_CFG_NONE` is now 0x80 (`radiant_event.c`), and
-  test_event asserts it. No host in the repo reads the byte. A Garmin ANTUSB-m
+  test_event asserts it. The only host code in the repo that reads the byte is
+  the bench tool `tools/ant_prox_onair.py`, which checks it (expects -128 when
+  off since the 2026-11-25 review fix; `--off-byte 0` for older logs). A Garmin ANTUSB-m
   can't confirm it: its RSSI field is measurement type 0x10 in 4 bytes, not
   the AN16 type 0x20 in 3, so it has no threshold byte
   (`archive/benchmarks/2026-11-25-garmin-rssi-byte2/`). Confirming on the
@@ -1106,6 +1119,12 @@ group.
   opener bit and cannot be told apart from the frame alone; it needs a master
   retry inside our search dwell, so it is rare. Tests: `test_search.c`
   (opener gate cases), `test_api.c` (tracked re-anchor, search on an ACK).
+  *Review fix 2026-11-25:* the catch-up alone left `miss_count` and
+  `denied_count` running, so misses separated by heard non-openers added up to
+  `RX_FAIL_GO_TO_SEARCH` where `on_slot()` used to reset them.
+  `radiant_channel_on_heard_unanchored()` now retires them into the skip
+  count, so the guard stays as wide (`test_channel`
+  `test_heard_unanchored_window_retires_misses_not_guard`).
   On-air A/B/A PASS 2026-11-24 (`archive/benchmarks/2026-11-24-opener-gate/`,
   TI DUT, L15 acked master, Garmin ACKer, 200 reopens per arm): old image
   13 and 13 acquisitions on the ACK (off-grid, ACK payload posted as the

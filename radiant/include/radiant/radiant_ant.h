@@ -653,7 +653,10 @@ radiant_ant_err_t radiant_ant_search_waveform_set(uint8_t channel, uint16_t wave
  *
  * ONE-SHOT, as in ANT (Message Protocol Rev 5.1, section 6.4): a successful
  * acquisition clears it, a search timeout keeps it, and tracking never filters
- * on it. Set it again before each search that needs it.
+ * on it. Set it again before each search that needs it. It may be set at any
+ * time after assignment: on a channel already searching it applies to the
+ * next frame offered; on one that is tracking it waits for the next search,
+ * which is how to keep a floor across RX_FAIL_GO_TO_SEARCH.
  *
  * @param channel    An assigned channel.
  * @param threshold  0 disables proximity search. 1..10 are bins, 1 the

@@ -248,3 +248,33 @@ ZTEST(treadmill_hr_rx, test_go_to_search_clears_bpm)
 		      "a strap that went away kept its last reading (%u bpm) "
 		      "through the search", (unsigned int)last_bpm_seen);
 }
+
+/* Proximity search is one-shot: the acquisition cleared the floor, so the
+ * module sets it again on the first message after it, while tracking. Without
+ * that, RX_FAIL_GO_TO_SEARCH sent the channel back to a wildcard search with
+ * no floor, free to lock onto a neighbour's strap at any distance. */
+ZTEST(treadmill_hr_rx, test_floor_is_rearmed_after_each_acquisition)
+{
+	uint8_t  floor_at_open = stub.last_prox;
+	uint32_t calls = stub.prox_calls;
+
+	/* The acquiring frame: the floor goes back in, once. */
+	feed_bpm(120u);
+	zassert_equal(calls + 1u, stub.prox_calls,
+		      "the floor was not set again after the acquisition");
+	zassert_equal(floor_at_open, stub.last_prox,
+		      "re-armed at bin %u, not the bin %u it opened with",
+		      stub.last_prox, floor_at_open);
+	feed_bpm(121u);
+	zassert_equal(calls + 1u, stub.prox_calls,
+		      "re-armed on every message, not once per acquisition");
+
+	/* The strap drops and is reacquired: that clears it again. */
+	feed_event(RADIANT_WIRE_EVENT_RX_FAIL_GO_TO_SEARCH);
+	zassert_equal(calls + 1u, stub.prox_calls,
+		      "nothing to do yet: the search runs on the floor already set");
+	feed_bpm(122u);
+	zassert_equal(calls + 2u, stub.prox_calls,
+		      "the floor was not set again after the reacquisition");
+	zassert_equal(floor_at_open, stub.last_prox);
+}

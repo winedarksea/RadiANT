@@ -370,7 +370,9 @@ public S212 API documentation for the C form):
   host reaches it through the optional third byte of `0x71`, which the Message Protocol does not
   define but this bridge has always accepted (`docs/ant-serial-protocol.md`).
 - **One-shot**: a successful acquisition clears the threshold, a search timeout keeps it, a
-  background scan keeps it, and tracking never filters on it.
+  background scan keeps it, and tracking never filters on it. On the radiant backend a threshold
+  set while searching applies to that search at once, and one set while tracking waits for the
+  next search (how to keep a floor across `EVENT_RX_FAIL_GO_TO_SEARCH`).
 - **Never store what cannot run**: a backend with no RSSI on search frames refuses any non-zero
   threshold and does not advertise `CAPABILITIES_PROX_SEARCH_ENABLED` (`docs/gotchas.md`).
 - The RSSI extended field's byte 2 reports the threshold in force as a signed dBm while it is set.

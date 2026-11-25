@@ -70,6 +70,13 @@ the strong level is +8 dBm (-37).
 | 3 strong | no | acquired, byte 2 = **-52**: still the bin from step 1 |
 | 4 weak | no | acquired, byte 2 = 0: **the acquisition cleared it** |
 
+The six `bh*_3_strong_noset` summary rows in `raw/behaviour.jsonl` each show
+`thr0_mismatch: 1`. That is the tool, not the firmware: step 3 sends no 0x71,
+so the tool expected the "off" value, but -52 (the kept bin 3) is the right
+answer. Fixed in the tool after the 2026-11-25 review (`run(..., expect=)`).
+The tool also now expects -128 for "off"; this image sent 0, so re-scoring
+these logs needs `--off-byte 0`.
+
 ## Wire
 
 | check | result |
@@ -95,7 +102,8 @@ the strong level is +8 dBm (-37).
 - **#8265 searched for by its own number:**
   - custom -39: 0/10. Custom -33 (wildcard search): 0/10.
   - custom -96 and custom -101: 10/10 each.
-  - Bin 4 (-56), just above its typical level, acquired 2 of 10. Both came on
+  - Bin 4 (-56), about 25 dB above its median in that sitting (-81.5 dBm over
+    20 prox-off acquisitions, `raw/hr_8265.jsonl`), acquired 2 of 10. Both came on
     a frame at exactly -56 dBm after about 2.9 s of searching. That is the
     inclusive "at or above" rule acting on a fade peak, not a leak.
   - So a far real sensor can pass a bin it sits well below most of the time,
@@ -121,10 +129,13 @@ RSSI), and the tool's `pair` mode (the real straps covered near/far instead).
 - At +8 dBm the DUT read -36/-37; the hrtx on the desk also reads -36.
 - The real strap across the room sat at -73 to -92, with fade peaks to -55.
 - Bin 3 (-52) separated the two straps 30/30.
-- A real strap transmits at about 0 dBm, which read -45 here, so bin 3 leaves
-  about 7 dB of margin for "held next to the dongle".
-- Bin 2 (-48) is the tightest bin that still passes a 0 dBm sensor with some
-  margin.
+- **Assumed, not measured:** nothing here measured a strap's transmit power.
+  If a strap transmits at about 0 dBm, then held about as far from the DUT as
+  the bench master was, it would read about -45, as the master did at 0 dBm.
+  Bin 3 would then leave about 7 dB of margin for "held next to the dongle".
+  The choice of bin 3 rests on that assumption.
+- Under the same assumption, bin 2 (-48) is the tightest bin that still
+  passes a 0 dBm sensor with some margin.
 - Bin 4 (-56) would occasionally admit a far strap's fade peak.
 
 **Default kept at bin 3** (`CONFIG_ANT_DONGLE_PAIRING_PROX_BIN`). The owner

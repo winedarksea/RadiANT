@@ -18,10 +18,32 @@
 #define ANT_BRIDGE_PARSER_ONLY 1
 #define CONFIG_ANT_DONGLE_HEALTH_COUNTERS 1
 #define ant_health_note test_parser_health_note
+#define ANT_BRIDGE_PROX_SEARCH_SET test_prox_search_set
 
 #include "../../../apps/common/ant_health.h"
 
 static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len);
+
+#include <radiant/radiant_ant.h>
+#include <radiant/radiant_wire.h>
+
+/* What dispatch()'s 0x71 case hands the API (prox_search_dispatch()). */
+static struct {
+	unsigned int calls;
+	uint8_t      channel;
+	uint8_t      threshold;
+	uint8_t      custom;
+} prox_set;
+
+static radiant_ant_err_t test_prox_search_set(uint8_t channel, uint8_t threshold,
+					      uint8_t custom)
+{
+	prox_set.calls++;
+	prox_set.channel = channel;
+	prox_set.threshold = threshold;
+	prox_set.custom = custom;
+	return RADIANT_WIRE_RESPONSE_NO_ERROR;
+}
 
 #include "../../../apps/common/ant_serial_bridge.c"
 
@@ -252,4 +274,32 @@ ZTEST(bridge_parser, test_prox_search_takes_an_optional_custom_byte)
 	prox_search_args(two, sizeof(two), &threshold, &custom);
 	zassert_equal(0x80u, threshold);
 	zassert_equal(0u, custom);
+}
+
+/* dispatch()'s 0x71 case end to end: the channel, threshold and the optional
+ * custom byte reach the API, and a one-byte body never calls it. */
+ZTEST(bridge_parser, test_prox_search_dispatch_passes_all_three_bytes)
+{
+	static const uint8_t custom3[] = { 5u, 0x80u, 60u };
+	static const uint8_t two[] = { 2u, 3u };
+	static const uint8_t one[] = { 2u };
+
+	memset(&prox_set, 0, sizeof(prox_set));
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      prox_search_dispatch(custom3, sizeof(custom3)));
+	zassert_equal(1u, prox_set.calls);
+	zassert_equal(5u, prox_set.channel);
+	zassert_equal(0x80u, prox_set.threshold);
+	zassert_equal(60u, prox_set.custom, "the custom byte was dropped");
+
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      prox_search_dispatch(two, sizeof(two)));
+	zassert_equal(2u, prox_set.calls);
+	zassert_equal(2u, prox_set.channel);
+	zassert_equal(3u, prox_set.threshold);
+	zassert_equal(0u, prox_set.custom);
+
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_INVALID_MESSAGE,
+		      prox_search_dispatch(one, sizeof(one)));
+	zassert_equal(2u, prox_set.calls, "a one-byte body reached the API");
 }

@@ -251,6 +251,18 @@ static atomic_t window_until;
  */
 static atomic_t force_evict;
 
+/*
+ * Raised by the press edge (pair_pressed()) and lowered by long_press_fn()
+ * once it has decided short or long, after raising force_evict for a long one.
+ * While it is up the poll defers the ordinary eviction: the press has opened
+ * the window, but whether it is a short press (free one channel by evicting
+ * the longest-absent sensor) or the start of a long one (evict the newest) is
+ * not known yet. Acting on the edge took both: holding the button to drop a
+ * neighbour's strap also unpaired an absent sensor at the first poll. The
+ * window itself opens at once, so a free channel can still bind.
+ */
+static atomic_t press_settling;
+
 static atomic_val_t window_deadline(void)
 {
 	uint32_t until = k_uptime_get_32() +
@@ -301,6 +313,8 @@ static void long_press_fn(struct k_work *work)
 		(void)atomic_set(&force_evict, 1);
 		(void)atomic_set(&window_until, window_deadline());
 	}
+	/* Last, so a poll that sees it down also sees force_evict. */
+	(void)atomic_set(&press_settling, 0);
 }
 
 static void pair_pressed(const struct device *dev, struct gpio_callback *cb,
@@ -313,6 +327,7 @@ static void pair_pressed(const struct device *dev, struct gpio_callback *cb,
 	/* ISR context. Only a timestamp is written and a work item scheduled;
 	 * every decision that follows is taken on the polling thread below,
 	 * where an radiant_ant_* call is legal. */
+	(void)atomic_set(&press_settling, 1);
 	(void)atomic_set(&window_until, window_deadline());
 	(void)k_work_reschedule(&long_press_work,
 				K_MSEC(CONFIG_ANT_DONGLE_PAIRING_LONG_PRESS_MS));
@@ -500,10 +515,12 @@ static void log_assign_refusal(uint8_t ch, int res, radiant_ant_err_t rc,
  * long press restarts the window, so a second one inside it keeps the first
  * eviction too. Written and read by the polling thread only.
  *
- * SELF_ID_LIST_MAX entries, the oldest overwritten. With the shipping two
- * self channels the exclusion list then holds at most one pinned device and
- * three evicted ones, all within its four; a build with more channels can
- * overflow it, and try_bind() catches what the list could not hold.
+ * SELF_ID_LIST_MAX entries. A long press past that is refused until the
+ * window closes: overwriting the oldest would let that sensor pair again in
+ * the same window. With the shipping two self channels the exclusion list
+ * holds one pinned device plus the evicted ones, so it can be one short; a
+ * build with more channels can be shorter still, and try_bind() catches what
+ * the list could not hold.
  */
 struct self_evicted {
 	uint16_t devnum;
@@ -1252,6 +1269,7 @@ static void self_thread_fn(void *a, void *b, void *c)
 
 	for (;;) {
 		bool win;
+		bool settling;
 		uint32_t now;
 		uint32_t until;
 		uint32_t gen;
@@ -1296,7 +1314,14 @@ static void self_thread_fn(void *a, void *b, void *c)
 		/* ONE read of the deadline per poll, and both `win` and the
 		 * `opened` edge come from it. Two reads would let a press landing
 		 * between them report a window as open without its edge, or the
-		 * edge of a window this poll judged closed. */
+		 * edge of a window this poll judged closed.
+		 *
+		 * press_settling is read before it: a press still settling
+		 * defers the `opened` edge below, and reading it first means a
+		 * poll that finds it down also finds the long press's
+		 * force_evict and window restart (long_press_fn() lowers it
+		 * last). */
+		settling = atomic_get(&press_settling) != 0;
 		now = k_uptime_get_32();
 		until = (uint32_t)atomic_get(&window_until);
 		win = window_open_at(until, now);
@@ -1313,7 +1338,7 @@ static void self_thread_fn(void *a, void *b, void *c)
 		 * channel now, not a licence to evict any sensor that blips while
 		 * the window happens to be open. */
 		opened = false;
-		if (until != last_window) {
+		if (until != last_window && !settling) {
 			last_window = until;
 			opened = win;
 		}
@@ -1354,8 +1379,20 @@ static void self_thread_fn(void *a, void *b, void *c)
 		 * second, absent sensor too.
 		 */
 		if (atomic_cas(&force_evict, 1, 0)) {
-			forced = radiant_self_pick_evict_forced(evict, SELF_N);
-			if (forced == RADIANT_SELF_EVICT_NONE) {
+			forced = (evicted_n < SELF_ID_LIST_MAX)
+					 ? radiant_self_pick_evict_forced(evict, SELF_N)
+					 : RADIANT_SELF_EVICT_NONE;
+			if (evicted_n >= SELF_ID_LIST_MAX) {
+				/* Another eviction would overwrite the oldest
+				 * entry and let that sensor pair again in this
+				 * same window: refuse, rather than undo an
+				 * earlier press without saying so. */
+				LOG_INF("long press: already evicted %u sensors in "
+					"this window - wait for it to close (%d s "
+					"after the last press)",
+					SELF_ID_LIST_MAX,
+					CONFIG_ANT_DONGLE_PAIRING_WINDOW_S);
+			} else if (forced == RADIANT_SELF_EVICT_NONE) {
 				LOG_INF("long press: no paired sensor to evict");
 			} else {
 				const struct radiant_binding *fb = radiant_binding_get(

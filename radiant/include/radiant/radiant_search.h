@@ -290,7 +290,8 @@ struct radiant_search_id_filter {
 
 enum radiant_search_mode {
 	/*
-	 * The ANT default. The first matching frame is offered to the channel,
+	 * The ANT default. The first matching frame that is a slot opener and
+	 * passes the channel's proximity threshold is offered to the channel,
 	 * which then LEAVES the search and joins the scheduler's tracked set.
 	 * May call radiant_search_begin() again on loss - fast via the seen
 	 * cache.
@@ -482,7 +483,9 @@ struct radiant_search_stats {
 	/* Offers an ACQUIRE channel withheld because the frame was not a slot
 	 * opener (a slave reply, an ACK, an in-slot burst packet), which sits
 	 * 2.19 ms or a burst step off the master's grid. Counted per channel
-	 * offered, like permit_rejected. SCAN channels are never counted. */
+	 * offered, like permit_rejected. SCAN channels are never counted. A
+	 * retried burst packet 0 carries the opener bit and is NOT caught here
+	 * (radiant_ctrl_is_slot_opener()). */
 	uint32_t non_opener_skipped;
 	/* Chunks the scheduler's A9-3 reclaimed (reported more than
 	 * RADIANT_SCHED_ARMED_STALE_US past their close). The backend had lost
@@ -719,6 +722,18 @@ int radiant_search_begin(struct radiant_search *s, uint8_t channel,
  * to let it run out or abort it, because only the scheduler knows what else
  * wants the radio. */
 int radiant_search_end(struct radiant_search *s, uint8_t channel);
+
+/*
+ * Change a searching channel's proximity threshold (the filter's
+ * min_rssi_dbm, 0 = off) in place: the next frame offered is judged against
+ * it. Nothing else in the record changes, so the search keeps its steering
+ * and backoff, where a re-begin would restart them. For a 0x71 that arrives
+ * after the channel opened. Under radiant_event_crit_enter(), which nests, so
+ * a caller may hold it to pair this with its own state.
+ * RADIANT_SEARCH_ENOENT if the channel is not searching.
+ */
+int radiant_search_set_min_rssi(struct radiant_search *s, uint8_t channel,
+				int8_t dbm);
 
 bool    radiant_search_is_searching(const struct radiant_search *s, uint8_t channel);
 uint8_t radiant_search_n_searching(const struct radiant_search *s);

@@ -584,6 +584,13 @@ static inline uint8_t radiant_ctrl_seq(uint8_t ctrl)
 	return (uint8_t)((ctrl & RADIANT_CTRL_SEQ) != 0u);
 }
 
+/*
+ * The SLOT bit: the master's first frame of a period. ONE KNOWN EXCEPTION: a
+ * master that retries burst packet 0 (0x8A/0xAA) sends it again a burst step
+ * into the period with the bit still set, so a search can claim on it, and a
+ * tracker re-anchor on it, a burst step off the grid. The control byte alone
+ * cannot tell it from a fresh opener (TODO.md, the opener-gate item's residual).
+ */
 static inline bool radiant_ctrl_is_slot_opener(uint8_t ctrl)
 {
 	return (ctrl & RADIANT_CTRL_SLOT) != 0u;

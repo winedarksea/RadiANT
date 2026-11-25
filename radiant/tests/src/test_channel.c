@@ -2006,6 +2006,63 @@ ZTEST(radiant_channel, test_guard_widens_for_periods_a_burst_stepped_over)
 	radio_clean();
 }
 
+/* A window that heard the master only on a frame it must not re-anchor on (a
+ * reply, an ACK, an in-slot burst packet) still proves the master is there:
+ * radiant_channel_on_heard_unanchored() retires the misses before it, as a
+ * heard slot did before the opener gate, so misses either side of it do not
+ * add up to RX_FAIL_GO_TO_SEARCH. Nothing re-anchored, so the guard stays as
+ * wide as those misses made it. */
+ZTEST(radiant_channel, test_heard_unanchored_window_retires_misses_not_guard)
+{
+	radiant_time_t t0;
+	radiant_time_t next;
+	radiant_time_t period;
+	uint32_t narrow;
+	uint32_t wide;
+	uint8_t i;
+
+	up();
+	t0 = radiant_radio_now();
+	acquire_slave(1u, t0);
+	(void)clean_slots(1u, 64u, 3);
+
+	next = clean_slots(1u, 1u, 3);
+	period = radiant_channel_next_slot(1u) - next;
+	narrow = radiant_channel_guard_us(1u);
+
+	/* One short of the RX_FAIL budget. */
+	for (i = 1u; i < RADIANT_CHANNEL_RX_FAIL_TO_SEARCH; i++) {
+		zassert_false(radiant_channel_on_slot_missed(1u, radiant_radio_now()),
+			      "miss %u", i);
+	}
+	wide = radiant_channel_guard_us(1u);
+
+	/* The next window hears only an ACK: one period stepped, no anchor. */
+	next = radiant_channel_next_slot(1u);
+	radiant_channel_on_heard_unanchored(1u, next + wide + 1u);
+	zassert_equal(next + period, radiant_channel_next_slot(1u),
+		      "not stepped one period on the master's phase");
+	zassert_equal(wide + RADIANT_CHANNEL_DRIFT_WORST_US,
+		      radiant_channel_guard_us(1u),
+		      "guard %u from %u: the retired misses must still widen it",
+		      radiant_channel_guard_us(1u), wide);
+
+	/* The full budget is back: seven more misses stay TRACKING. Before,
+	 * the first of them was the eighth in a row and went to search. */
+	for (i = 1u; i < RADIANT_CHANNEL_RX_FAIL_TO_SEARCH; i++) {
+		zassert_false(radiant_channel_on_slot_missed(1u, radiant_radio_now()),
+			      "miss %u after a heard window", i);
+	}
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(1u));
+
+	/* A slot heard on an opener re-anchors and narrows it back. */
+	(void)clean_slots(1u, 1u, 3);
+	zassert_equal(narrow, radiant_channel_guard_us(1u));
+
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()));
+	radio_clean();
+}
+
 /* ---------------------------------------------------------------------------
  * Proximity search (0x71)
  * ---------------------------------------------------------------------------

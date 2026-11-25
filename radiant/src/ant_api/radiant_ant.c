@@ -1791,7 +1791,9 @@ static void api_search_begin(uint8_t ch, radiant_time_t now)
 	want.trans_type = id.trans_type;
 	/* The 0x71 threshold, enforced at the claim. The search core ignores
 	 * it on a background scan. One-shot: cleared by the acquisition, so a
-	 * re-search after a drop begins with 0 unless the host set it again. */
+	 * re-search after a drop begins with 0 unless the host set it again
+	 * (while tracking, or here mid-search: radiant_ant_prox_search_set()
+	 * pushes a new one into a live search). */
 	(void)radiant_channel_prox_min_rssi(ch, &want.min_rssi_dbm);
 
 	mode = ((radiant_channel_ext_assign_get(ch) &
@@ -2563,16 +2565,22 @@ static bool api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt,
 	 * anchoring there walks the grid off the master's, and the next windows
 	 * miss. Skipping the anchor costs little: a missed anchor only extrapolates
 	 * one period, while a wrong one moves the grid. The window still counts as
-	 * heard (slot_heard, api_sched_rx()), since a reply or ACK proves the master
-	 * transmitted that period. Repaired frames are broadcasts only (0x0A, an
-	 * opener), so they re-anchor as before. A master never re-anchors here: it
-	 * owns the slot grid, and the frame it hears is a slave's reply.
+	 * heard, since a reply or ACK proves the master transmitted that period:
+	 * slot_heard (api_sched_rx()), and on_heard_unanchored() retires the miss
+	 * and denial counts as on_slot() would, so misses with heard windows
+	 * between them do not add up to RX_FAIL_GO_TO_SEARCH. Repaired frames are
+	 * broadcasts only (0x0A, an opener), so they re-anchor as before. A
+	 * retried burst packet 0 keeps the opener bit and re-anchors too, a burst
+	 * step late (radiant_ctrl_is_slot_opener(), known gap). A master never
+	 * re-anchors here: it owns the slot grid, and the frame it hears is a
+	 * slave's reply.
 	 *
 	 * A heard window does not advance the clock by itself (only on_slot() and
 	 * the miss paths do), so the extrapolation is explicit: the frame came
-	 * from this window's slot, t_next <= t_sync + guard, and catch_up() steps
+	 * from this window's slot, t_next <= t_sync + guard, and the catch-up steps
 	 * whole periods past that instant - one, keeping the master's phase and
-	 * charging the guard only. Without it the next window is posted at the
+	 * charging the guard only (the retired misses move to the skip count, so
+	 * the guard stays as wide). Without it the next window is posted at the
 	 * slot already gone, runs empty, and counts a miss.
 	 */
 	if (!radiant_channel_is_master(ch)) {
@@ -2581,7 +2589,7 @@ static bool api_tracked_frame(uint8_t ch, const struct radiant_rx_event *evt,
 			radiant_search_seen_note_rf(&api_search, &id, evt->t_sync,
 						    api_rf_of(ch));
 		} else {
-			radiant_channel_catch_up(
+			radiant_channel_on_heard_unanchored(
 				ch, evt->t_sync +
 					    (radiant_time_t)radiant_channel_guard_us(ch) +
 					    1u);
@@ -4042,11 +4050,35 @@ radiant_ant_err_t radiant_ant_prox_search_set(uint8_t channel, uint8_t threshold
 				uint8_t custom)
 {
 	const struct radiant_radio_caps *caps = radiant_radio_caps_get();
+	radiant_ant_err_t rc;
+	unsigned int      key;
+	int8_t            dbm = 0;
 
-	/* A radio with no RSSI on its frames cannot run the gate, so a
-	 * non-zero threshold is refused there (radiant_channel.h). */
-	return radiant_channel_prox_search_set(channel, threshold, custom,
-					       caps != NULL && caps->has_rssi);
+	k_mutex_lock(&api_lock, K_FOREVER);
+	/*
+	 * A radio with no RSSI on its frames cannot run the gate, so a
+	 * non-zero threshold is refused there (radiant_channel.h).
+	 *
+	 * A channel already searching takes the new threshold at once.
+	 * api_search_begin() copies it into the search record only when a
+	 * search starts, so without this a 0x71 sent after the open returned OK
+	 * and whether it applied came down to timing. Store and push under the
+	 * critical section: the acquisition (radio interrupt) clears the stored
+	 * threshold and the record together, so neither lands between them.
+	 * A channel that is tracking just stores it for its next search.
+	 */
+	key = radiant_event_crit_enter();
+	rc = radiant_channel_prox_search_set(channel, threshold, custom,
+					     caps != NULL && caps->has_rssi);
+	if (rc == RADIANT_CH_OK &&
+	    radiant_channel_state_get(channel) == RADIANT_CH_STATE_SEARCHING &&
+	    radiant_channel_prox_min_rssi(channel, &dbm) == RADIANT_CH_OK) {
+		(void)radiant_search_set_min_rssi(&api_search, channel, dbm);
+	}
+	radiant_event_crit_exit(key);
+	k_mutex_unlock(&api_lock);
+
+	return rc;
 }
 
 radiant_ant_err_t radiant_ant_search_channel_priority_set(uint8_t channel, uint8_t priority)

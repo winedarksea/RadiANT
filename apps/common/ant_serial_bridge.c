@@ -161,6 +161,28 @@ static inline void prox_search_args(const uint8_t *body, uint8_t len,
 	*custom = (len >= 3U) ? body[2] : 0U;
 }
 
+/*
+ * dispatch()'s whole 0x71 case, here rather than inline so that
+ * test_bridge_parser.c runs the real path against a stub setter (it defines
+ * ANT_BRIDGE_PROX_SEARCH_SET before including this file): checking
+ * prox_search_args() alone would pass with a dispatch() that never called it.
+ */
+#ifndef ANT_BRIDGE_PROX_SEARCH_SET
+#define ANT_BRIDGE_PROX_SEARCH_SET radiant_ant_prox_search_set
+#endif
+static inline radiant_ant_err_t prox_search_dispatch(const uint8_t *body,
+						     uint8_t len)
+{
+	uint8_t threshold;
+	uint8_t custom;
+
+	if (len < 2U) {
+		return RADIANT_WIRE_INVALID_MESSAGE;
+	}
+	prox_search_args(body, len, &threshold, &custom);
+	return ANT_BRIDGE_PROX_SEARCH_SET(body[0], threshold, custom);
+}
+
 /* ── Host trace (CONFIG_ANT_DONGLE_HOST_TRACE) ─────────────────────────────── */
 
 /*
@@ -1550,13 +1572,7 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 
 	case RADIANT_WIRE_MESG_PROX_SEARCH_CONFIG_ID:
 		/* body: [ch, threshold, (custom)]: see prox_search_args(). */
-		if (len >= 2) {
-			uint8_t threshold;
-			uint8_t custom;
-
-			prox_search_args(body, len, &threshold, &custom);
-			err = radiant_ant_prox_search_set(body[0], threshold, custom);
-		}
+		err = prox_search_dispatch(body, len);
 		break;
 
 	case RADIANT_WIRE_MESG_SET_SEARCH_CH_PRIORITY_ID:

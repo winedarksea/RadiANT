@@ -184,8 +184,9 @@ in force as a signed dBm (ANT Message Protocol and Usage Rev 5.1, section
 7.1.1.2.3; AN16 RSSI Extended Information, section 4.3.3). With proximity
 search off it is -128 (`0x80`), the documents' "off" value (AN16 section 4.3.3,
 worked example `[20][DD][80]`). `radiant` sent `0x00` there until 2026-11-25,
-when the owner ruled to follow the ANT documents. No host in this repository
-reads the byte.
+when the owner ruled to follow the ANT documents. The only host code in this
+repository that reads the byte is the bench tool `tools/ant_prox_onair.py`,
+which checks it.
 
 ## Proximity search (`0x71`)
 
@@ -206,6 +207,12 @@ two-byte `0x80` arrives with custom 0 and is refused.
   keeps it, and a background-scanning channel keeps it. A host re-sends `0x71`
   before every search that needs it. Tracking never filters on it: once
   acquired, distance does not matter.
+- **When it applies.** `0x71` is accepted on any assigned channel. Sent to a
+  channel that is already searching, it applies to that search from the next
+  frame. Sent while tracking, it is stored for the next search. That is how a
+  host keeps a floor across `EVENT_RX_FAIL_GO_TO_SEARCH`: the acquisition
+  cleared the last threshold, so a wildcard re-search would otherwise take the
+  first device heard, at any distance.
 - It does not apply to continuous scanning (Rev 5.1, section 6.4), and
   `radiant` enforces it at the ACQUIRE claim only. A frame below the threshold,
   or one with no RSSI at all, cannot acquire the channel and does not use up

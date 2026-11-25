@@ -676,6 +676,30 @@ int radiant_search_end(struct radiant_search *s, uint8_t channel)
 	return RADIANT_SEARCH_OK;
 }
 
+int radiant_search_set_min_rssi(struct radiant_search *s, uint8_t channel,
+				int8_t dbm)
+{
+	unsigned int key;
+
+	if (!inst_ok(s)) {
+		return RADIANT_SEARCH_EINVAL;
+	}
+	if (channel >= (uint8_t)RADIANT_SEARCH_MAX_CHANNELS) {
+		return RADIANT_SEARCH_EINVAL;
+	}
+	/* One byte, but under the critical section like every other change
+	 * to a live record, so the caller can pair it atomically with its own
+	 * state (radiant_ant_prox_search_set()). */
+	key = radiant_event_crit_enter();
+	if (!s->chans[channel].active) {
+		radiant_event_crit_exit(key);
+		return RADIANT_SEARCH_ENOENT;
+	}
+	s->chans[channel].want.min_rssi_dbm = dbm;
+	radiant_event_crit_exit(key);
+	return RADIANT_SEARCH_OK;
+}
+
 uint8_t radiant_search_rf_get(const struct radiant_search *s)
 {
 	return inst_ok(s) ? s->cfg.rf_index : 0u;
@@ -1088,7 +1112,9 @@ static void handle_ok(struct radiant_search *s, const struct radiant_rx_event *e
 		 * packet a burst step past it; claiming on one puts the channel
 		 * off the grid, and posts that frame to the host as its first
 		 * broadcast. Skipped before the claim and the permit call, so a
-		 * non-opener spends neither. SCAN reports every frame. */
+		 * non-opener spends neither. SCAN reports every frame. Known gap:
+		 * a retried burst packet 0 still carries the opener bit
+		 * (radiant_ctrl_is_slot_opener()). */
 		if (ch->mode == RADIANT_SEARCH_MODE_ACQUIRE &&
 		    !radiant_ctrl_is_slot_opener(f.ctrl_byte)) {
 			s->stats.non_opener_skipped++;

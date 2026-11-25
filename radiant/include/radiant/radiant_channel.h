@@ -568,8 +568,12 @@ radiant_channel_err_t radiant_channel_search_waveform_get(uint8_t channel,
  * radiant_ant_prox_search_set(): ANT proximity search (0x71). Enforced by
  * radiant_search.c at the ACQUIRE claim (radiant_search_id_filter's
  * min_rssi_dbm, set from radiant_channel_prox_min_rssi() when the search
- * begins): a frame below the threshold, or one with no RSSI, cannot acquire
- * the channel. Tracking and background scans ignore it.
+ * begins, and pushed into a search already running by
+ * radiant_ant_prox_search_set()): a frame below the threshold, or one with no
+ * RSSI, cannot acquire the channel. Tracking and background scans ignore it.
+ * Set while tracking, it is stored for the channel's next search, which is
+ * how a host keeps a floor across a drop to search (the acquisition cleared
+ * the last one).
  *
  * threshold 0 turns it off; 1..10 are the bins, 1 closest; and
  * RADIANT_CH_PROX_THRESHOLD_CUSTOM (0x80, Nordic's C API; on the wire the
@@ -882,6 +886,19 @@ bool radiant_channel_on_slot_denied(uint8_t channel, radiant_time_t now);
  * They are never evidence for SEARCHING.
  */
 void radiant_channel_catch_up(uint8_t channel, radiant_time_t earliest);
+
+/*
+ * A tracked slave heard its master in this window, but on a frame it must not
+ * re-anchor on: a slave reply, an ACK, an in-slot burst packet (the slot
+ * opener gate). radiant_channel_catch_up() to `earliest`, then the liveness
+ * half of radiant_channel_on_slot(): the miss and denial counts go to zero, so
+ * misses separated by heard windows do not add up to RX_FAIL_GO_TO_SEARCH.
+ * The periods those counts extrapolated move into the skip count, so
+ * radiant_channel_guard_us() stays as wide as before, since nothing measured
+ * where the master's grid is. No-op past the catch-up unless TRACKING.
+ */
+void radiant_channel_on_heard_unanchored(uint8_t channel,
+					 radiant_time_t earliest);
 
 /* Consecutive denials on this channel since the last slot it heard. Zero on a
  * backend that owns the radio; readable so that a bench run can attribute a

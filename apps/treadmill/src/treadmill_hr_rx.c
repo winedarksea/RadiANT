@@ -57,7 +57,12 @@ LOG_MODULE_DECLARE(treadmill, CONFIG_TREADMILL_LOG_LEVEL);
  * each timeout.
  *
  * Proximity search is ONE-SHOT: an acquisition clears it, so each reopen
- * below sets it again.
+ * below sets it again, and so does the first message after each acquisition
+ * (prox_rearm_due). That second one is what keeps the floor when the strap
+ * drops: RX_FAIL_GO_TO_SEARCH sends the channel back to a wildcard search,
+ * and without a floor in place it could lock onto a neighbour's strap at any
+ * distance for up to the whole search timeout. Set while tracking, radiant
+ * stores it for the next search (radiant_ant_prox_search_set()).
  *
  * IT NEVER TIGHTENS AGAIN WHILE TRACKING, which is the hold-down: a strap that
  * drops a few packets does not restart the search, and one that goes away for
@@ -81,6 +86,10 @@ LOG_MODULE_DECLARE(treadmill, CONFIG_TREADMILL_LOG_LEVEL);
 
 static uint8_t  hr_channel = 0xFFu;
 static uint8_t  prox_threshold = PROX_START;
+/* An acquisition is coming that will clear the floor (one-shot): set it again
+ * on the first message after it. Raised by every open and by
+ * RX_FAIL_GO_TO_SEARCH. */
+static bool     prox_rearm_due;
 static uint16_t tracked_device;
 static int8_t   tracked_rssi_dbm;
 static uint8_t  last_bpm;
@@ -185,6 +194,7 @@ int treadmill_hr_rx_start(uint8_t channel)
 	int        err;
 
 	hr_channel = channel;
+	prox_rearm_due = true;
 	err = configure_channel(channel);
 	if (err != 0) {
 		return err;
@@ -233,6 +243,7 @@ static void research_after_close(void)
 	radiant_ant_err_t rc;
 
 	research_pending = false;
+	prox_rearm_due = true;
 	(void)radiant_ant_prox_search_set(hr_channel, prox_threshold, 0u);
 	rc = radiant_ant_channel_open(hr_channel);
 	if (rc == RADIANT_WIRE_RESPONSE_NO_ERROR) {
@@ -302,8 +313,11 @@ bool treadmill_hr_rx_message(const struct radiant_ant_msg *msg)
 		case RADIANT_WIRE_EVENT_RX_FAIL_GO_TO_SEARCH:
 			/* The strap has gone (about 2 s of misses), not dropped
 			 * a packet: stop reporting its last bpm for the whole
-			 * search (B2-2). The proximity floor is untouched. */
+			 * search (B2-2). The floor this search runs with was set
+			 * on the first message after the last acquisition; the
+			 * next acquisition clears it, so set it again then. */
 			no_reading_run = 0u;
+			prox_rearm_due = true;
 			publish_bpm(TREADMILL_HR_NONE);
 			break;
 		default:
@@ -316,6 +330,13 @@ bool treadmill_hr_rx_message(const struct radiant_ant_msg *msg)
 	     msg->id != RADIANT_WIRE_MESG_EXT_BROADCAST_DATA_ID) ||
 	    msg->len < 9u || msg->data[0] != hr_channel) {
 		return false;
+	}
+
+	/* The first message after an acquisition: it cleared the floor, so
+	 * set it again now, while tracking, for the next search (header). */
+	if (prox_rearm_due) {
+		prox_rearm_due = false;
+		(void)radiant_ant_prox_search_set(hr_channel, prox_threshold, 0u);
 	}
 
 	payload = &msg->data[1];

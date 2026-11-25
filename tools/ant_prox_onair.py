@@ -23,7 +23,7 @@ MODES (--mode, may repeat; run in the order given):
              reopen WITHOUT 0x71 (expect timeout: a timeout keeps it); strong
              level, reopen without 0x71 (expect acquire, byte 2 = B's dBm);
              weak level, reopen without 0x71 (expect acquire: the acquisition
-             cleared it, byte 2 = 0).
+             cleared it, byte 2 = -128, the AN16 "off" value).
   pair       Two masters, same RF and period, device numbers --device and
              --far-device; the DUT searches with a WILDCARD device number.
              --trials with prox off, then --trials with bin --pair-bin.
@@ -239,9 +239,15 @@ def thr_label(p):
     return f"bin{p[0]}({BIN_DBM.get(p[0])})"
 
 
+# The RSSI field's byte 2 with proximity search off: -128 (0x80), AN16
+# section 4.3.3. radiant sent 0 until 2ca4e25; pass --off-byte 0 to judge a
+# log or an image from before it.
+THR_OFF = -128
+
+
 def expected_dbm(p):
     if p is None or p[0] == 0:
-        return 0
+        return THR_OFF
     if p[0] == 0x80:
         return -p[1]
     return BIN_DBM[p[0]]
@@ -297,7 +303,12 @@ def main():
     ap.add_argument("--delay-max", type=float, default=0.5)
     ap.add_argument("--seed", type=int, default=None)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--off-byte", type=int, default=-128,
+                    help="byte 2 with proximity off: -128 (AN16), or 0 for "
+                         "a radiant image from before 2ca4e25")
     a = ap.parse_args()
+    global THR_OFF
+    THR_OFF = a.off_byte
     rnd = random.Random(a.seed)
     fh = open(a.out, "w", encoding="utf-8")
 
@@ -348,7 +359,11 @@ def main():
         log({"set_level": lv, "resp": code}, f"-- master level {lv}: resp {code}")
         time.sleep(0.3)
 
-    def run(label, n, prox, level, resend=True):
+    def run(label, n, prox, level, resend=True, expect=None):
+        """expect: byte 2 due on the acquiring frame when it is not
+        prox's own (behaviour step 3 sends nothing but runs on the kept
+        threshold); default expected_dbm(prox)."""
+        want0 = expected_dbm(prox) if expect is None else expect
         recs = []
         for i in range(n):
             time.sleep(rnd.uniform(0.0, a.delay_max))
@@ -361,11 +376,11 @@ def main():
                    f"no-acq sto={rec['sto']} {rec.get('sto_s')}")
             log(rec, f"[{label}] {level:>4} {thr_label(prox):>14} {i:3d} {tag}")
         acq = [r for r in recs if r["acquired"]]
-        bad0 = [r for r in acq if r["thr0"] != expected_dbm(prox)]
-        badl = [r for r in acq if any(t != 0 for t in r["later_thr"])]
+        bad0 = [r for r in acq if r["thr0"] != want0]
+        badl = [r for r in acq if any(t != THR_OFF for t in r["later_thr"])]
         s = {"summary": label, "level": level, "thr": thr_label(prox), "n": n,
              "acquired": len(acq), "sto": sum(r["sto"] for r in recs),
-             "thr0_mismatch": len(bad0), "later_thr_nonzero": len(badl),
+             "thr0_mismatch": len(bad0), "later_thr_not_off": len(badl),
              "prox_resp": sorted({r.get("prox_resp") for r in recs} - {None})}
         if acq:
             s["acq_ms_median"] = round(1000 * statistics.median(r["acq_s"] for r in acq))
@@ -431,7 +446,9 @@ def main():
                 run(f"bh{k}_1_weak_set", 1, b, a.weak)
                 run(f"bh{k}_2_weak_noset", 1, None, a.weak)
                 set_level(a.strong)
-                run(f"bh{k}_3_strong_noset", 1, None, a.strong)
+                # Nothing sent, but the timeouts kept bin B: byte 2 is B's.
+                run(f"bh{k}_3_strong_noset", 1, None, a.strong,
+                    expect=expected_dbm(b))
                 set_level(a.weak)
                 run(f"bh{k}_4_weak_noset_after_acq", 1, None, a.weak)
         elif mode == "pair":
