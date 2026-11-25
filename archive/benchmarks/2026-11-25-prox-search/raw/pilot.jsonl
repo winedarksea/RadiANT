@@ -1,0 +1,28 @@
+{"meta": {"master_port": "COM4", "master_serial": null, "master_baud": 115200, "master_kind": "l15", "far_port": null, "far_serial": null, "far_baud": 115200, "far_kind": "garmin", "far_level": "w4", "far_device": 24602, "dut_port": "COM11", "dut_serial": null, "dut_baud": 57600, "device": 24601, "dev_type": 25, "trans_type": 1, "rf": 66, "period": 4096, "search_timeout": 2, "mode": ["wire", "ladder"], "levels": "+8", "cal": 5, "trials": 3, "margin": 6, "strong": "+8", "weak": "-28", "behaviour_bin": null, "rounds": 5, "pair_bin": null, "pair_level": "+8", "acquire": 8.0, "watch": 1.0, "delay_max": 0.5, "seed": 1, "out": "archive/benchmarks/2026-11-25-prox-search/raw/pilot.jsonl"}, "t_start": 1795617374.4263723}
+{"caps": "200300ba3600050001", "adv2": 54, "prox_bit": true}
+{"wire_0x71": "custom_60", "body": [128, 60], "code": 0}
+{"wire_0x71": "bin_11", "body": [11], "code": 51}
+{"wire_0x71": "custom_2byte", "body": [128], "code": 51}
+{"wire_0x71": "bin_10", "body": [10], "code": 0}
+{"wire_0x71": "bin_1", "body": [1], "code": 0}
+{"wire_0x71": "custom_0", "body": [128, 0], "code": 51}
+{"wire_0x71": "custom_128", "body": [128, 128], "code": 51}
+{"wire_0x71": "bin_3_with_3rd", "body": [3, 99], "code": 0}
+{"wire_0x71": "off", "body": [0], "code": 0}
+{"set_level": "+8", "resp": 0}
+{"prox": null, "acq_s": 0.091, "dev": 24601, "rssi0": -36, "thr0": 0, "acquired": true, "sto": false, "closed": true, "later_thr": [0], "n_msgs": 9, "rssi_mean": -36.67, "rssi_min": -37, "rssi_max": -36, "label": "cal", "level": "+8", "i": 0, "thr": "off"}
+{"prox": null, "acq_s": 0.0659, "dev": 24601, "rssi0": -36, "thr0": 0, "acquired": true, "sto": false, "closed": true, "later_thr": [0], "n_msgs": 9, "rssi_mean": -36.67, "rssi_min": -37, "rssi_max": -36, "label": "cal", "level": "+8", "i": 1, "thr": "off"}
+{"prox": null, "acq_s": 0.113, "dev": 24601, "rssi0": -36, "thr0": 0, "acquired": true, "sto": false, "closed": true, "later_thr": [0], "n_msgs": 9, "rssi_mean": -36.56, "rssi_min": -37, "rssi_max": -36, "label": "cal", "level": "+8", "i": 2, "thr": "off"}
+{"prox": null, "acq_s": 0.1175, "dev": 24601, "rssi0": -36, "thr0": 0, "acquired": true, "sto": false, "closed": true, "later_thr": [0], "n_msgs": 9, "rssi_mean": -36.67, "rssi_min": -37, "rssi_max": -36, "label": "cal", "level": "+8", "i": 3, "thr": "off"}
+{"prox": null, "acq_s": 0.1151, "dev": 24601, "rssi0": -36, "thr0": 0, "acquired": true, "sto": false, "closed": true, "later_thr": [0], "n_msgs": 9, "rssi_mean": -36.67, "rssi_min": -37, "rssi_max": -36, "label": "cal", "level": "+8", "i": 4, "thr": "off"}
+{"summary": "cal", "level": "+8", "thr": "off", "n": 5, "acquired": 5, "sto": 0, "thr0_mismatch": 0, "later_thr_nonzero": 0, "prox_resp": [], "acq_ms_median": 113, "rssi0_min": -36, "rssi0_median": -36, "rssi0_max": -36}
+{"bracket": "+8", "lo": -37, "hi": -36, "reject": [128, 30], "pass": [1]}
+{"prox": [128, 30], "prox_resp": 0, "sto_s": 5.023, "acquired": false, "sto": true, "closed": true, "later_thr": [], "n_msgs": 0, "label": "reject", "level": "+8", "i": 0, "thr": "custom-30"}
+{"prox": [128, 30], "prox_resp": 0, "sto_s": 5.023, "acquired": false, "sto": true, "closed": true, "later_thr": [], "n_msgs": 0, "label": "reject", "level": "+8", "i": 1, "thr": "custom-30"}
+{"prox": [128, 30], "prox_resp": 0, "sto_s": 5.023, "acquired": false, "sto": true, "closed": true, "later_thr": [], "n_msgs": 0, "label": "reject", "level": "+8", "i": 2, "thr": "custom-30"}
+{"summary": "reject", "level": "+8", "thr": "custom-30", "n": 3, "acquired": 0, "sto": 3, "thr0_mismatch": 0, "later_thr_nonzero": 0, "prox_resp": [0]}
+{"prox": [1], "prox_resp": 0, "acq_s": 0.0377, "dev": 24601, "rssi0": -36, "thr0": -44, "acquired": true, "sto": false, "closed": true, "later_thr": [0], "n_msgs": 9, "rssi_mean": -36.56, "rssi_min": -37, "rssi_max": -36, "label": "pass", "level": "+8", "i": 0, "thr": "bin1(-44)"}
+{"prox": [1], "prox_resp": 0, "acq_s": 0.1005, "dev": 24601, "rssi0": -37, "thr0": -44, "acquired": true, "sto": false, "closed": true, "later_thr": [0], "n_msgs": 9, "rssi_mean": -36.89, "rssi_min": -37, "rssi_max": -36, "label": "pass", "level": "+8", "i": 1, "thr": "bin1(-44)"}
+{"prox": [1], "prox_resp": 0, "acq_s": 0.0736, "dev": 24601, "rssi0": -37, "thr0": -44, "acquired": true, "sto": false, "closed": true, "later_thr": [0], "n_msgs": 9, "rssi_mean": -37, "rssi_min": -37, "rssi_max": -37, "label": "pass", "level": "+8", "i": 2, "thr": "bin1(-44)"}
+{"summary": "pass", "level": "+8", "thr": "bin1(-44)", "n": 3, "acquired": 3, "sto": 0, "thr0_mismatch": 0, "later_thr_nonzero": 0, "prox_resp": [0], "acq_ms_median": 74, "rssi0_min": -37, "rssi0_median": -37, "rssi0_max": -36}
+{"tail": {"master": {"tx": 223}, "far": null, "t_end": 1795617402.7727532}}
