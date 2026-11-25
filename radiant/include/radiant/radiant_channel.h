@@ -565,23 +565,43 @@ radiant_channel_err_t radiant_channel_search_waveform_get(uint8_t channel,
 						  uint16_t *out);
 
 /*
- * radiant_ant_prox_search_set(). PERMANENT LIMITATION, not a gap: nothing wires a
- * channel's prox_threshold to radiant_search.c's RSSI gate, and the
- * capability bit is not advertised. Storing a non-zero threshold that
- * nothing enforces is the trap docs/gotchas.md warns against - a host would
- * believe distant sensors are filtered when none are. So only 0 (off) is
- * accepted; any non-zero threshold is refused rather than silently dropped.
- * See the radiant_ant_* mapping in docs/sdk-ant-contract.md.
- * Returns OK, INVALID_MESSAGE, WRONG_STATE or INVALID_PARAM (threshold > 10,
- * or any non-zero threshold).
+ * radiant_ant_prox_search_set(): ANT proximity search (0x71). Enforced by
+ * radiant_search.c at the ACQUIRE claim (radiant_search_id_filter's
+ * min_rssi_dbm, set from radiant_channel_prox_min_rssi() when the search
+ * begins): a frame below the threshold, or one with no RSSI, cannot acquire
+ * the channel. Tracking and background scans ignore it.
+ *
+ * threshold 0 turns it off; 1..10 are the bins, 1 closest; and
+ * RADIANT_CH_PROX_THRESHOLD_CUSTOM (0x80, Nordic's C API only - the wire
+ * message has no custom byte) takes `custom` as the threshold, a positive
+ * magnitude in dB below 0 dBm [inferred], 1..127. `custom` is stored only
+ * with 0x80. ONE-SHOT: radiant_channel_on_acquired() clears the threshold;
+ * a search timeout keeps it.
+ *
+ * rssi_capable is the radio's caps.has_rssi. A non-zero threshold on a radio
+ * with no RSSI is refused rather than stored: the gate would fail every frame
+ * closed, and a stored filter that cannot run is the trap docs/gotchas.md
+ * warns against.
+ * Returns OK, INVALID_MESSAGE, WRONG_STATE or INVALID_PARAM (threshold 11..0x7F
+ * or 0x81..0xFF, 0x80 with custom 0 or > 127, or non-zero without RSSI).
  */
-#define RADIANT_CH_PROX_THRESHOLD_MAX 10u
+#define RADIANT_CH_PROX_THRESHOLD_MAX    10u
+#define RADIANT_CH_PROX_THRESHOLD_CUSTOM 0x80u
+#define RADIANT_CH_PROX_CUSTOM_MAX       127u
 radiant_channel_err_t radiant_channel_prox_search_set(uint8_t channel,
 					      uint8_t threshold,
-					      uint8_t custom);
+					      uint8_t custom,
+					      bool rssi_capable);
 radiant_channel_err_t radiant_channel_prox_search_get(uint8_t channel,
 					      uint8_t *threshold,
 					      uint8_t *custom);
+/*
+ * The minimum RSSI the threshold in force asks for, in dBm: the bin's level
+ * (the table in radiant_channel.c, Nordic's approximate nRF51 figures), the
+ * custom value, or 0 when proximity search is off. Returns OK,
+ * INVALID_MESSAGE or INVALID_PARAM (dbm NULL).
+ */
+radiant_channel_err_t radiant_channel_prox_min_rssi(uint8_t channel, int8_t *dbm);
 
 /* radiant_ant_search_channel_priority_set()/_get(). 0 low, 1 high.
  * Returns OK, INVALID_MESSAGE or WRONG_STATE (unassigned) on the setter; the

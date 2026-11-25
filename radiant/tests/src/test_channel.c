@@ -625,9 +625,16 @@ ZTEST(radiant_channel, test_out_of_range_channel_is_invalid_message)
 		      radiant_channel_search_waveform_set(bad, 316u));
 	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE,
 		      radiant_channel_search_waveform_get(bad, &u16));
-	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE, radiant_channel_prox_search_set(bad, 1u, 0u));
+	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE,
+		      radiant_channel_prox_search_set(bad, 1u, 0u, true));
 	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE,
 		      radiant_channel_prox_search_get(bad, &u8, &u8b));
+	{
+		int8_t dbm;
+
+		zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE,
+			      radiant_channel_prox_min_rssi(bad, &dbm));
+	}
 	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE, radiant_channel_search_priority_set(bad, 1u));
 	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE, radiant_channel_search_priority_get(bad, &u8));
 	zassert_equal(RADIANT_CH_ERR_INVALID_MESSAGE, radiant_channel_sharing_cycles_set(bad, 2u));
@@ -710,19 +717,16 @@ ZTEST(radiant_channel, test_bad_parameter_values_and_bad_network)
 			      0u, RADIANT_CH_SEARCH_WAVEFORM_FAST));
 	zassert_equal(RADIANT_CH_ERR_INVALID_PARAM, radiant_channel_search_waveform_set(0u, 200u));
 
-	/*
-	 * Proximity: PERMANENT LIMITATION. Nothing reads prox_threshold back
-	 * into a filter and the capability bit is not advertised, so only 0
-	 * (off) is accepted; every non-zero threshold is refused rather than
-	 * stored and silently never enforced.
-	 */
-	zassert_equal(RADIANT_CH_OK, radiant_channel_prox_search_set(0u, 0u, 0u));
+	/* Proximity: 0..10, or 0x80 with a custom value; 11 is refused (out
+	 * of range behaviour is unpublished, so refusing it is our choice).
+	 * The rest is test_prox_search_*. */
+	zassert_equal(RADIANT_CH_OK, radiant_channel_prox_search_set(0u, 0u, 0u, true));
+	zassert_equal(RADIANT_CH_OK,
+		      radiant_channel_prox_search_set(
+			      0u, RADIANT_CH_PROX_THRESHOLD_MAX, 0u, true));
 	zassert_equal(RADIANT_CH_ERR_INVALID_PARAM,
 		      radiant_channel_prox_search_set(
-			      0u, RADIANT_CH_PROX_THRESHOLD_MAX, 0u));
-	zassert_equal(RADIANT_CH_ERR_INVALID_PARAM,
-		      radiant_channel_prox_search_set(
-			      0u, RADIANT_CH_PROX_THRESHOLD_MAX + 1u, 0u));
+			      0u, RADIANT_CH_PROX_THRESHOLD_MAX + 1u, 0u, true));
 
 	/* Transmit power: 0..5, or anything at all behind the custom bit. */
 	zassert_equal(RADIANT_CH_OK, radiant_channel_tx_power_set(0u, 5u, 0u));
@@ -1810,13 +1814,16 @@ ZTEST(radiant_channel, test_configuration_round_trips_and_defaults)
 	zassert_equal(RADIANT_CH_OK, radiant_channel_sharing_cycles_get(0u, &a));
 	zassert_equal(7u, a);
 
-	/* Proximity only round-trips at threshold 0 - see the header. `custom`
-	 * still carries through unconditionally, which is what proves the
-	 * refusal above is about the threshold and not the whole call. */
-	zassert_equal(RADIANT_CH_OK, radiant_channel_prox_search_set(0u, 0u, 0x9Bu));
+	/* Proximity round-trips; `custom` is written only with the custom
+	 * threshold (0x80), so a bin leaves the last custom value alone. */
+	zassert_equal(RADIANT_CH_OK,
+		      radiant_channel_prox_search_set(
+			      0u, RADIANT_CH_PROX_THRESHOLD_CUSTOM, 0x41u, true));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_prox_search_set(0u, 7u, 0x9Bu, true));
 	zassert_equal(RADIANT_CH_OK, radiant_channel_prox_search_get(0u, &a, &b));
-	zassert_equal(0u, a);
-	zassert_equal(0x9Bu, b);
+	zassert_equal(7u, a);
+	zassert_equal(0x41u, b);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_prox_search_set(0u, 0u, 0u, true));
 
 	/* Any non-zero priority normalises to 1: the contract documents 0 and
 	 * 1 and permits no INVALID_PARAMETER_PROVIDED here, so a 2 cannot be
@@ -1996,5 +2003,158 @@ ZTEST(radiant_channel, test_guard_widens_for_periods_a_burst_stepped_over)
 	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(1u));
 
 	zassert_equal(RADIANT_CH_OK, radiant_channel_close(1u, radiant_radio_now()));
+	radio_clean();
+}
+
+/* ---------------------------------------------------------------------------
+ * Proximity search (0x71)
+ * ---------------------------------------------------------------------------
+ */
+
+ZTEST(radiant_channel, test_prox_search_accepts_every_bin_and_maps_it_to_dbm)
+{
+	/* Nordic's approximate nRF51 levels (radiant_channel.c): bin 1 is
+	 * -44 dBm, 4 dB a bin, bin 10 is -80. Monotonic: a higher bin is a
+	 * weaker floor, i.e. farther away. */
+	static const int8_t want[11] = {
+		0, -44, -48, -52, -56, -60, -64, -68, -72, -76, -80,
+	};
+	uint8_t t = 0u;
+	uint8_t c = 0u;
+	int8_t dbm = 1;
+
+	zassert_equal(RADIANT_CH_OK, radiant_channel_assign(0u, TYPE_SLAVE, 0u, 0u));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_prox_min_rssi(0u, &dbm));
+	zassert_equal(0, dbm, "off by default");
+
+	for (uint8_t bin = 0u; bin <= RADIANT_CH_PROX_THRESHOLD_MAX; bin++) {
+		zassert_equal(RADIANT_CH_OK,
+			      radiant_channel_prox_search_set(0u, bin, 0u, true),
+			      "bin %u", bin);
+		zassert_equal(RADIANT_CH_OK, radiant_channel_prox_search_get(0u, &t, &c));
+		zassert_equal(bin, t);
+		zassert_equal(RADIANT_CH_OK, radiant_channel_prox_min_rssi(0u, &dbm));
+		zassert_equal(want[bin], dbm, "bin %u: %d dBm", bin, dbm);
+	}
+	zassert_equal(RADIANT_CH_ERR_INVALID_PARAM, radiant_channel_prox_min_rssi(0u, NULL));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_unassign(0u));
+}
+
+ZTEST(radiant_channel, test_prox_search_refuses_eleven_and_the_unused_range)
+{
+	uint8_t t = 0xEEu;
+	uint8_t c = 0u;
+
+	zassert_equal(RADIANT_CH_OK, radiant_channel_assign(0u, TYPE_SLAVE, 0u, 0u));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_prox_search_set(0u, 5u, 0u, true));
+
+	/* 11..0x7F and 0x81..0xFF: refused, and the 5 in force is kept. */
+	zassert_equal(RADIANT_CH_ERR_INVALID_PARAM,
+		      radiant_channel_prox_search_set(0u, 11u, 0u, true));
+	zassert_equal(RADIANT_CH_ERR_INVALID_PARAM,
+		      radiant_channel_prox_search_set(0u, 0x7Fu, 0u, true));
+	zassert_equal(RADIANT_CH_ERR_INVALID_PARAM,
+		      radiant_channel_prox_search_set(0u, 0x81u, 60u, true));
+	zassert_equal(RADIANT_CH_ERR_INVALID_PARAM,
+		      radiant_channel_prox_search_set(0u, 0xFFu, 60u, true));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_prox_search_get(0u, &t, &c));
+	zassert_equal(5u, t);
+
+	/* An unassigned channel is WRONG_STATE, as every setter here. */
+	zassert_equal(RADIANT_CH_OK, radiant_channel_unassign(0u));
+	zassert_equal(RADIANT_CH_ERR_WRONG_STATE,
+		      radiant_channel_prox_search_set(0u, 1u, 0u, true));
+}
+
+ZTEST(radiant_channel, test_prox_search_custom_threshold_is_a_magnitude)
+{
+	uint8_t t = 0u;
+	uint8_t c = 0u;
+	int8_t dbm = 0;
+
+	zassert_equal(RADIANT_CH_OK, radiant_channel_assign(0u, TYPE_SLAVE, 0u, 0u));
+
+	/* [inferred] custom 60 is -60 dBm. */
+	zassert_equal(RADIANT_CH_OK,
+		      radiant_channel_prox_search_set(
+			      0u, RADIANT_CH_PROX_THRESHOLD_CUSTOM, 60u, true));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_prox_min_rssi(0u, &dbm));
+	zassert_equal(-60, dbm);
+	zassert_equal(RADIANT_CH_OK,
+		      radiant_channel_prox_search_set(
+			      0u, RADIANT_CH_PROX_THRESHOLD_CUSTOM,
+			      RADIANT_CH_PROX_CUSTOM_MAX, true));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_prox_min_rssi(0u, &dbm));
+	zassert_equal(-127, dbm);
+
+	/* 0 and past 127 are refused, and leave the threshold as it was. */
+	zassert_equal(RADIANT_CH_ERR_INVALID_PARAM,
+		      radiant_channel_prox_search_set(
+			      0u, RADIANT_CH_PROX_THRESHOLD_CUSTOM, 0u, true));
+	zassert_equal(RADIANT_CH_ERR_INVALID_PARAM,
+		      radiant_channel_prox_search_set(
+			      0u, RADIANT_CH_PROX_THRESHOLD_CUSTOM, 128u, true));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_prox_search_get(0u, &t, &c));
+	zassert_equal(RADIANT_CH_PROX_THRESHOLD_CUSTOM, t);
+	zassert_equal(RADIANT_CH_PROX_CUSTOM_MAX, c);
+
+	zassert_equal(RADIANT_CH_OK, radiant_channel_unassign(0u));
+}
+
+ZTEST(radiant_channel, test_prox_search_refused_without_rssi)
+{
+	uint8_t t = 0xEEu;
+	uint8_t c = 0u;
+
+	zassert_equal(RADIANT_CH_OK, radiant_channel_assign(0u, TYPE_SLAVE, 0u, 0u));
+
+	/* A radio with no RSSI on its frames cannot run the gate: every
+	 * non-zero threshold is refused, and off is still accepted. */
+	zassert_equal(RADIANT_CH_ERR_INVALID_PARAM,
+		      radiant_channel_prox_search_set(0u, 1u, 0u, false));
+	zassert_equal(RADIANT_CH_ERR_INVALID_PARAM,
+		      radiant_channel_prox_search_set(
+			      0u, RADIANT_CH_PROX_THRESHOLD_CUSTOM, 60u, false));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_prox_search_set(0u, 0u, 0u, false));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_prox_search_get(0u, &t, &c));
+	zassert_equal(0u, t);
+
+	zassert_equal(RADIANT_CH_OK, radiant_channel_unassign(0u));
+}
+
+ZTEST(radiant_channel, test_prox_search_is_one_shot)
+{
+	struct radiant_channel_id acquired = { TEST_DEVNUM, TEST_DEVTYPE,
+					       TEST_TRANSTYPE };
+	radiant_time_t t0;
+	uint8_t t = 0xEEu;
+	uint8_t c = 0u;
+	int8_t dbm = 1;
+
+	up();
+	t0 = radiant_radio_now();
+
+	/* A search timeout keeps it (ANT MP Rev 5.1 6.4, AN12 section 4). */
+	assign_and_id(4u, TYPE_SLAVE);
+	zassert_equal(RADIANT_CH_OK, radiant_channel_prox_search_set(4u, 3u, 0u, true));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_search_timeout_set(4u, 1u));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_lp_search_timeout_set(4u, 0u));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_open(4u, 0u, t0));
+	zassert_equal(1u, radiant_channel_tick(t0 + 2500000u));
+	zassert_equal(RADIANT_CH_STATE_ASSIGNED, radiant_channel_state_get(4u));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_prox_search_get(4u, &t, &c));
+	zassert_equal(3u, t, "a search timeout cleared the threshold");
+
+	/* A successful acquisition clears it: the next search, after a drop
+	 * or a reopen, is at any distance unless the host sets it again. */
+	zassert_equal(RADIANT_CH_OK, radiant_channel_open(4u, 0u, radiant_radio_now()));
+	radiant_channel_on_acquired(4u, &acquired, radiant_radio_now());
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(4u));
+	zassert_equal(RADIANT_CH_OK, radiant_channel_prox_search_get(4u, &t, &c));
+	zassert_equal(0u, t, "the acquisition did not clear the threshold");
+	zassert_equal(RADIANT_CH_OK, radiant_channel_prox_min_rssi(4u, &dbm));
+	zassert_equal(0, dbm);
+
+	zassert_equal(RADIANT_CH_OK, radiant_channel_close(4u, radiant_radio_now()));
 	radio_clean();
 }

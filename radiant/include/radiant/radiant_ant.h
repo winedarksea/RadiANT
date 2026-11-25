@@ -648,19 +648,29 @@ radiant_ant_err_t radiant_ant_search_waveform_set(uint8_t channel, uint16_t wave
 
 /**
  * Set the proximity search threshold - refuse to acquire a sensor that is too
- * far away.
+ * far away. This is what a head unit uses to pair with the strap on your chest
+ * rather than the one on the next bike.
+ *
+ * ONE-SHOT, as in ANT (Message Protocol Rev 5.1, section 6.4): a successful
+ * acquisition clears it, a search timeout keeps it, and tracking never filters
+ * on it. Set it again before each search that needs it.
  *
  * @param channel    An assigned channel.
- * @param threshold  0 disables proximity search; 1..10 are increasing RSSI
- *                   thresholds. This is what a head unit uses to pair with the
- *                   strap on your chest rather than the one on the next bike.
- * @param custom     A raw RSSI threshold in dBm, used when the backend
- *                   supports it; 0 otherwise. Optional in the serial message,
- *                   so the bridge passes 0 when the host sent the short form.
+ * @param threshold  0 disables proximity search. 1..10 are bins, 1 the
+ *                   closest (strongest signal): on the radiant backend bin n
+ *                   accepts a frame at or above -44 - 4 (n - 1) dBm, Nordic's
+ *                   approximate nRF51 figures. 0x80 selects the custom
+ *                   threshold below (Nordic's C API; the serial message has
+ *                   no custom byte).
+ * @param custom     Read only with threshold 0x80: the minimum RSSI as a
+ *                   positive magnitude, 1..127, so 60 is -60 dBm [inferred:
+ *                   no encoding is published].
  *
  * Returns 0, RADIANT_WIRE_INVALID_MESSAGE (channel out of range),
- * RADIANT_WIRE_CHANNEL_IN_WRONG_STATE (unassigned) or RADIANT_WIRE_INVALID_PARAMETER_PROVIDED
- * (threshold > 10).
+ * RADIANT_WIRE_CHANNEL_IN_WRONG_STATE (unassigned) or
+ * RADIANT_WIRE_INVALID_PARAMETER_PROVIDED (threshold 11..0x7F or 0x81..0xFF,
+ * 0x80 with custom 0 or above 127, or any non-zero threshold on a radio that
+ * reports no RSSI, which could not enforce it).
  */
 radiant_ant_err_t radiant_ant_prox_search_set(uint8_t channel, uint8_t threshold,
 				uint8_t custom);

@@ -141,6 +141,7 @@ struct radiant_event_slot {
 	uint8_t    device_type;
 	uint8_t    trans_type;
 	int8_t     rssi_dbm;
+	int8_t     prox_dbm;   /* the RSSI field's byte 2; 0 = off */
 	uint8_t    flags;
 	uint8_t    body[RADIANT_EVENT_BODY_MAX];
 };
@@ -282,10 +283,17 @@ enum radiant_event_ts_policy radiant_event_get_ts_policy(void)
  * ---------------------------------------------------------------------------
  */
 
-/* Byte 2 of the RSSI field: the proximity-search threshold configuration in
- * force. Zero is "proximity search off", which is the only state anything in
- * this project puts a channel in; tools/ant_conformance.py's byte diff is what
- * pins it against a real stick. */
+/*
+ * Byte 2 of the RSSI field: the proximity-search threshold configuration in
+ * force, a signed dBm (ANT Message Protocol Rev 5.1, section 7.1.1.2.3; AN16
+ * RSSI Extended Information, section 4.3.3). With proximity search on it is
+ * the threshold's level (radiant_channel_prox_min_rssi()).
+ *
+ * OFF IS 0x00 HERE, and the ANT documents say -128 (0x80). Kept at 0 on
+ * purpose until the owner rules on it: changing it changes every RSSI tail
+ * a host has ever seen from this stack. tools/ant_conformance.py does not
+ * compare received-data tails, so nothing on the bench pins either value.
+ */
 #define RSSI_THRESHOLD_CFG_NONE  0x00u
 
 int radiant_event_build_ext(uint8_t config, const struct radiant_event_ext *in,
@@ -316,7 +324,8 @@ int radiant_event_build_ext(uint8_t config, const struct radiant_event_ext *in,
 			flags |= (uint8_t)RADIANT_WIRE_EXT_FLAG_RSSI;
 			buf[n++] = (uint8_t)RADIANT_WIRE_RSSI_MEASUREMENT_TYPE_DBM;
 			buf[n++] = (uint8_t)in->rssi_dbm;
-			buf[n++] = RSSI_THRESHOLD_CFG_NONE;
+			buf[n++] = (in->prox_dbm != 0) ? (uint8_t)in->prox_dbm
+						       : RSSI_THRESHOLD_CFG_NONE;
 		} else {
 			/* A backend with caps.has_rssi false has no number to
 			 * give. Emitting 0 dBm would be a physically
@@ -499,6 +508,7 @@ int radiant_event_post_rx(const struct radiant_event_rx *rx)
 		s.flags = (uint8_t)(s.flags | SLOT_HAS_RSSI);
 		s.rssi_dbm = rx->hal->rssi_dbm;
 	}
+	s.prox_dbm = rx->prox_dbm;
 
 	return enqueue(&s, false);
 }
@@ -658,6 +668,7 @@ static bool deliver(const struct radiant_event_slot *s)
 		ext.id.trans_type = s->trans_type;
 		ext.has_rssi = (s->flags & SLOT_HAS_RSSI) != 0u;
 		ext.rssi_dbm = s->rssi_dbm;
+		ext.prox_dbm = s->prox_dbm;
 		ext.has_t_sync = (s->flags & SLOT_HAS_TS) != 0u;
 		ext.t_sync_exact = (s->flags & SLOT_TS_EXACT) != 0u;
 		ext.t_sync = s->t_sync;

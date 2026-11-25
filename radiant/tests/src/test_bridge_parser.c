@@ -200,6 +200,8 @@ ZTEST(bridge_parser, test_exact_length_messages_refuse_any_other_length)
 		{ RADIANT_WIRE_MESG_RADIANT_SEC_CONFIG_ID, 5u },
 		{ RADIANT_WIRE_MESG_RADIANT_SET_KEY_ID, 18u },
 		{ RADIANT_WIRE_MESG_RADIANT_EPOCH_ID, 14u },
+		/* No custom byte on the wire (ANT MP Rev 5.1, 9.5.2.22). */
+		{ RADIANT_WIRE_MESG_PROX_SEARCH_CONFIG_ID, 2u },
 	};
 
 	for (size_t i = 0; i < ARRAY_SIZE(exact); i++) {

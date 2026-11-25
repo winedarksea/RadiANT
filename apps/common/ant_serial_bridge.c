@@ -136,6 +136,9 @@ static inline bool body_len_ok(uint8_t id, uint8_t len)
 		return len == 18U;
 	case RADIANT_WIRE_MESG_RADIANT_EPOCH_ID:
 		return len == 14U;
+	case RADIANT_WIRE_MESG_PROX_SEARCH_CONFIG_ID:
+		/* [channel, threshold]: the protocol has no custom byte. */
+		return len == 2U;
 	default:
 		return true;
 	}
@@ -1529,11 +1532,13 @@ static void dispatch(uint8_t msg_id, const uint8_t *body, uint8_t len)
 		break;
 
 	case RADIANT_WIRE_MESG_PROX_SEARCH_CONFIG_ID:
-		/* body: [ch, threshold, (custom threshold optional)] */
-		if (len >= 2) {
-			uint8_t custom = (len >= 3) ? body[2] : 0;
-
-			err = radiant_ant_prox_search_set(body[0], body[1], custom);
+		/* body: [ch, threshold]. Two bytes exactly: the ANT Message
+		 * Protocol (Rev 5.1, section 9.5.2.22) defines no custom byte on
+		 * the wire - that exists only in Nordic's C API - so a third
+		 * byte is refused by body_len_ok(), not read as one. The custom
+		 * form (0x80) arrives with custom 0 and is refused. */
+		if (len == 2) {
+			err = radiant_ant_prox_search_set(body[0], body[1], 0u);
 		}
 		break;
 

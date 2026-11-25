@@ -1085,6 +1085,14 @@ static void handle_ok(struct radiant_search *s, const struct radiant_rx_event *e
 		if (ch->mode == RADIANT_SEARCH_MODE_ACQUIRE && acquire_claimed) {
 			continue;
 		}
+		/* Proximity search: too weak, or no RSSI to judge by (fail
+		 * closed), and this channel is not offered the frame. Before the
+		 * claim, so the next ACQUIRE channel may still take it. */
+		if (ch->mode == RADIANT_SEARCH_MODE_ACQUIRE && ch->want.min_rssi_dbm != 0 &&
+		    (!evt->has_rssi || evt->rssi_dbm < ch->want.min_rssi_dbm)) {
+			s->stats.prox_rejected++;
+			continue;
+		}
 		if (!chan_permits(s, c, &f.id)) {
 			s->stats.permit_rejected++;
 			continue;

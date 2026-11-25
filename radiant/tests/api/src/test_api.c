@@ -8512,3 +8512,177 @@ ZTEST(api, test_two_masters_drifting_through_each_other)
 	zassert_equal(0u, failures,
 		      "runs failing (bit = row of runs[]): 0x%03x", failures);
 }
+
+/* ---------------------------------------------------------------------------
+ * Proximity search (0x71)
+ *
+ * With every extended field on, a received broadcast is
+ *   [ch][d0..d7][flag][num lo][num hi][type][trans][meas][rssi][threshold]...
+ * so the RSSI field's byte 2, the threshold in force, is data[16].
+ * ---------------------------------------------------------------------------
+ */
+#define EXT_RSSI_THRESHOLD 16u
+
+/* A wildcard slave configured but not opened, with every extended field. */
+static void prox_slave_configured(void)
+{
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_network_address_set(0u, ant_plus_key));
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_lib_config_set((uint8_t)RADIANT_WIRE_LIB_CONFIG_ALL_EXT_FIELDS));
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_channel_assign(
+			      CH, (uint8_t)RADIANT_WIRE_CHANNEL_TYPE_SLAVE_RX_ONLY, 0u, 0u));
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_channel_id_set(CH, 0u, 0u, 0u));
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_channel_period_set(CH, RADIANT_CHANNEL_PERIOD_ANT_PLUS));
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_channel_radio_freq_set(CH, RF_INDEX));
+}
+
+static const struct msg_rec *first_bcast(void)
+{
+	for (uint32_t i = 0u; i < n_msg && i < MSGLOG_MAX; i++) {
+		if (msglog[i].id == (uint8_t)RADIANT_WIRE_MESG_BROADCAST_DATA_ID) {
+			return &msglog[i];
+		}
+	}
+	return NULL;
+}
+
+ZTEST(api, test_prox_search_is_advertised_and_a_bin_is_accepted)
+{
+	uint8_t caps[RADIANT_WIRE_MESG_CAPABILITIES_SIZE];
+
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_capabilities_get(caps));
+	zassert_true((caps[RADIANT_WIRE_CAPABILITIES_OFFSET_ADVANCED_OPTIONS_2] &
+		      RADIANT_WIRE_CAPABILITIES_PROX_SEARCH_ENABLED) != 0u,
+		     "proximity search enforced but not advertised");
+
+	prox_slave_configured();
+	for (uint8_t bin = 0u; bin <= 10u; bin++) {
+		zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+			      radiant_ant_prox_search_set(CH, bin, 0u), "bin %u", bin);
+	}
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_INVALID_PARAMETER_PROVIDED,
+		      radiant_ant_prox_search_set(CH, 11u, 0u));
+	/* Nordic's custom form: 0x80 plus a magnitude; 0 is refused. */
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_prox_search_set(CH, 0x80u, 60u));
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_INVALID_PARAMETER_PROVIDED,
+		      radiant_ant_prox_search_set(CH, 0x80u, 0u));
+	api_assert_no_viol();
+}
+
+ZTEST(api, test_prox_search_is_refused_and_not_advertised_without_rssi)
+{
+	uint8_t caps[RADIANT_WIRE_MESG_CAPABILITIES_SIZE];
+
+	fake_radio_caps_mut()->has_rssi = false;
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_capabilities_get(caps));
+	zassert_equal(0u, caps[RADIANT_WIRE_CAPABILITIES_OFFSET_ADVANCED_OPTIONS_2] &
+				  RADIANT_WIRE_CAPABILITIES_PROX_SEARCH_ENABLED,
+		      "advertised a filter this radio cannot run");
+
+	prox_slave_configured();
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_INVALID_PARAMETER_PROVIDED,
+		      radiant_ant_prox_search_set(CH, 1u, 0u));
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_prox_search_set(CH, 0u, 0u));
+	api_assert_no_viol();
+}
+
+/* A near device acquires; the first broadcast carries the threshold it passed
+ * in the RSSI field's byte 2; and the acquisition clears the threshold. */
+ZTEST(api, test_prox_search_near_device_acquires_and_clears_the_threshold)
+{
+	const struct fake_radio_arm *w;
+	const struct msg_rec *m;
+	uint16_t dev = 0u;
+	uint8_t t = 0xEEu;
+	uint8_t c = 0u;
+
+	prox_slave_configured();
+	/* Bin 3 is -52 dBm; the fake radio hears at -17. */
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_prox_search_set(CH, 3u, 0u));
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_channel_open(CH));
+
+	w = armed_search_window();
+	air_device(w, 0u, 0x0500u, 0x0Bu, 1000u, &dev);
+	fake_radio_advance_past_close(w->t_close);
+	drain();
+	zassert_equal(RADIANT_CH_STATE_TRACKING, radiant_channel_state_get(CH),
+		      "a device well above the threshold was not acquired");
+
+	m = first_bcast();
+	zassert_not_null(m, "no broadcast for the acquiring frame");
+	zassert_true(m->len > EXT_RSSI_THRESHOLD);
+	zassert_true((m->data[EXT_FLAG] & (uint8_t)RADIANT_WIRE_EXT_FLAG_RSSI) != 0u);
+	zassert_equal((uint8_t)(int8_t)-52, m->data[EXT_RSSI_THRESHOLD],
+		      "byte 2 is 0x%02x", m->data[EXT_RSSI_THRESHOLD]);
+
+	/* One-shot (ANT MP Rev 5.1 6.4): gone once acquired. */
+	zassert_equal(RADIANT_CH_OK, radiant_channel_prox_search_get(CH, &t, &c));
+	zassert_equal(0u, t, "the acquisition left the threshold set");
+	api_assert_no_viol();
+}
+
+/* A far device is never acquired, and the channel stays SEARCHING. */
+ZTEST(api, test_prox_search_far_device_is_not_acquired)
+{
+	const struct fake_radio_arm *w;
+	uint16_t dev = 0u;
+	uint8_t t = 0u;
+	uint8_t c = 0u;
+
+	fake_radio_set_default_rssi(-75);
+	prox_slave_configured();
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_prox_search_set(CH, 3u, 0u));
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_channel_open(CH));
+
+	w = armed_search_window();
+	air_device(w, 0u, 0x0500u, 0x0Bu, 1000u, &dev);
+	fake_radio_advance_past_close(w->t_close);
+	drain();
+
+	zassert_equal(RADIANT_CH_STATE_SEARCHING, radiant_channel_state_get(CH),
+		      "a device at -75 dBm acquired under bin 3 (-52 dBm)");
+	zassert_is_null(first_bcast(), "a refused frame reached the host");
+	zassert_equal(RADIANT_CH_OK, radiant_channel_prox_search_get(CH, &t, &c));
+	zassert_equal(3u, t, "the threshold went with no acquisition");
+
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_channel_close(CH));
+	drain();
+	api_assert_no_viol();
+}
+
+/* Proximity off: byte 2 stays what it has always been (0x00 here; see
+ * RSSI_THRESHOLD_CFG_NONE in radiant_event.c). */
+ZTEST(api, test_prox_search_off_reports_threshold_none)
+{
+	const struct fake_radio_arm *w;
+	const struct msg_rec *m;
+	uint16_t dev = 0u;
+
+	prox_slave_configured();
+	zassert_equal((radiant_ant_err_t)RADIANT_WIRE_RESPONSE_NO_ERROR,
+		      radiant_ant_channel_open(CH));
+	w = armed_search_window();
+	air_device(w, 0u, 0x0500u, 0x0Bu, 1000u, &dev);
+	fake_radio_advance_past_close(w->t_close);
+	drain();
+
+	m = first_bcast();
+	zassert_not_null(m);
+	zassert_true(m->len > EXT_RSSI_THRESHOLD);
+	zassert_equal(0x00u, m->data[EXT_RSSI_THRESHOLD]);
+	api_assert_no_viol();
+}

@@ -44,17 +44,29 @@ LOG_MODULE_DECLARE(treadmill, CONFIG_TREADMILL_LOG_LEVEL);
 #define HR_SEARCH_TIMEOUT_2P5S 12u
 
 /*
- * The proximity floor, in ANT's 1..10 bins (10 is nearest, 0 disables). Starts
- * at 6 - about arm's length on the straps this project has measured - and
- * relaxes one bin per search timeout down to 1, then to 0.
+ * The proximity floor, in ANT's 1..10 bins: 1 is the CLOSEST (the strongest
+ * signal, about -44 dBm on radiant), 10 the farthest (about -80 dBm), 0
+ * disables (ANT Message Protocol Rev 5.1 section 6.4; the dBm table is in
+ * radiant/src/radiant_channel.c). Starts at 3 (about -52 dBm, a strap worn by
+ * the runner on this treadmill) and relaxes one bin per search timeout up to
+ * 10, then to 0.
+ *
+ * This file used to read the bins the other way round (10 nearest) and relax
+ * downward from 6. That was harmless only while radiant refused every
+ * non-zero threshold; with 0x71 enforced it would have TIGHTENED the floor on
+ * each timeout.
+ *
+ * Proximity search is ONE-SHOT: an acquisition clears it, so each reopen
+ * below sets it again.
  *
  * IT NEVER TIGHTENS AGAIN WHILE TRACKING, which is the hold-down: a strap that
  * drops a few packets does not restart the search, and one that goes away for
  * good costs a full timeout before anything moves. Both halves are what stop a
  * marginal second strap flapping the display.
  */
-#define PROX_START 6u
-#define PROX_FLOOR 0u
+#define PROX_START   3u
+#define PROX_LOOSEST 10u
+#define PROX_OFF     0u
 
 /* Extended-message flag bits, from the same table tools/ant_wire.py records.
  * The fields appear in descending flag order, which is why the RSSI offset is
@@ -206,8 +218,10 @@ static bool research_pending;
  */
 static void relax_on_timeout(void)
 {
-	if (prox_threshold > PROX_FLOOR) {
-		prox_threshold--;
+	if (prox_threshold != PROX_OFF) {
+		prox_threshold = (prox_threshold >= PROX_LOOSEST)
+					 ? PROX_OFF
+					 : (uint8_t)(prox_threshold + 1u);
 	}
 	tracked_device = 0u;
 	publish_bpm(TREADMILL_HR_NONE);

@@ -356,6 +356,29 @@ for `libant.a`, which exports them regardless — and `radiant_ant_capabilities_
 bit, because the bit describes what the radio layer can do rather than what the bridge exposes.
 What replaces it is a separate, optional design; see `docs/radiant-security.md`.
 
+## Proximity search — what a backend must do
+
+`radiant_ant_prox_search_set(channel, threshold, custom)` follows ANT's proximity search (ANT
+Message Protocol and Usage Rev 5.1, sections 6.4 and 9.5.2.22; AN12 Proximity Search; Nordic's
+public S212 API documentation for the C form):
+
+- **threshold** 0 = off, 1..10 = bins with 1 the closest, `0x80` = Nordic's custom form. A bin
+  accepts anything at or above its level. Out-of-range behaviour is unpublished; the radiant
+  backend refuses 11..`0x7F` and `0x81`..`0xFF` with `RADIANT_WIRE_INVALID_PARAMETER_PROVIDED`.
+- **custom** is read only with `0x80`. Its encoding is unpublished; the radiant backend takes it
+  as a positive magnitude (60 = -60 dBm) `[inferred]` and refuses 0 and anything above 127. The
+  serial message has no custom byte, so a host can never reach this form (`docs/ant-serial-protocol.md`).
+- **One-shot**: a successful acquisition clears the threshold, a search timeout keeps it, a
+  background scan keeps it, and tracking never filters on it.
+- **Never store what cannot run**: a backend with no RSSI on search frames refuses any non-zero
+  threshold and does not advertise `CAPABILITIES_PROX_SEARCH_ENABLED` (`docs/gotchas.md`).
+- The RSSI extended field's byte 2 reports the threshold in force as a signed dBm while it is set.
+  Off is `0x00` on radiant today, where the ANT documents give -128; that is an open owner call.
+
+The sdk-ant backend passes all three straight to `ant_prox_search_set()`, whose bins are Nordic's
+own. The radiant bin levels are Nordic's approximate nRF51 figures, so a bin means roughly, not
+exactly, the same on both.
+
 ---
 
 ## Coverage — every symbol in the stub, and where it went

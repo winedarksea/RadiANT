@@ -414,8 +414,13 @@
 #define RADIANT_WIRE_MESG_AUTO_FREQ_CONFIG_ID                0x70
 
 /*
- * [channel, threshold, (custom threshold)]. Only pair with something close
- * by. [bridge]
+ * [channel, threshold]. Proximity search: only acquire something close by.
+ * threshold 0 is off, 1..10 are bins, 1 the closest (bin n accepts a frame at
+ * or above -44 - 4 (n - 1) dBm on radiant, Nordic's approximate nRF51
+ * figures; the Message Protocol publishes no table). One-shot: an acquisition
+ * clears it, a search timeout keeps it. Exactly two bytes - the protocol has
+ * no custom-threshold byte, which exists only in Nordic's C API - and 11 and
+ * up are refused. [bridge, rev5.1 sec 9.5.2.22 + sec 6.4]
  */
 #define RADIANT_WIRE_MESG_PROX_SEARCH_CONFIG_ID              0x71
 
@@ -948,8 +953,11 @@
 #define RADIANT_WIRE_EXT_FLAG_CHANNEL_ID                     0x80
 
 /*
- * 3 bytes follow: measurement type, value, threshold configuration. [tools
- * (ant_verify)]
+ * 3 bytes follow: measurement type, value, threshold configuration. The last
+ * is a signed dBm: the proximity threshold in force (rev5.1 sec 7.1.1.2.3,
+ * AN16 sec 4.3.3). With proximity search off radiant sends 0x00, where those
+ * documents give -128 (0x80); that difference is an open owner decision.
+ * [tools (ant_verify)]
  */
 #define RADIANT_WIRE_EXT_FLAG_RSSI                           0x40
 
@@ -1565,7 +1573,11 @@
  */
 #define RADIANT_WIRE_CAPABILITIES_SCAN_MODE_ENABLED          0x04
 
-/* MESG_PROX_SEARCH_CONFIG. [rev5.1 sec 9.5.7.4 + verify:sdk-ant-shim] */
+/*
+ * MESG_PROX_SEARCH_CONFIG. radiant sets it where the radio reports RSSI,
+ * which is where the threshold is enforced. [rev5.1 sec 9.5.7.4 + verify:sdk-
+ * ant-shim]
+ */
 #define RADIANT_WIRE_CAPABILITIES_PROX_SEARCH_ENABLED        0x10
 
 /* The optional fourth byte of MESG_ASSIGN_CHANNEL. [stub] */

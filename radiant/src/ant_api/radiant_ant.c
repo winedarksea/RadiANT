@@ -642,14 +642,21 @@ static bool api_id_list_permits(uint8_t ch, const struct radiant_channel_id *id)
  * Handing a received frame to the host
  * ---------------------------------------------------------------------------
  */
-static bool api_post_rx(uint8_t ch, uint8_t msg_id,
-			const struct radiant_channel_id *id,
-			const struct radiant_rx_event *hal, const uint8_t *payload,
-			uint8_t payload_len, uint8_t burst_seq, bool burst_last)
+/*
+ * prox_dbm is the proximity threshold to report in the RSSI field's byte 2
+ * (radiant_event_rx.prox_dbm): the one in force, except for the acquiring
+ * frame, whose threshold the acquisition has just cleared (api_post_rx_prox()).
+ */
+static bool api_post_rx_prox(uint8_t ch, uint8_t msg_id,
+			     const struct radiant_channel_id *id,
+			     const struct radiant_rx_event *hal, const uint8_t *payload,
+			     uint8_t payload_len, uint8_t burst_seq, bool burst_last,
+			     int8_t prox_dbm)
 {
 	struct radiant_event_rx r;
 
 	memset(&r, 0, sizeof(r));
+	r.prox_dbm = prox_dbm;
 	r.hal = hal;
 	r.msg_id = msg_id;
 	r.channel = ch;
@@ -665,6 +672,18 @@ static bool api_post_rx(uint8_t ch, uint8_t msg_id,
 	}
 	api_stats.rx_dropped++;
 	return false;
+}
+
+static bool api_post_rx(uint8_t ch, uint8_t msg_id,
+			const struct radiant_channel_id *id,
+			const struct radiant_rx_event *hal, const uint8_t *payload,
+			uint8_t payload_len, uint8_t burst_seq, bool burst_last)
+{
+	int8_t prox_dbm = 0;
+
+	(void)radiant_channel_prox_min_rssi(ch, &prox_dbm);
+	return api_post_rx_prox(ch, msg_id, id, hal, payload, payload_len,
+				burst_seq, burst_last, prox_dbm);
 }
 
 #if defined(CONFIG_RADIANT_SEC)
@@ -1458,11 +1477,15 @@ static void api_search_acquired(uint8_t channel,
 	bool                 is_scan;
 	bool                 post = true;
 	bool                 released = false;
+	int8_t               prox_dbm = 0;
 
 	(void)user;
 	if (!api_ch_valid(channel) || r == NULL) {
 		return;
 	}
+	/* Read before radiant_channel_on_acquired() clears it (proximity search
+	 * is one-shot): the acquiring frame reports the threshold it passed. */
+	(void)radiant_channel_prox_min_rssi(channel, &prox_dbm);
 
 	/* Backstop only: api_search_permit() refuses the device before it is
 	 * offered. Reaching here means that wiring was lost; the frame is dropped. */
@@ -1524,9 +1547,9 @@ static void api_search_acquired(uint8_t channel,
 	}
 #endif
 	if (post) {
-		api_post_rx(channel, (uint8_t)RADIANT_WIRE_MESG_BROADCAST_DATA_ID,
-			    &r->id, &hal, r->frame.payload,
-			    r->frame.payload_len, 0u, false);
+		api_post_rx_prox(channel, (uint8_t)RADIANT_WIRE_MESG_BROADCAST_DATA_ID,
+				 &r->id, &hal, r->frame.payload,
+				 r->frame.payload_len, 0u, false, prox_dbm);
 	}
 
 	/* ACQUIRE leaves the search; a scan stays SEARCHING, so radiant_search_end() is skipped. */
@@ -1764,6 +1787,10 @@ static void api_search_begin(uint8_t ch, radiant_time_t now)
 	want.device_number = id.device_number;
 	want.device_type = id.device_type;
 	want.trans_type = id.trans_type;
+	/* The 0x71 threshold, enforced at the claim. The search core ignores
+	 * it on a background scan. One-shot: cleared by the acquisition, so a
+	 * re-search after a drop begins with 0 unless the host set it again. */
+	(void)radiant_channel_prox_min_rssi(ch, &want.min_rssi_dbm);
 
 	mode = ((radiant_channel_ext_assign_get(ch) &
 		 API_EXT_ASSIGN_BACKGROUND_SCAN) != 0u)
@@ -3991,7 +4018,12 @@ radiant_ant_err_t radiant_ant_search_waveform_set(uint8_t channel, uint16_t wave
 radiant_ant_err_t radiant_ant_prox_search_set(uint8_t channel, uint8_t threshold,
 				uint8_t custom)
 {
-	return radiant_channel_prox_search_set(channel, threshold, custom);
+	const struct radiant_radio_caps *caps = radiant_radio_caps_get();
+
+	/* A radio with no RSSI on its frames cannot run the gate, so a
+	 * non-zero threshold is refused there (radiant_channel.h). */
+	return radiant_channel_prox_search_set(channel, threshold, custom,
+					       caps != NULL && caps->has_rssi);
 }
 
 radiant_ant_err_t radiant_ant_search_channel_priority_set(uint8_t channel, uint8_t priority)
@@ -4688,6 +4720,8 @@ radiant_ant_err_t radiant_ant_pending_transmit_clear(uint8_t channel, uint8_t *s
 
 radiant_ant_err_t radiant_ant_capabilities_get(uint8_t *capabilities)
 {
+	const struct radiant_radio_caps *caps = radiant_radio_caps_get();
+
 	if (capabilities == NULL) {
 		return (radiant_ant_err_t)RADIANT_WIRE_INVALID_PARAMETER_PROVIDED;
 	}
@@ -4724,7 +4758,14 @@ radiant_ant_err_t radiant_ant_capabilities_get(uint8_t *capabilities)
 			  /* Background scan: radiant_search.c implements it as a
 			   * first-class part of the sweep. */
 			  RADIANT_WIRE_CAPABILITIES_SCAN_MODE_ENABLED |
-			  RADIANT_WIRE_CAPABILITIES_EXT_ASSIGN_ENABLED);
+			  RADIANT_WIRE_CAPABILITIES_EXT_ASSIGN_ENABLED |
+			  /* Proximity search (0x71): enforced at the ACQUIRE
+			   * claim in radiant_search.c, so only where the radio
+			   * reports RSSI - the same test that refuses a
+			   * threshold in radiant_ant_prox_search_set(). */
+			  ((caps != NULL && caps->has_rssi)
+				   ? RADIANT_WIRE_CAPABILITIES_PROX_SEARCH_ENABLED
+				   : 0u));
 
 	capabilities[RADIANT_WIRE_CAPABILITIES_OFFSET_MAX_SENSRCORE_CHANNELS] = 0x00u;
 
