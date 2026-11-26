@@ -2,7 +2,11 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Package E4's other three bridged device types: Temperature Sensor (0x0302),
- * Humidity Sensor (0x0307) and Pressure Sensor (0x0305).
+ * Humidity Sensor (0x0307) and Pressure Sensor (0x0305) - plus Flow Sensor
+ * (0x0306), which exists only as docs/radiant-bridge.md section 8.3b's
+ * default-off raw-bpm passenger (radiant_matter_set_hr_passenger()). It
+ * carries heart rate x 10 in a cluster whose unit is 0.1 m^3/h, deliberately
+ * mislabelled; nothing else in this product produces a flow reading.
  *
  * ONE CLASS FOR THREE DEVICE TYPES, AND THAT IS A DELIBERATE DEPARTURE FROM
  * UPSTREAM'S ONE-FILE-PER-TYPE SHAPE. nrf/applications/matter_bridge has a
@@ -43,7 +47,7 @@
 class MeasurementSensorDevice : public RadiantMatter::RadiantBridgedDevice {
 public:
 	/* `deviceType` must be one of RadiantMatter::kDeviceType{Temperature,
-	 * Humidity,Pressure}Sensor. Anything else leaves mEp null, which
+	 * Humidity,Pressure,Flow}Sensor. Anything else leaves mEp null, which
 	 * Nrf::BridgeManager::CreateEndpoint() rejects with
 	 * CHIP_ERROR_NO_MEMORY rather than dereferencing - checked there, so
 	 * this constructor does not need to abort. */
@@ -61,6 +65,7 @@ public:
 	static constexpr uint16_t GetTemperatureMeasurementClusterRevision() { return 4; }
 	static constexpr uint16_t GetRelativeHumidityMeasurementClusterRevision() { return 3; }
 	static constexpr uint16_t GetPressureMeasurementClusterRevision() { return 3; }
+	static constexpr uint16_t GetFlowMeasurementClusterRevision() { return 3; }
 
 	/* Pressure's EXT feature bit (bit 0), which is what makes ScaledValue
 	 * and Scale legal to serve. Temperature and humidity have no features. */
@@ -69,6 +74,7 @@ public:
 private:
 	CHIP_ERROR HandleReadMeasurement(chip::AttributeId attributeId, uint8_t *buffer, uint16_t maxReadLength);
 	CHIP_ERROR HandleReadPressure(chip::AttributeId attributeId, uint8_t *buffer, uint16_t maxReadLength);
+	CHIP_ERROR HandleReadFlow(chip::AttributeId attributeId, uint8_t *buffer, uint16_t maxReadLength);
 
 	uint16_t mDeviceType;
 
@@ -85,6 +91,11 @@ private:
 	int16_t mMeasuredValue = 0;
 	int16_t mMinMeasuredValue = 0;
 	int16_t mMaxMeasuredValue = 0;
+
+	/* Flow only: Flow Measurement's three are int16u, and a bpm x 10 value
+	 * never reaches int16s's limit, but storing it unsigned keeps the
+	 * two bytes copied out by HandleReadFlow() honest about their type. */
+	uint16_t mFlowMeasuredValue = 0;
 
 	/* Pressure only; left at zero and unread for the other two. Scale is
 	 * an int8s and is written once, at endpoint creation, by

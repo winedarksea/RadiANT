@@ -13,10 +13,12 @@
  * `radiant_matter_attr_write()` is the seam a real stack plugs into; tests
  * drive it directly.
  *
- * 0x26 heart rate has no row, on purpose (section 8.1): both Matter
- * candidates - a mislabelled Flow Measurement (8.3b), or an MEI cluster most
- * controllers won't understand (8.3) - are outside tier 1. So
- * `radiant_matter_row()` returning NULL is a normal answer, not a failure.
+ * 0x26 heart rate has no row by default, on purpose (section 8.1): both
+ * Matter candidates - a mislabelled Flow Measurement (8.3b), or an MEI cluster
+ * most controllers won't understand (8.3) - are outside tier 1. The 8.3b
+ * passenger exists behind radiant_matter_set_hr_passenger(), off unless an
+ * image turns it on. So `radiant_matter_row()` returning NULL is a normal
+ * answer, not a failure.
  */
 
 #ifndef RADIANT_MATTER_H_
@@ -142,9 +144,11 @@ struct radiant_matter_type_map {
 #define RADIANT_MATTER_DEVTYPE_TEMPERATURE_SENSOR 0x0302u
 #define RADIANT_MATTER_DEVTYPE_HUMIDITY_SENSOR    0x0307u
 #define RADIANT_MATTER_DEVTYPE_PRESSURE_SENSOR    0x0305u
+#define RADIANT_MATTER_DEVTYPE_FLOW_SENSOR        0x0306u /* section 8.3b passenger only */
 
 #define RADIANT_MATTER_CLUSTER_TEMP_MEASUREMENT     0x0402u
 #define RADIANT_MATTER_CLUSTER_PRESSURE_MEASUREMENT 0x0403u
+#define RADIANT_MATTER_CLUSTER_FLOW_MEASUREMENT     0x0404u
 #define RADIANT_MATTER_CLUSTER_REL_HUMIDITY         0x0405u
 #define RADIANT_MATTER_CLUSTER_OCCUPANCY_SENSING    0x0406u
 #define RADIANT_MATTER_CLUSTER_POWER_SOURCE         0x002Fu
@@ -175,6 +179,25 @@ struct radiant_matter_type_map {
 /* The row for a vocabulary type, or NULL if the Matter plane declines it
  * (a normal answer - see header comment). */
 const struct radiant_matter_type_map *radiant_matter_row(uint8_t field_type);
+
+/*
+ * The section 8.3b raw-bpm passenger, OFF BY DEFAULT. On, RADIANT_FIELD_HEART_RATE
+ * gets a row: a Flow Sensor (0x0306) endpoint whose Flow Measurement (0x0404)
+ * MeasuredValue is bpm x 10, so a controller shows the bpm figure labelled
+ * m^3/h. Deadband 2 bpm, 60 s heartbeat.
+ *
+ * Deliberately mislabelled, which is why it is off: a user who never enables
+ * it is never shown a wrong unit. A runtime switch rather than a Kconfig
+ * symbol because nothing in src/bridge carries its own configuration; an
+ * application maps its own option onto it (apps/dongle_thread's
+ * CONFIG_ANT_DONGLE_MATTER_HR_PASSENGER).
+ *
+ * Meant to be set once at init, before samples flow. Safe from any thread.
+ * Turning it off later stops further writes but does not remove an endpoint
+ * already created. NOT cleared by radiant_matter_reset(): a factory reset of
+ * the endpoint table is not a change of the image's configuration.
+ */
+void radiant_matter_set_hr_passenger(bool on);
 
 /* Converts a sample into its cluster's unit. Returns false when the type
  * has no row or the arithmetic doesn't fit the attribute - a saturating

@@ -20,6 +20,9 @@
  * CONFIG_ANT_DONGLE_MATTER `depends on`. */
 #include "ant/ant_matter.h"
 #endif
+#if defined(CONFIG_ANT_DONGLE_MATTER_HR_PASSENGER)
+#include <radiant/radiant_matter.h>
+#endif
 
 LOG_MODULE_REGISTER(ant_dongle_thread, LOG_LEVEL_INF);
 
@@ -57,6 +60,13 @@ void ant_dongle_post_radio_init(void)
 	 * and the application task loop are all on the far side of it. See
 	 * src/matter/matter_app.cpp.
 	 */
+#if defined(CONFIG_ANT_DONGLE_MATTER_HR_PASSENGER)
+	/* docs/radiant-bridge.md section 8.3b, opted into by Kconfig. Before
+	 * the Matter task starts, so the first heart-rate sample the bridge
+	 * pump drains already finds the row. */
+	radiant_matter_set_hr_passenger(true);
+	LOG_INF("Matter: raw heart rate published as a Flow Sensor (8.3b)");
+#endif
 	LOG_INF("starting Matter application task");
 	if (ant_matter_start() != 0) {
 		LOG_ERR("Matter application task not started - this image will "

@@ -29,11 +29,21 @@ static const struct radiant_matter_type_map type_map[] = {
 		.attribute = RADIANT_MATTER_ATTR_OCCUPANCY,
 		.mul = 1, .div = 1, .offset = 0,
 		/* ON CHANGE ONLY. The value is one bit; anything else would be
-		 * a threshold on a boolean. radiant_rules.c already publishes
-		 * the derived booleans on change, so this is belt-and-braces
-		 * against a second producer - but it is also what makes the
-		 * 60 s heartbeat the only periodic traffic these four
-		 * endpoints generate. */
+		 * a threshold on a boolean. radiant_rules.c publishes each
+		 * derived boolean once when its input is first heard (so the
+		 * endpoint exists, reading `false`) and then on change, so
+		 * this is belt-and-braces against a second producer.
+		 *
+		 * NO HEARTBEAT IS NEEDED HERE, AND IN PRACTICE NONE FIRES. The
+		 * CHIP attribute holds the last value written, and the shadow
+		 * row in ant_bridge.cpp holds it across a flush, so an
+		 * unchanged boolean is not a missing one. heartbeat_s below is
+		 * consulted only when a sample arrives (deadband_admit()), and
+		 * the rules post only on change, so it is not a periodic
+		 * write and must not be described as one: it would only
+		 * re-admit a repeated value from a second producer after 60 s.
+		 * Reachability, not a heartbeat, is what says a sensor went
+		 * away. */
 		.deadband = RADIANT_MATTER_DEADBAND_ON_CHANGE,
 		.heartbeat_s = 60u,
 		/*
@@ -167,15 +177,56 @@ static const struct radiant_matter_type_map type_map[] = {
 		.deadband = 2,
 		.heartbeat_s = 300u,
 	},
-	/* RADIANT_FIELD_HEART_RATE (0x26) is absent on purpose (section 8.1):
-	 * both Matter candidates - a mislabelled Flow Measurement, or an MEI
-	 * cluster invisible to most controllers - are outside tier 1. See
-	 * section 8.3/8.3b before adding it. */
+	/* RADIANT_FIELD_HEART_RATE (0x26) is absent from this table on purpose
+	 * (section 8.1): it is outside tier 1. The section 8.3b passenger row
+	 * below carries it only when radiant_matter_set_hr_passenger(true)
+	 * has been called. */
 };
+
+/*
+ * THE SECTION 8.3b PASSENGER: raw bpm on Flow Measurement, OFF BY DEFAULT.
+ *
+ * Deliberately mislabelled. Home Assistant renders Flow Measurement natively,
+ * and almost nobody owns a flow sensor, so bpm shown as m^3/h pollutes nothing
+ * a user already has (section 8.3b argues the alternatives). It is outside the
+ * table above so that radiant_matter_row() can decline it until an image opts
+ * in; this file has no Kconfig by design, so the opt-in is a runtime switch.
+ *
+ * MeasuredValue is uint16 in 0.1 m^3/h (MeasuredValue = 10 x flow), so
+ * bpm x 10 reads back as the bpm figure. The hr adapter posts bpm with exp 0,
+ * so 72 bpm is 720.
+ *
+ * DEADBAND 2 bpm (20 in the cluster's units), 60 s HEARTBEAT. Heart rate
+ * streams at ~4 Hz while a strap is worn and a 1-2 bpm wobble is beat-to-beat
+ * noise, not a change an automation reacts to. Unlike the occupancy row, this
+ * heartbeat genuinely fires: the stream keeps sampling, and deadband_admit()
+ * re-admits an unchanged value 60 s after the last write.
+ */
+static const struct radiant_matter_type_map hr_passenger_row = {
+	.field_type = RADIANT_FIELD_HEART_RATE,
+	.device_type = RADIANT_MATTER_DEVTYPE_FLOW_SENSOR,
+	.cluster = RADIANT_MATTER_CLUSTER_FLOW_MEASUREMENT,
+	.attribute = RADIANT_MATTER_ATTR_MEASURED_VALUE,
+	.mul = 10, .div = 1, .offset = 0,
+	.deadband = 20,
+	.heartbeat_s = 60u,
+};
+
+/* Read on the sink's thread, set from whichever thread runs the app's init. */
+static atomic_t hr_passenger;
+
+void radiant_matter_set_hr_passenger(bool on)
+{
+	(void)atomic_set(&hr_passenger, on ? 1 : 0);
+}
 
 const struct radiant_matter_type_map *radiant_matter_row(uint8_t field_type)
 {
 	size_t i;
+
+	if (field_type == RADIANT_FIELD_HEART_RATE) {
+		return (atomic_get(&hr_passenger) != 0) ? &hr_passenger_row : NULL;
+	}
 
 	for (i = 0u; i < ARRAY_SIZE(type_map); i++) {
 		if (type_map[i].field_type == field_type) {
@@ -694,8 +745,9 @@ __weak void radiant_matter_attr_write(uint16_t endpoint_id, uint32_t cluster,
 static bool matter_want(const struct radiant_sample *s)
 {
 	/* Real filter: the bus carries every field, the Matter plane has
-	 * rows for four of them. Declining here keeps heart rate, power,
-	 * cadence etc. out of publish() (section 8.1). */
+	 * rows for a handful of them. Declining here keeps power, cadence
+	 * etc. out of publish() (section 8.1), and heart rate too unless
+	 * the section 8.3b passenger is switched on. */
 	return radiant_matter_row(s->field_type) != NULL;
 }
 

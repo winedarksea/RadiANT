@@ -66,6 +66,7 @@ namespace RadiantMatter
 constexpr uint16_t kDeviceTypeOccupancySensor = 0x0107;
 constexpr uint16_t kDeviceTypeTemperatureSensor = 0x0302;
 constexpr uint16_t kDeviceTypePressureSensor = 0x0305;
+constexpr uint16_t kDeviceTypeFlowSensor = 0x0306; /* docs/radiant-bridge.md 8.3b passenger only */
 constexpr uint16_t kDeviceTypeHumiditySensor = 0x0307;
 
 /* Matter device-type revisions, as of the 1.4 Device Library. Wrong ones do
@@ -76,6 +77,7 @@ constexpr uint8_t kOccupancySensorDeviceVersion = 5;
 constexpr uint8_t kTemperatureSensorDeviceVersion = 2;
 constexpr uint8_t kHumiditySensorDeviceVersion = 2;
 constexpr uint8_t kPressureSensorDeviceVersion = 2;
+constexpr uint8_t kFlowSensorDeviceVersion = 2;
 
 class RadiantBridgedDevice : public Nrf::MatterBridgedDevice {
 public:
