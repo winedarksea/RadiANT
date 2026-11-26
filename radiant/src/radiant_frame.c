@@ -1051,7 +1051,8 @@ int radiant_frame_decode(enum radiant_frame_cfg cfg, const struct radiant_frame_
 	/* Dispatch, not validation: the byte is carried out to the caller and
 	 * radiant_frame_msg_type() names it or returns RADIANT_MSG_UNKNOWN.
 	 * Bits 2:0 are the only invariant thing (010 on all 3,104 CRC-valid
-	 * Spike B frames) - checking bits 4:0 against payload_len + 2 instead
+	 * Spike B frames; receive checks bit 2 only, since other stacks send
+	 * 011 and 000) - checking bits 4:0 against payload_len + 2 instead
 	 * (as an earlier version did) rejected every valid slave frame. */
 	ctrl_byte = in->body[hdr - 1];
 	if (!radiant_ctrl_low_ok_rx(ctrl_byte)) {

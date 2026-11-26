@@ -1017,25 +1017,68 @@ ZTEST(radiant_frame, test_flat_parse_ignores_everything_but_bits_2_0)
 				  NULL);
 	}
 
-	/* And the six illegal low-bit values, under three different flag
-	 * sets, because a parser that masked the wrong way round would pass one
-	 * and fail another. 011 is legal on receive (a Garmin Varia's ack). */
+	/* And the low-bit values receive refuses - bit 2 set, 100..111 - under
+	 * three different flag sets, because a parser that masked the wrong way
+	 * round would pass one and fail another. 000..011 are all legal on
+	 * receive: 010 everywhere, 011 a Garmin Varia's ack, 000 a legacy HR
+	 * strap's broadcast; 001 rides along because bit 0 carries no meaning
+	 * here. */
 	static const uint8_t flag_sets[] = { 0x00u, 0xA0u, 0x80u };
 
 	for (size_t t = 0; t < ARRAY_SIZE(flag_sets); t++) {
 		for (unsigned int low = 0; low < 8u; low++) {
-			if (low == RADIANT_CTRL_LOW_VALUE ||
-			    low == (RADIANT_CTRL_LOW_VALUE | 1u)) {
-				continue;
-			}
 			memcpy(buf, spike15, sizeof(spike15));
 			memset(&buf[15], 0, sizeof(buf) - 15u);
 			buf[6] = (uint8_t)(flag_sets[t] | low);
 			zassert_equal(radiant_frame_from_bytes(RADIANT_FRAME_CFG_TRACKING,
 							   buf, sizeof(buf), &w),
-				      RADIANT_FRAME_ECTRL, "0x%02X", buf[6]);
+				      (low & 0x04u) ? RADIANT_FRAME_ECTRL : 17,
+				      "0x%02X", buf[6]);
 		}
 	}
+}
+
+/*
+ * On air, 2026-11-25 (archive/captures/radio/2026-11-25-legacy-hrm-sniff.log):
+ * a legacy ANT+ heart rate strap, #11625 type 0x78 trans 1, broadcasts with
+ * control byte 0x08 - the slot bit over bits 2:0 = 000 - on every frame (176
+ * CRC-valid, no 0x0A). A Garmin watch tracks it; Zwift on a RadiANT dongle
+ * never listed it, because every receive path refused bit 1 clear. This is
+ * the strap's own frame, byte for byte: the sniffer's RXCRC was 0x44D2.
+ */
+ZTEST(radiant_frame, test_legacy_hr_strap_broadcast_0x08_decodes)
+{
+	static const uint8_t hrm15[15] = {
+		0xA6u, 0xC5u, 0x69u,             /* ANT+ sync, devnum lo   */
+		0x2Du, 0x78u, 0x01u, 0x08u,      /* devnum hi, HR, tt 1, ctrl */
+		0x04u, 0x21u, 0x00u, 0x65u, 0x2Eu, 0x67u, 0x65u, 0x71u,
+	};
+	uint8_t buf[17];
+	struct radiant_frame_wire w;
+	struct radiant_frame f;
+	uint16_t crc;
+
+	memcpy(buf, hrm15, sizeof(hrm15));
+	crc = radiant_crc16(RADIANT_CRC_INIT, buf, sizeof(hrm15));
+	zassert_equal(crc, 0x44D2u, "not the frame the sniffer heard");
+	buf[15] = (uint8_t)(crc >> 8);
+	buf[16] = (uint8_t)(crc & 0xFFu);
+
+	zassert_equal(radiant_frame_from_bytes(RADIANT_FRAME_CFG_TRACKING, buf,
+					       sizeof(buf), &w), 17);
+	zassert_equal(radiant_frame_decode(RADIANT_FRAME_CFG_TRACKING, &w, 0, &f),
+		      RADIANT_FRAME_OK);
+	zassert_equal(f.ctrl_byte, 0x08u);
+	zassert_equal(f.id.device_number, 11625u);
+	zassert_equal(f.id.device_type, 0x78u);
+	zassert_equal(f.id.trans_type, 0x01u);
+	zassert_mem_equal(f.payload, &hrm15[7], 8u);
+	zassert_equal(radiant_frame_msg_type(0x08u), RADIANT_MSG_BROADCAST);
+	/* It opens the slot, so a tracking slave anchors on it. */
+	zassert_true(radiant_ctrl_is_master_opener(0x08u));
+
+	/* Transmit is unchanged: this tree still never originates 0x08. */
+	zassert_false(radiant_ctrl_low_ok(0x08u));
 }
 
 /* ---------------------------------------------------------------------------

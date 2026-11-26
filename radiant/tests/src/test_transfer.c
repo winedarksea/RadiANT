@@ -1561,11 +1561,16 @@ ZTEST(transfer, test_the_stale_acknowledgement_predicate)
 	zassert_false(radiant_transfer_ack_is_stale(0x82u, 0x82u));
 	zassert_false(radiant_transfer_ack_is_stale(0x82u, RADIANT_CTRL_BROADCAST));
 	zassert_false(radiant_transfer_ack_is_stale(0xC2u, 0xC2u));
-	/* Illegal low bits on either side. */
+	/* Illegal low bits on either side: anything but 010 on what we sent,
+	 * bit 2 set on what came off the air. */
 	zassert_false(radiant_transfer_ack_is_stale(0x83u, 0xC2u));
-	zassert_false(radiant_transfer_ack_is_stale(0x82u, 0xC0u));
-	/* Bit 0 of a RECEIVED ack is don't-care (a Garmin Varia sets it). */
+	zassert_false(radiant_transfer_ack_is_stale(0x80u, 0xC2u));
+	zassert_false(radiant_transfer_ack_is_stale(0x82u, 0xC4u));
+	zassert_false(radiant_transfer_ack_is_stale(0x82u, 0xC6u));
+	/* Bits 1:0 of a RECEIVED ack are don't-care (a Garmin Varia sets bit
+	 * 0; a legacy HR strap transmits 000). */
 	zassert_true(radiant_transfer_ack_is_stale(0x82u, 0xC3u));
+	zassert_true(radiant_transfer_ack_is_stale(0x82u, 0xC0u));
 }
 
 /* One stale acknowledgement: the packet goes out again, same control byte, one
