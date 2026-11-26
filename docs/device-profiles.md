@@ -130,6 +130,7 @@ invites the same proposal again in a year.
 | `0x14` | Light Electric Vehicle (LEV) | 8192 | no — encoded and decoded in C only, `src/profiles/radiant_profile_lev.c` |
 | `0x19` | Environment | 65535 | no — decoded in C only, `src/profiles/radiant_profile_env.c` |
 | `0x1E` | Running Dynamics | 4096 | pages `0x00`, `0x01`, `0x10`, `0x20`, `0x4A` |
+| `0x28` | Bike Radar | 4084 | pages `0x01`, `0x02`, `0x30`, `0x31`, `0x46`, `0x57` (§3.18) |
 | `0x29` | Tracker (Asset Tracker) | 2048 | pages `0x01`, `0x02`, `0x03`, `0x10`, `0x11`, `0x20` |
 | `0x78` | Heart Rate | 8070 | pages `0x00`, `0x01`, `0x02`, `0x03`, `0x04` |
 | `0x79` | Bike Speed and Cadence, combined | 8086 | the single page, which has no page number |
@@ -1659,6 +1660,103 @@ rides `radiant_profile_sched.c`'s client seam rather than its built-in cadence.
 3..2 health, 1..0 use state. A treadmill reports location **Other** — it is not
 on anybody's shoe — and battery **New**, because it is on mains.
 
+### 3.18 Bike Radar, device type `0x28`
+
+**Source rule for this profile (owner, 2026-11-25).** The ANT+ Bike Radar
+Rev 2.1 document (D00001665, deprecated "as is") gives full coverage; on-air
+captures of three Garmin units are the authority wherever they reach. Where the
+two disagree, the **decoders accept both**, the **master/simulator emits what
+the units emit** (if the spec allows it), and the row below cites both. This
+overrides §"follow the spec by default" for this profile only. Provenance tags
+used in this section:
+
+- `[on-air: <capture>]` — seen on air in `archive/captures/radio/2026-11-25-varia-<capture>.antcap`.
+- `spec-only, not seen on air` — implemented from the document; no unit was seen doing it.
+- `[spec §x] vs [on-air: id]` — a divergence; both forms handled as above.
+
+**SAFETY.** Telemetry, not a certified radar display. Nothing in this tree is
+fit to warn a rider of traffic.
+
+**The units.** Device numbers are each unit's serial number's low 16 bits, and
+the transmission type's high nibble is serial bits 16–19 (the 20-bit extended
+device number) `[on-air: c1]`. Model number → model is inferred from release
+order and should be confirmed against the labels.
+
+| Device # | ttype | Model # (p80) | HW | SW main/supp (p81) | Serial (p81) | Inferred model |
+|---|---|---|---|---|---|---|
+| 27467 | `0x85` | 2954 | `0x33` | `0x25` / `0x00` | `0xC5386B4B` | Varia RTL510 |
+| 59429 | `0xF5` | 3592 | `0x42` | `0x21` / `0x28` | `0xCD0FE825` | Varia RTL515 |
+| 25738 | `0x75` | 4684 | `0x42` | `0x43` / `0x00` | `0xD8F7648A` | RearVue 820 |
+
+Every unit also opens a Bike Lights `0x23` channel on the same device number and
+transmission type (§3.19 when it lands), 12.5 ms (~410 counts) from the radar's
+slot: radar after light on the RTL510/515, before it on the RearVue `[on-air: c2]`.
+
+**Channel.** Master, device type `0x28`, RF 57, period **4084** (~8.02 Hz;
+measured 4083.9–4084.4 on all three `[on-air: c1, c2]`), transmission type low
+nibble 5. A display opens a bidirectional slave.
+
+**Pages.**
+
+| Page | Direction | Layout |
+|---|---|---|
+| 48 `0x30` Radar Targets A | radar → display | targets 1–4: `[1]` threat 2 bits each, `[2]` side 2 bits each, `[3..5]` range 6 bits each (24-bit LE, 3.125 m steps, 0–196.875 m), `[6]`/`[7]` closing speed 4 bits each (low nibble first, 3.04 m/s steps) |
+| 49 `0x31` Radar Targets B | radar → display | targets 5–8, same layout |
+| 1 Device Status | radar → display | `[1]` bits 0–1 state (0 broadcasting, 1 shutdown requested, 2 shutdown aborted, 3 shutdown forced), bits 2–7 reserved; `[2..6]` `0xFF`; `[7]` bit 0 **inverted** clear-targets (0 = clear), bits 1–7 reserved `0x7F` |
+| 2 Device Command | display → radar, acked | `[1]` bits 0–1: 0 abort shutdown, 1 shutdown; bits 2–7 reserved; `[2..7]` `0xFF` |
+| 87 `0x57` Error | radar → display | `[2]` bits 0–3 component (0xF system), bits 6–7 level (1 warning, 2 critical); `[3]` profile code (0 saturated, 1 unit skew); `[4..7]` manufacturer code |
+| 70 `0x46` Request | display → radar, acked | common page; the radar answers 80/81/82 (and, on two units, 1) |
+| 80/81/82 | radar → display | common pages; background |
+
+**Threat 0 is "no target"**: a display must not decode its side, range or
+speed, and a radar must send them as 0. Targets are **not guaranteed sorted**
+(Rev 2.1); `radiant_radar_adapter.c` computes the nearest itself.
+
+**Findings: spec requirement → what the units did.**
+
+| Spec | On air | Handling |
+|---|---|---|
+| §5.2 period 4084, ttype `x5` | 4084.0, ttype `0x75/0x85/0xF5` `[on-air: c1]` | as specified |
+| §6.3.5 page 48 ≥ 6/8, background ≥ 1 in 260, recommended 1 in 65 | page 48 continuously, **one background page every 65 slots**, rotating 80 → 81 → 82 `[on-air: c1, c2]`; the RTL510/515 add an extra page 82 at irregular points | master: 1 in 65, 80/81/82 (`RADIANT_PROFILE_RADAR_DEFAULT_BACKGROUND_EVERY`) |
+| §6.3.1 "no other state": page 1 with clear-targets as main page | idle units send **page 48 with zero targets**, not page 1 `[on-air: c2]`; the RTL515 did send page 1 (state 0, clear) as its only main page for ~10 s, twice, after its light was switched off by button `[on-air: c7]` | decoders accept both; master: page 48 when idle, page 1 when `detecting = false` |
+| §6.7 page 1 byte 1 reserved bits `0x3F`, "legacy" `0x00` | RTL515 and RearVue: `0x3F` (`01fe…`); **RTL510: `0x00`** (`0102ffffffffffff`) — `[spec §6.7] vs [on-air: c5a]` | decoder accepts both and reports `legacy_reserved`; master sends `0x3F` unless `legacy_status` |
+| §6.8 page 2 reserved bits "set to 0x1F" (a 6-bit field) | the Edge sends **`0x3F`**: `02fdffffffffffff` / `02fcffffffffffff` — `[spec §6.8] vs [on-air: c2, c3]` | encoder sends `0x3F` (`RADIANT_PROFILE_RADAR_CMD_RESERVED`); decoder ignores the bits |
+| §6.3.3/6.3.4 Shutdown: power off (state 1/3) **or** stay on (Rev 2.1, aborted pattern ≥ 10 s, page 1 at 1/8–4/8) | **all three stay on**: ~1.52 s after the command, page 1 state 2 alternating with page 48 (**4/8**) for **10.0 s**, then normal; no unit ever sent state 1 `[on-air: c5a, c5b, c2, c3]` | master default = stay on, 12-message delay, status every other message, 81 messages; `power_off_on_command` selects the spec's other option (spec-only, not seen on air) |
+| §6.3.4 Abort Shutdown during Shutdown Requested | never reachable: no unit enters state 1 `[on-air: c5a]` | implemented, spec-only, not seen on air |
+| Shutdown Forced (state 3) | not seen | spec-only, not seen on air |
+| §6.5 threat 1/2, side, range, speed | walkers: threat 1 only, side 0 only, range codes 0–4 (≤ 12.5 m), speed codes 0–1 `[on-air: c3]` | threat 2 and sides 1/2: spec-only, not seen on air (sim covers them; gate 4 showed them on an Edge) |
+| Rev 2.1 targets not necessarily sorted | every two-target frame sorted nearest-first, slots packed from 1 (73 frames) `[on-air: c3]` | adapter does not rely on it |
+| §6.6 page 49 (> 4 targets) | not seen (walking cannot produce 5 targets) | spec-only, not seen on air; sim "traffic" scenario |
+| §6.10.4 page 87 error | not seen | spec-only, not seen on air; sim "error" scenario |
+| §6.11.1 page 70: answer 80/81/82; some radars ignore the acked flag | answered with exactly the requested count in consecutive slots ~0.3 s later; **ack-reply bit ignored** (broadcast replies); page 48 / `0x55` requests: no answer; page 1 requests: RearVue and RTL515 answer, **RTL510 does not**; count byte `0x00`: **5 copies** `[on-air: c4]` | master: answers 80/81/82/1, broadcast only |
+| ACK of an acked message | the radar's ACK control byte is **`0xF3`** (Spike B's `0xF2` with bit 0 set), payload `22 03 03 00…`, +1562 µs `[on-air: ackbug-sniff]` | radiant now accepts bit 0 on receive (see below) |
+
+**What a Garmin display does** `[on-air: c2, c3]` (heard because RadiANT's Rx
+scan mode reports a slave's acked frames — see TODO): page 70 requests for 80,
+2, `0xF3`, 9, 81 on the light channel; Bike Lights Connect (page 33) making the
+RearVue the main light (shared channel `0x24` opens) and the RTL515 secondary;
+Light Settings (page 34) mode 4; on power-off, Light Settings "off" to all and a
+radar **Shutdown** (`02fd…`). Two minutes after the display goes silent the main
+light reverts to unconnected **and its radar channel stops**; the secondary
+follows 30 s later — the Bike Lights 2-minute controller timeout, not the
+Shutdown command, is what powers the radars down `[on-air: c2, c3]`.
+
+**The radiant bug this profile found.** Every RadiANT slave reported
+`TRANSFER_TX_FAILED` for acked messages a Garmin radar had received and acted on
+(0/24), while a Garmin USB-m in the same position got 4/4 completions. The
+radar's ACK frame carries control byte `0xF3`; `radiant_frame_decode()` and
+`radiant_transfer_ack_matches()` required bits 2:0 = `010`. Receive now checks
+bits 2:1 only (`radiant_ctrl_low_ok_rx()`); transmit still sends `010`. After
+the fix: 6/6 completions across all three units `[on-air: ackfix-final]`.
+
+**Code.** `include/radiant/radiant_profile_radar.h`,
+`src/profiles/radiant_profile_radar.c` (codecs and master),
+`src/bridge/radiant_radar_adapter.c` (nearest target, threat, the 2 s
+time-based target timeout), `tools/ant_pages.py` `RDR_*` and `RadarMaster`,
+`tools/ant_sim.py --profile radar --radar-scenario car|fast|traffic|error|shutdown|idle`,
+golden vectors `tools/vectors/varia-radar-onair.antcap`. Gate 4: a Garmin Edge
+paired with the simulated radar and showed approaching vehicles (2026-11-25).
+
 ---
 
 ## 4. Two vocabulary types this document allocates
@@ -2220,6 +2318,11 @@ is not recycled.
 | `src/profiles/radiant_profile_sdm.c` | ANT+ stride-based speed and distance `0x7C`, pages 1, 2, 3, 16 and 22 (§3.17) |
 | `src/profiles/radiant_profile_env.c` | ANT+ Environment `0x19`, pages 0 and 1, decode only (§3.7) |
 | `src/profiles/radiant_profile_common.c` | Common pages 80, 81, 82 (encode) and 84 (decode) — two provenances, kept separate (§3.4) |
+| `src/profiles/radiant_profile_rd.c` | ANT+ running dynamics `0x1E` (§3.13) |
+| `src/profiles/radiant_profile_controls.c` | ANT+ controls `0x10`, command surface only (§3.14) |
+| `src/profiles/radiant_profile_tracker.c` | ANT+ tracker `0x29` (§3.15) |
+| `src/profiles/radiant_profile_radar.c` | ANT+ bike radar `0x28`: codecs and a master (§3.18) |
+| `src/bridge/radiant_radar_adapter.c` | Bike radar onto the sample bus: nearest target, threat, the 2 s target timeout (§3.18) |
 | `src/profiles/radiant_profile_telemetry.c` | The `0x60` envelope, and therefore every profile in sections 5 and 6 |
 | `src/profiles/radiant_profile_bits.c` | The MSB-first packer whose vectors are the shared contract |
 | `tools/ant_pages.py` | All of the above, mirrored, plus the field-type vocabulary |
@@ -2271,7 +2374,7 @@ is the change that matters more than the depth column did.
 | `0x1F` | Muscle Oxygen | Not implemented |  |
 | `0x22` | Shifting | Not implemented | open-source only |
 | `0x23` | Bike Lights | Not implemented | primary spec (publicly mirrored PDF) |
-| `0x28` | Radar | Not implemented | open-source only |
+| `0x28` | Bike Radar | Implemented (codecs, master, adapter), §3.18 | primary spec + on-air verified (three Garmin units) |
 | `0x30` | Tire Pressure Monitor | Not implemented | open-source only |
 | `0x73` | Dropper Seatpost | Not implemented | open-source, name matches the official list exactly |
 | `0x77` | Weight Scale | Not implemented. `docs/profile-registry.md`'s claim-range table already excludes this as part of a dense band — this row is cross-reference, not new information | community + open-source |

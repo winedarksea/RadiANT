@@ -89,6 +89,10 @@
 #include <radiant/radiant_env_adapter.h>
 #include <radiant/radiant_power_adapter.h>
 #endif
+#ifdef CONFIG_ANT_DONGLE_RADAR
+#include <radiant/radiant_profile_radar.h>
+#include <radiant/radiant_radar_adapter.h>
+#endif
 
 #include "bridge_app.h"
 
@@ -155,6 +159,14 @@ static struct radiant_power_adapter power_adapters[RADIANT_BINDING_MAX];
 static struct radiant_env_adapter   env_adapters[RADIANT_BINDING_MAX];
 #endif /* CONFIG_ANT_DONGLE_PROFILES_EXTRA */
 
+#ifdef CONFIG_ANT_DONGLE_RADAR
+/* Bike radar (0x28), per binding like the rest. Its 2 s target timeout is a
+ * TIME rule (spec 6.4.1: "independent of ANT channel and radio state"), so
+ * besides the decode below it is ticked from bridge_pump.c's loop - a radar
+ * that goes silent must still read "unavailable". */
+static struct radiant_radar_adapter radar_adapters[RADIANT_BINDING_MAX];
+#endif
+
 int ant_bridge_channel_bind(uint8_t channel, uint32_t source)
 {
 	if (channel >= TAP_CHANNELS || source >= RADIANT_BINDING_MAX) {
@@ -180,6 +192,9 @@ int ant_bridge_channel_bind(uint8_t channel, uint32_t source)
 	radiant_power_adapter_init(&power_adapters[source]);
 	radiant_env_adapter_init(&env_adapters[source]);
 #endif
+#ifdef CONFIG_ANT_DONGLE_RADAR
+	radiant_radar_adapter_init(&radar_adapters[source]);
+#endif
 	chan_source[channel] = source;
 	return 0;
 }
@@ -202,6 +217,22 @@ uint32_t ant_bridge_channel_source(uint8_t channel)
 uint32_t ant_bridge_unbound_drops(void)
 {
 	return unbound_drops;
+}
+
+void ant_bridge_radar_tick(uint64_t now_us)
+{
+#ifdef CONFIG_ANT_DONGLE_RADAR
+	for (uint32_t source = 0u; source < RADIANT_BINDING_MAX; source++) {
+		const struct radiant_binding *b = radiant_binding_get(source);
+
+		if (b != NULL && b->devtype == RADIANT_PROFILE_RADAR_DEVICE_TYPE) {
+			(void)radiant_radar_adapter_tick(&radar_adapters[source],
+							 source, now_us);
+		}
+	}
+#else
+	ARG_UNUSED(now_us);
+#endif
 }
 
 void ant_dongle_rx_tap(const struct radiant_ant_msg *msg)
@@ -333,6 +364,21 @@ void ant_dongle_rx_tap(const struct radiant_ant_msg *msg)
 		(void)radiant_common_adapter_decode(&common_adapters[source],
 						    source, body,
 						    ant_bridge_now_us());
+#ifdef CONFIG_ANT_DONGLE_RADAR
+		/*
+		 * Common page 87 is ALSO the radar profile's error state
+		 * (Bike Radar 6.3.2/6.10.4): its arrival clears the targets
+		 * and shows "unavailable" (6.4.2), so the radar adapter must
+		 * see it. This is the device type naming what a common page
+		 * means for it, not a payload-chosen decoder.
+		 */
+		if (b->devtype == RADIANT_PROFILE_RADAR_DEVICE_TYPE &&
+		    page == RADIANT_PROFILE_RADAR_PAGE_ERROR) {
+			(void)radiant_radar_adapter_decode(&radar_adapters[source],
+							   source, body,
+							   ant_bridge_now_us());
+		}
+#endif
 		/*
 		 * Returned, not fallen through. A common page has no
 		 * device-type-specific meaning by construction, so handing it
@@ -384,4 +430,11 @@ void ant_dongle_rx_tap(const struct radiant_ant_msg *msg)
 						 ant_bridge_now_us());
 	}
 #endif /* CONFIG_ANT_DONGLE_PROFILES_EXTRA */
+#ifdef CONFIG_ANT_DONGLE_RADAR
+	else if (b->devtype == RADIANT_PROFILE_RADAR_DEVICE_TYPE) {
+		(void)radiant_radar_adapter_decode(&radar_adapters[source], source,
+						   &msg->data[1],
+						   ant_bridge_now_us());
+	}
+#endif
 }

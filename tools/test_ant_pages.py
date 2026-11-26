@@ -1163,6 +1163,21 @@ class TestDispatch(unittest.TestCase):
                 self.assertEqual(ap.decode(raw, ap.BPWR_DEVICE_TYPE)["page"],
                                  page)
 
+    def test_type_keyed_profiles_reach_their_decoders(self):
+        # Tracker, RD and Controls decoders existed before decode() reached
+        # them; the radar joined the same table.
+        self.assertIn("targets", ap.decode(bytes([0x30]) + bytes(7),
+                                           ap.RDR_DEVICE_TYPE))
+        self.assertIn("command", ap.decode(ap.encode_rdr_command(0),
+                                           ap.RDR_DEVICE_TYPE))
+        trk = ap.decode(ap.encode_trk_location_1(3, 1500, 128, 0, 0),
+                        ap.TRK_DEVICE_TYPE)
+        self.assertNotIn("raw", trk)
+        ctl = ap.decode(ap.encode_ctrl_generic(1, 2, 3, 0), ap.CTRL_DEVICE_TYPE)
+        self.assertNotIn("raw", ctl)
+        self.assertEqual(ap.PROFILES["radar"]["period"], 4084)
+        self.assertEqual(ap.PROFILES["radar"]["device_type"], 0x28)
+
     def test_unknown_page_is_returned_raw_rather_than_guessed_at(self):
         raw = bytes([0x77]) + bytes(7)
         got = ap.decode(raw, ap.BPWR_DEVICE_TYPE)
@@ -1187,6 +1202,261 @@ class TestDispatch(unittest.TestCase):
         self.assertEqual(ap.PROFILES["fec-bike"]["device_type"], 0x11)
         self.assertEqual(ap.PROFILES["fec-bike"]["period"], 8192)
         self.assertEqual(ap.PROFILES["fec-bike"]["pages"], (0x10, 0x19))
+
+
+class TestRadarPages(unittest.TestCase):
+    """Bike Radar 0x28. Vectors mirror radiant/tests/src/test_profile_radar.c."""
+
+    TWO = bytes.fromhex("3009090a05005300")
+
+    def test_targets_round_trip(self):
+        raw = ap.encode_rdr_targets(0x30, [(1, 1, 10, 3), (2, 2, 20, 5)])
+        self.assertEqual(raw, self.TWO)
+        got = ap.decode(raw, ap.RDR_DEVICE_TYPE)
+        self.assertEqual(got["active"], 2)
+        t2 = got["targets"][1]
+        self.assertEqual((t2["index"], t2["threat"], t2["side"]), (2, 2, 2))
+        self.assertEqual((t2["range_m"], t2["speed_mps"]), (62.5, 15.2))
+        self.assertFalse(got["targets"][2]["valid"])
+
+    def test_page_49_indices_and_full_scale(self):
+        raw = ap.encode_rdr_targets(0x31, [(3, 3, 63, 15)] * 4)
+        self.assertEqual(raw, bytes([0x31]) + b"\xff" * 7)
+        got = ap.decode(raw, ap.RDR_DEVICE_TYPE)
+        self.assertEqual([t["index"] for t in got["targets"]], [5, 6, 7, 8])
+        self.assertEqual(got["targets"][3]["range_m"], 196.875)
+
+    def test_threat_none_zeroes_the_target(self):
+        self.assertEqual(ap.encode_rdr_targets(0x30, [(0, 2, 40, 9)]),
+                         bytes([0x30]) + bytes(7))
+
+    def test_varia_idle_and_background_pages(self):
+        # On air from all three Garmin units, 2026-11-25 C1 capture.
+        idle = ap.decode(bytes([0x30]) + bytes(7), ap.RDR_DEVICE_TYPE)
+        self.assertEqual(idle["active"], 0)
+        b = ap.decode(bytes.fromhex("52ff01ffffff5394"), ap.RDR_DEVICE_TYPE)
+        self.assertEqual(b["page"], ap.PAGE_COMMON_BATTERY)
+
+    def test_status_both_reserved_forms(self):
+        spec = ap.encode_rdr_status(1, clear_targets=True)
+        self.assertEqual(spec, bytes.fromhex("01fdfffffffffffe"))
+        legacy = ap.decode(bytes.fromhex("0102ffffffffffff"), ap.RDR_DEVICE_TYPE)
+        self.assertEqual((legacy["state"], legacy["clear_targets"],
+                          legacy["legacy_reserved"]), (2, False, True))
+
+    def test_command_request_error(self):
+        cmd = ap.encode_rdr_command(ap.RDR_CMD_SHUTDOWN)
+        self.assertEqual(cmd, bytes.fromhex("02fdffffffffffff"))
+        self.assertEqual(ap.decode(cmd, 0x28)["command"], 1)
+        with self.assertRaises(ValueError):
+            ap.encode_rdr_command(2)
+        req = ap.decode(ap.encode_common_70(0x52, 2), 0x28)
+        self.assertEqual((req["requested_page"], req["count"], req["acked"]),
+                         (0x52, 2, False))
+        err = ap.encode_common_87(0x0F, 1, 1, 0x12345678)
+        self.assertEqual(err, bytes.fromhex("57ff4f0178563412"))
+        self.assertEqual(ap.decode(err, 0x28)["profile_code"], 1)
+
+
+class TestVariaGolden(unittest.TestCase):
+    """On-air frames from three Garmin units (tools/vectors/varia-*.antcap).
+
+    The source rule for this profile: where the units were heard, they are
+    the authority - every frame decodes, and the codecs reproduce the radar's
+    target and status pages byte for byte."""
+
+    import os as _os
+    RADAR = _os.path.join(_os.path.dirname(__file__), "vectors",
+                          "varia-radar-onair.antcap")
+
+    def setUp(self):
+        self.recs = ap.read_capture_records(self.RADAR)
+
+    def test_every_radar_frame_decodes(self):
+        self.assertGreater(len(self.recs), 50)
+        for r in self.recs:
+            with self.subTest(frame=r.payload.hex()):
+                self.assertNotIn("raw", ap.decode(r.payload, r.device_type))
+
+    def test_target_pages_reencode_byte_for_byte(self):
+        n = 0
+        for r in self.recs:
+            if r.payload[0] not in (0x30, 0x31):
+                continue
+            d = ap.decode(r.payload, r.device_type)
+            tg = [(t["threat"], t["side"], t["range_code"], t["speed_code"])
+                  for t in d["targets"]]
+            self.assertEqual(ap.encode_rdr_targets(r.payload[0], tg),
+                             r.payload, r.payload.hex())
+            # Seen on air: a threat-0 slot never carries data, and live
+            # targets are packed from slot 1 (no gaps).
+            live = [t["valid"] for t in d["targets"]]
+            self.assertEqual(live, sorted(live, reverse=True))
+            n += 1
+        self.assertGreater(n, 10)
+
+    def test_status_pages_both_reserved_forms_reencode(self):
+        forms = set()
+        for r in self.recs:
+            if r.payload[0] != ap.PAGE_RDR_STATUS:
+                continue
+            d = ap.decode(r.payload, r.device_type)
+            forms.add(d["legacy_reserved"])
+            self.assertEqual(ap.encode_rdr_status(d["state"], d["clear_targets"],
+                                                  d["legacy_reserved"]),
+                             r.payload)
+        # RTL510 sends the legacy 0x00 form, RTL515/820 the spec's 0x3F.
+        self.assertEqual(forms, {True, False})
+
+    def test_whole_c2_c3_corpus_has_zero_decode_errors(self):
+        import glob
+        here = self._os.path.dirname(__file__)
+        files = sorted(glob.glob(self._os.path.join(
+            here, "..", "archive", "captures", "radio",
+            "2026-11-25-varia-c[23]-*.antcap")))
+        if not files:
+            self.skipTest("session captures not present")
+        n = 0
+        for path in files:
+            for r in ap.read_capture_records(path):
+                if r.device_type != ap.RDR_DEVICE_TYPE or r.kind != "B":
+                    continue
+                self.assertNotIn("raw", ap.decode(r.payload, r.device_type),
+                                 f"{path}: {r.payload.hex()}")
+                n += 1
+        self.assertGreater(n, 20000)
+
+    def test_battery_page_carries_one_battery(self):
+        b = [r.payload for r in self.recs if r.payload[0] == 0x52]
+        self.assertTrue(b)
+        self.assertTrue(all(p[2] == 0x01 for p in b))
+
+
+class TestRadarMaster(unittest.TestCase):
+    """ap.RadarMaster mirrors radiant_profile_radar_next(); same cases as
+    radiant/tests/src/test_profile_radar.c."""
+
+    COMMON = {0x50: bytes([0x50]) + bytes(7), 0x51: bytes([0x51]) + bytes(7),
+              0x52: bytes([0x52]) + bytes(7)}
+
+    def test_background_one_in_65(self):
+        m = ap.RadarMaster(self.COMMON)
+        pages = [m.next()[0] for _ in range(650)]
+        bg = [i for i, p in enumerate(pages) if p != 0x30]
+        self.assertEqual(len(bg), 10)
+        self.assertEqual({b - a for a, b in zip(bg, bg[1:], strict=False)}, {65})
+        self.assertEqual([pages[i] for i in bg[:3]], [0x50, 0x51, 0x52])
+
+    def test_more_than_four_alternate(self):
+        m = ap.RadarMaster(self.COMMON)
+        m.set_targets([(1, 0, 5 + i, 2) for i in range(6)])
+        pages = [m.next()[0] for _ in range(200)]
+        self.assertEqual(pages.count(0x30), 100)
+        self.assertEqual(pages.count(0x31), 100)
+
+    def test_spec_only_shutdown_then_off_and_abort(self):
+        m = ap.RadarMaster(self.COMMON, power_off_on_command=True)
+        self.assertTrue(m.rx(ap.encode_rdr_command(ap.RDR_CMD_SHUTDOWN)))
+        out = []
+        while (p := m.next()) is not None:
+            out.append(p)
+        self.assertGreaterEqual(len(out), 21)
+        status = [p for p in out if p[0] == 1]
+        self.assertTrue(len(status) * 8 >= len(out) >= len(status) * 2)
+        self.assertTrue(all(p[1] & 3 == 1 for p in status))
+
+        m = ap.RadarMaster(self.COMMON, power_off_on_command=True)
+        m.rx(ap.encode_rdr_command(ap.RDR_CMD_SHUTDOWN))
+        m.next()
+        m.rx(ap.encode_rdr_command(ap.RDR_CMD_ABORT_SHUTDOWN))
+        out = [m.next() for _ in range(200)]
+        self.assertNotIn(None, out)
+        self.assertGreaterEqual(sum(1 for p in out if p[0] == 1
+                                    and p[1] & 3 == 2), 10)
+        self.assertEqual(m.state, 0)
+
+    def test_varia_shutdown_command_stays_on(self):
+        # Seen on air (C5): every Garmin unit answers the Edge's Shutdown
+        # bytes ~1.5 s later with 10.0 s of page 1 state 2 alternating with
+        # page 48, then carries on. Same case as the C ztest.
+        m = ap.RadarMaster(self.COMMON)
+        m.rx(bytes.fromhex("02fdffffffffffff"))     # the Edge's exact bytes
+        out = [m.next() for _ in range(200)]
+        self.assertNotIn(None, out)
+        idx = [i for i, p in enumerate(out) if p[0] == 1]
+        self.assertEqual(idx[0], 11)
+        self.assertGreaterEqual(idx[-1] - idx[0], 79)
+        self.assertTrue(all(out[i][1] & 3 == 2 for i in idx))
+        self.assertEqual(set(b - a for a, b in zip(idx, idx[1:], strict=False)), {2})
+        self.assertEqual(m.state, 0)
+
+    def test_request_served_and_unsupported_refused(self):
+        m = ap.RadarMaster(self.COMMON)
+        self.assertTrue(m.rx(ap.encode_common_70(0x51, 2)))
+        self.assertEqual([m.next()[0], m.next()[0]], [0x51, 0x51])
+        self.assertFalse(m.rx(ap.encode_common_70(0x30, 2)))
+
+
+class TestCaptureFormat(unittest.TestCase):
+    """.antcap v1 and v2 lines: v2 appends kind and RSSI, v1 stays as it was."""
+
+    PAYLOAD = bytes.fromhex("30050a1b000000ff")
+
+    def test_v1_line_is_unchanged(self):
+        line = ap.format_capture_line(12.3456789, 0x0B, 0x3A17,
+                                      bytes.fromhex("1006ff5039300064"))
+        self.assertEqual(line, "12.345679 0B 3A17 1006ff5039300064")
+        self.assertEqual(ap.parse_capture_line(line),
+                         (12.345679, 0x0B, 0x3A17,
+                          bytes.fromhex("1006ff5039300064")))
+        record = ap.parse_capture_record(line)
+        self.assertIsNone(record.kind)
+        self.assertIsNone(record.rssi)
+
+    def test_v2_round_trip(self):
+        for kind, rssi in (("B", -61), ("a", None), ("S", 0), ("b", -100)):
+            with self.subTest(kind=kind, rssi=rssi):
+                line = ap.format_capture_line(1.5, 0x28, 0x1234, self.PAYLOAD,
+                                              kind, rssi)
+                record = ap.parse_capture_record(line)
+                self.assertEqual(tuple(record),
+                                 (1.5, 0x28, 0x1234, self.PAYLOAD, kind, rssi))
+                # The 4-tuple reader still reads a v2 line.
+                self.assertEqual(ap.parse_capture_line(line),
+                                 (1.5, 0x28, 0x1234, self.PAYLOAD))
+
+    def test_v2_rejects_unknown_kind_and_bad_column_count(self):
+        with self.assertRaises(ValueError):
+            ap.format_capture_line(0.0, 0x28, 1, self.PAYLOAD, "X", None)
+        with self.assertRaises(ValueError):
+            ap.parse_capture_record("1.0 28 0001 30050a1b000000ff B")
+        with self.assertRaises(ValueError):
+            ap.parse_capture_record("1.0 28 0001 30050a1b000000ff Q -3")
+        with self.assertRaises(ValueError):
+            ap.format_capture_line(0.0, 0x28, 1, self.PAYLOAD, None, -40)
+
+    def test_files_round_trip_and_pick_their_header(self):
+        import os
+        import tempfile
+        fd, path = tempfile.mkstemp(suffix=".antcap")
+        os.close(fd)
+        try:
+            v1 = [(0.25, 0x78, 7, bytes(8)), (0.5, 0x78, 7, bytes(range(8)))]
+            ap.write_capture(path, v1, comments=["v1 test"])
+            with open(path) as handle:
+                self.assertTrue(handle.readline().startswith("# ant capture v1"))
+            self.assertEqual(ap.read_capture(path), v1)
+
+            v2 = [(0.25, 0x28, 7, self.PAYLOAD, "B", -55),
+                  (0.5, 0x28, 7, bytes.fromhex("02ff00ffffffffff"), "a", None)]
+            ap.write_capture(path, v2)
+            with open(path) as handle:
+                self.assertTrue(handle.readline().startswith("# ant capture v2"))
+            self.assertEqual([tuple(r) for r in ap.read_capture_records(path)],
+                             v2)
+            self.assertEqual(ap.read_capture(path), [r[:4] for r in v2])
+        finally:
+            os.unlink(path)
 
 
 # ---------------------------------------------------------------------------

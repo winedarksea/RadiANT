@@ -82,6 +82,7 @@ static const struct base_row base_names[] = {
 	 * CMakeLists.txt on radiant_rd_adapter.c) but compiled and tested, so
 	 * the name is here rather than appearing as "Sensor" the day it is. */
 	{ 0x1Eu, "Running" },
+	{ 0x28u, "Radar" },
 	{ 0x7Cu, "Stride" },
 };
 
@@ -198,6 +199,16 @@ static const struct suffix_row suffix_names[] = {
 	{ RADIANT_FIELD_PERCENTAGE, 0x05u, "Balance" },
 	{ RADIANT_FIELD_PERCENTAGE, 0x06u, "Vert Ratio" },
 	{ RADIANT_FIELD_LENGTH, 0x07u, "Step Len" },
+
+	/* radiant_radar_adapter.c (0x28). Threat is id 0, the bare name; the
+	 * rest are 0x10-0x16 so no pair collides with the rows above. */
+	{ RADIANT_FIELD_BOOLEAN_STATE, 0x10u, "Available" },
+	{ RADIANT_FIELD_ENUM_GENERIC, 0x11u, "Targets" },
+	{ RADIANT_FIELD_LENGTH, 0x12u, "Range" },
+	{ RADIANT_FIELD_SPEED, 0x13u, "Closing" },
+	{ RADIANT_FIELD_ENUM_GENERIC, 0x14u, "Side" },
+	{ RADIANT_FIELD_ENUM_GENERIC, 0x15u, "Status" },
+	{ RADIANT_FIELD_ENUM_GENERIC, 0x16u, "Error" },
 };
 
 static const char *base_for(uint8_t devtype, uint8_t subtype, size_t *cap)

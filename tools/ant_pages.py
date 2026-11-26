@@ -1103,6 +1103,276 @@ _CTRL_DECODERS = {
 
 
 # ---------------------------------------------------------------------------
+# Bike Radar, device type 0x28
+#
+# Mirror of radiant/src/profiles/radiant_profile_radar.c (ANT+ Device Profile -
+# Bike Radar Rev 2.1, deprecated; cross-checked on air against Garmin Varia
+# RTL510 / RTL515 / RearVue 820, archive/captures/radio/2026-11-25-varia-*).
+#
+# Pages 48/49 pack four targets: threat 2 bits each (byte 1), side 2 bits each
+# (byte 2), range 6 bits each across bytes 3-5 (3.125 m steps), closing speed
+# 4 bits each in bytes 6-7 (3.04 m/s steps). Codes are kept on the wire scale;
+# a threat-0 target is "no target" and a display must not decode the rest.
+# Page 1 byte 1 reserved bits: 0x3F per spec, 0x00 on "legacy" sensors -
+# both decode. Page 2's reserved bits are printed "0x1F" for a 6-bit field.
+# ---------------------------------------------------------------------------
+
+RDR_DEVICE_TYPE = 0x28
+RDR_PERIOD = 4084           # ~8.02 Hz; measured 4084.0 on all three units
+RDR_PERIODS = (RDR_PERIOD,)
+RDR_RF_FREQ = 57
+RDR_TRANS_TYPE = 0x05
+
+PAGE_RDR_STATUS = 0x01
+PAGE_RDR_COMMAND = 0x02
+PAGE_RDR_TARGETS_A = 0x30
+PAGE_RDR_TARGETS_B = 0x31
+PAGE_COMMON_ERROR = 0x57     # common page 87
+PAGE_COMMON_REQUEST = 0x46   # common page 70
+
+RDR_RANGE_STEP_M = 3.125
+RDR_SPEED_STEP_MPS = 3.04
+RDR_THREAT = {0: "none", 1: "approach", 2: "fast approach", 3: "reserved"}
+RDR_SIDE = {0: "behind", 1: "right", 2: "left", 3: "reserved"}
+RDR_STATE = {0: "broadcasting", 1: "shutdown requested",
+             2: "shutdown aborted", 3: "shutdown forced"}
+RDR_CMD_ABORT_SHUTDOWN = 0
+RDR_CMD_SHUTDOWN = 1
+RDR_CMD_RESERVED_BITS = 0x3F    # radiant_profile_radar.h CMD_RESERVED
+
+
+def encode_rdr_targets(page: int, targets) -> bytes:
+    """targets: up to four (threat, side, range_code, speed_code) tuples."""
+    if page not in (PAGE_RDR_TARGETS_A, PAGE_RDR_TARGETS_B):
+        raise ValueError(f"not a target page: {page:#x}")
+    targets = list(targets) + [(0, 0, 0, 0)] * (4 - len(targets))
+    threat = side = rng = 0
+    speed = [0, 0]
+    for i, (th, sd, rc, sc) in enumerate(targets[:4]):
+        th &= 3
+        if th == 0:
+            sd = rc = sc = 0
+        threat |= th << (2 * i)
+        side |= (sd & 3) << (2 * i)
+        rng |= (rc & 0x3F) << (6 * i)
+        speed[i // 2] |= (sc & 0x0F) << (4 * (i % 2))
+    return bytes([page, threat, side, rng & 0xFF, (rng >> 8) & 0xFF,
+                  (rng >> 16) & 0xFF, speed[0], speed[1]])
+
+
+def decode_rdr_targets(payload: bytes) -> dict:
+    rng = payload[3] | (payload[4] << 8) | (payload[5] << 16)
+    base = 1 if payload[0] == PAGE_RDR_TARGETS_A else 5
+    targets = []
+    for i in range(4):
+        threat = (payload[1] >> (2 * i)) & 3
+        t = {"index": base + i, "threat": threat,
+             "side": (payload[2] >> (2 * i)) & 3,
+             "range_code": (rng >> (6 * i)) & 0x3F,
+             "speed_code": (payload[6 + i // 2] >> (4 * (i % 2))) & 0x0F,
+             "valid": threat != 0}
+        t["range_m"] = t["range_code"] * RDR_RANGE_STEP_M
+        t["speed_mps"] = round(t["speed_code"] * RDR_SPEED_STEP_MPS, 2)
+        targets.append(t)
+    return {"page": payload[0], "targets": targets,
+            "active": sum(t["valid"] for t in targets)}
+
+
+def encode_rdr_status(state: int, clear_targets: bool = False,
+                      legacy_reserved: bool = False) -> bytes:
+    return bytes([PAGE_RDR_STATUS,
+                  (state & 3) | (0 if legacy_reserved else 0x3F << 2),
+                  0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+                  0xFE | (0 if clear_targets else 1)])
+
+
+def decode_rdr_status(payload: bytes) -> dict:
+    return {"page": PAGE_RDR_STATUS, "state": payload[1] & 3,
+            "clear_targets": (payload[7] & 1) == 0,
+            "legacy_reserved": (payload[1] & 0xFC) == 0}
+
+
+def encode_rdr_command(command: int,
+                       reserved_bits: int = RDR_CMD_RESERVED_BITS) -> bytes:
+    if command not in (RDR_CMD_ABORT_SHUTDOWN, RDR_CMD_SHUTDOWN):
+        raise ValueError(f"reserved command {command}")
+    return bytes([PAGE_RDR_COMMAND, ((reserved_bits & 0x3F) << 2) | command]
+                 + [0xFF] * 6)
+
+
+def decode_rdr_command(payload: bytes) -> dict:
+    return {"page": PAGE_RDR_COMMAND, "command": payload[1] & 3,
+            "reserved_bits": payload[1] >> 2}
+
+
+def encode_common_87(component: int, level: int, profile_code: int,
+                     mfg_code: int) -> bytes:
+    return bytes([PAGE_COMMON_ERROR, 0xFF,
+                  (component & 0x0F) | ((level & 3) << 6), profile_code & 0xFF]
+                 ) + (mfg_code & 0xFFFFFFFF).to_bytes(4, "little")
+
+
+def decode_common_87(payload: bytes) -> dict:
+    return {"page": PAGE_COMMON_ERROR, "component": payload[2] & 0x0F,
+            "level": (payload[2] >> 6) & 3, "profile_code": payload[3],
+            "mfg_code": int.from_bytes(payload[4:8], "little")}
+
+
+def encode_common_70(page: int, count: int = 4, acked: bool = False,
+                     descriptor1: int = 0xFF, descriptor2: int = 0xFF,
+                     byte1: int = 0xFF) -> bytes:
+    return bytes([PAGE_COMMON_REQUEST, byte1, 0xFF, descriptor1, descriptor2,
+                  (count & 0x7F) | (0x80 if acked else 0), page, 0x01])
+
+
+def decode_common_70(payload: bytes) -> dict:
+    return {"page": PAGE_COMMON_REQUEST, "requested_page": payload[6],
+            "count": payload[5] & 0x7F, "acked": bool(payload[5] & 0x80),
+            "descriptor1": payload[3], "descriptor2": payload[4],
+            "byte1": payload[1], "command_type": payload[7]}
+
+
+_RDR_DECODERS = {
+    PAGE_RDR_STATUS: decode_rdr_status,
+    PAGE_RDR_COMMAND: decode_rdr_command,
+    PAGE_RDR_TARGETS_A: decode_rdr_targets,
+    PAGE_RDR_TARGETS_B: decode_rdr_targets,
+    PAGE_COMMON_ERROR: decode_common_87,
+    PAGE_COMMON_REQUEST: decode_common_70,
+}
+
+RDR_BACKGROUND_EVERY = 65   # 64 page-48s then one of 80/81/82: all 3 units
+RDR_STATUS_EVERY = 2        # page 1 every other message: all 3 units (C5)
+RDR_SHUTDOWN_MSGS = 24      # >= 2.5 s
+RDR_ABORTED_MSGS = 81       # >= 10 s; units measured 10.0 s
+RDR_STAY_ON_DELAY = 12      # Shutdown cmd -> aborted pattern: units 1.52 s
+
+
+class RadarMaster:
+    """Mirror of radiant_profile_radar_next(): which page a radar sends next.
+
+    common: {0x50: payload, 0x51: payload, 0x52: payload}. Targets are
+    (threat, side, range_code, speed_code) tuples; threat-0 ones dropped.
+    next() returns a payload, or None once the shutdown pattern has ended
+    (power off)."""
+
+    def __init__(self, common: dict, power_off_on_command: bool = False,
+                 legacy_status: bool = False,
+                 background_every: int = RDR_BACKGROUND_EVERY,
+                 status_every: int = RDR_STATUS_EVERY):
+        self.common = common
+        # False = the Rev 2.1 "stay on" answer to a Shutdown command, which
+        # every Garmin unit gives (C5); True = Shutdown Requested, power off.
+        self.power_off_on_command = power_off_on_command
+        self.status_every = min(8, max(2, status_every))
+        self.stay_on_wait = 0
+        self.pattern_m = 0
+        self.legacy_status = legacy_status
+        self.background_every = background_every
+        self.targets: list = []
+        self.error = None           # (component, level, profile, mfg)
+        self.detecting = True
+        self.state = 0
+        self.state_left = 0
+        self.off = False
+        self.m = 0
+        self.since_background = 0
+        self.background_next = 0
+        self.ab_toggle = False
+        self.req_page = 0
+        self.req_left = 0
+
+    def set_targets(self, targets) -> None:
+        self.targets = [t for t in targets if t[0] & 3][:8]
+
+    def begin_shutdown(self, forced: bool = False) -> None:
+        if not self.off:
+            self.state = 3 if forced else 1
+            self.state_left = RDR_SHUTDOWN_MSGS
+            self.pattern_m = 0
+            self.stay_on_wait = 0
+
+    def _begin_aborted(self) -> None:
+        self.state, self.state_left = 2, RDR_ABORTED_MSGS
+        self.pattern_m = 0
+        self.stay_on_wait = 0
+
+    def rx(self, payload: bytes) -> bool:
+        """A page from a display. True if acted on."""
+        if payload[0] == PAGE_RDR_COMMAND:
+            cmd = payload[1] & 3
+            if cmd == RDR_CMD_SHUTDOWN:
+                if self.state in (1, 3):
+                    return True
+                if self.power_off_on_command:
+                    self.begin_shutdown(False)
+                elif self.state == 0 and not self.stay_on_wait:
+                    self.stay_on_wait = RDR_STAY_ON_DELAY
+                return True
+            if cmd == RDR_CMD_ABORT_SHUTDOWN:
+                if self.state == 1:
+                    self._begin_aborted()
+                return True
+            return False
+        if payload[0] == PAGE_COMMON_REQUEST and payload[7] == 0x01:
+            page = payload[6]
+            if page in (0x50, 0x51, 0x52, PAGE_RDR_STATUS):
+                self.req_page = page
+                self.req_left = (payload[5] & 0x7F) or 1
+                return True
+        return False
+
+    def _status(self, clear: bool) -> bytes:
+        return encode_rdr_status(self.state, clear, self.legacy_status)
+
+    def next(self) -> bytes | None:
+        if self.off:
+            return None
+        self.m += 1
+        if self.stay_on_wait:
+            self.stay_on_wait -= 1
+            if not self.stay_on_wait:
+                self._begin_aborted()
+                self.state_left += 1    # C: not charged on the entry call
+        if self.state != 0:
+            if self.state_left == 0:
+                if self.state == 2:
+                    self.state = 0
+                else:
+                    self.off = True
+                    return None
+            else:
+                self.state_left -= 1
+        if self.state != 0:
+            status_slot = self.pattern_m % self.status_every == 0
+            self.pattern_m += 1
+            if status_slot:
+                return self._status(self.state in (1, 3))
+        if self.req_left:
+            self.req_left -= 1
+            if self.req_page == PAGE_RDR_STATUS:
+                return self._status(not self.detecting)
+            return self.common[self.req_page]
+        if self.error is not None:
+            return encode_common_87(*self.error)
+        if not self.detecting:
+            return self._status(True)
+        if len(self.targets) > 4:
+            self.ab_toggle = not self.ab_toggle
+            if self.ab_toggle:
+                return encode_rdr_targets(PAGE_RDR_TARGETS_A, self.targets[:4])
+            return encode_rdr_targets(PAGE_RDR_TARGETS_B, self.targets[4:8])
+        self.ab_toggle = False
+        self.since_background += 1
+        if self.since_background >= self.background_every:
+            self.since_background = 0
+            page = (0x50, 0x51, 0x52)[self.background_next]
+            self.background_next = (self.background_next + 1) % 3
+            return self.common[page]
+        return encode_rdr_targets(PAGE_RDR_TARGETS_A, self.targets[:4])
+
+
+# ---------------------------------------------------------------------------
 # Fitness Equipment Control (FE-C), device type 0x11
 # ---------------------------------------------------------------------------
 #
@@ -4499,6 +4769,14 @@ def decode_hr(payload: bytes) -> dict:
     return {"page": number, "toggle": toggle, "raw": bytes(payload)}
 
 
+_TYPE_DECODERS = {
+    RD_DEVICE_TYPE: _RD_DECODERS,
+    TRK_DEVICE_TYPE: _TRK_DECODERS,
+    CTRL_DEVICE_TYPE: _CTRL_DECODERS,
+    RDR_DEVICE_TYPE: _RDR_DECODERS,
+}
+
+
 def decode(payload: bytes, device_type: int) -> dict:
     """Decode one 8-byte payload heard on a channel of `device_type`.
 
@@ -4540,6 +4818,15 @@ def decode(payload: bytes, device_type: int) -> dict:
         decoder = _SDM_DECODERS.get(payload[0])
         if decoder is not None:
             return decoder(payload)
+    else:
+        # Profiles keyed purely on device type with no page-number trap.
+        # Tracker, RD and Controls had decoders here for a while that
+        # decode() never reached; the radar joined them in the same table.
+        decoders = _TYPE_DECODERS.get(device_type)
+        if decoders is not None:
+            decoder = decoders.get(payload[0])
+            if decoder is not None:
+                return decoder(payload)
 
     decoder = _PAGE_DECODERS.get(payload[0])
     if decoder is None:
@@ -4554,12 +4841,53 @@ def decode(payload: bytes, device_type: int) -> dict:
 CAPTURE_HEADER = ("# ant capture v1: <seconds> <device_type> <device_number> "
                   "<8 payload bytes>")
 
+# v2 appends two columns, kind and RSSI, for recordings where the message kind
+# (broadcast/acked/burst) and the direction matter - a bidirectional profile's
+# command pages, or a sniffer that hears both ends. A v1 reader that takes the
+# first four columns keeps working; parse_capture_line does exactly that.
+CAPTURE_HEADER_V2 = ("# ant capture v2: <seconds> <device_type> <device_number> "
+                     "<8 payload bytes> <kind> <rssi dBm|->")
+
+# The kind column. The letter is the message kind, the CASE is the direction:
+# upper case travelled from the channel master (the sensor) towards the
+# slave, lower case towards the master - a display's acked command, or a page
+# the recording tool itself transmitted.
+CAPTURE_KINDS = {
+    "B": "broadcast from master", "A": "acked from master",
+    "S": "burst from master",
+    "b": "broadcast to master", "a": "acked to master", "s": "burst to master",
+}
+
+
+class CaptureRecord(tuple):
+    """One .antcap line with the v2 columns: (t, device_type, device_number,
+    payload, kind, rssi). kind and rssi are None for a v1 line.
+
+    A tuple subclass so the first four fields unpack where read_capture's
+    4-tuples did, but it is six long - code that needs the old shape slices."""
+
+    __slots__ = ()
+
+    def __new__(cls, t, device_type, device_number, payload, kind=None,
+                rssi=None):
+        return tuple.__new__(cls, (t, device_type, device_number,
+                                   bytes(payload), kind, rssi))
+
+    t = property(lambda self: self[0])
+    device_type = property(lambda self: self[1])
+    device_number = property(lambda self: self[2])
+    payload = property(lambda self: self[3])
+    kind = property(lambda self: self[4])
+    rssi = property(lambda self: self[5])
+
 
 def format_capture_line(t: float, device_type: int, device_number: int,
-                        payload: bytes) -> str:
+                        payload: bytes, kind: str | None = None,
+                        rssi: int | None = None) -> str:
     """One captured packet, as a line of a .antcap file.
 
-        12.345678 0B 3A17 1006ff5039300064
+        12.345678 0B 3A17 1006ff5039300064            (v1)
+        12.345678 28 3A17 30050a1b000000ff B -61      (v2)
 
     Deliberately not JSON. These captures are replayed through the C decoders
     in zephyr_aerosense's host tests, and a line of this shape is one sscanf
@@ -4570,41 +4898,79 @@ def format_capture_line(t: float, device_type: int, device_number: int,
     are both 0x0B - and merging their streams produces one analysis of two
     unrelated series, the same mistake as write-back item 1 made in the
     analysis tool instead of the firmware.
+
+    With `kind` (a CAPTURE_KINDS letter) the line is v2; `rssi` is then dBm or
+    None, written "-". Without `kind` the line is v1, byte for byte as before.
     """
-    return (f"{t:.6f} {device_type:02X} {device_number & 0xFFFF:04X} "
+    line = (f"{t:.6f} {device_type:02X} {device_number & 0xFFFF:04X} "
             f"{bytes(payload[:8]).hex()}")
+    if kind is None:
+        if rssi is not None:
+            raise ValueError("rssi needs a kind (v2 line)")
+        return line
+    if kind not in CAPTURE_KINDS:
+        raise ValueError(f"unknown capture kind {kind!r}")
+    return f"{line} {kind} {'-' if rssi is None else int(rssi)}"
 
 
-def parse_capture_line(line: str):
-    """Inverse of format_capture_line. Returns None for blanks and comments."""
+def parse_capture_record(line: str):
+    """A v1 or v2 line as a CaptureRecord. None for blanks and comments."""
     line = line.strip()
     if not line or line.startswith("#"):
         return None
     parts = line.split()
-    if len(parts) != 4:
+    if len(parts) not in (4, 6):
         raise ValueError(f"malformed capture line: {line!r}")
-    return (float(parts[0]), int(parts[1], 16), int(parts[2], 16),
-            bytes.fromhex(parts[3]))
+    kind = rssi = None
+    if len(parts) == 6:
+        kind = parts[4]
+        if kind not in CAPTURE_KINDS:
+            raise ValueError(f"unknown capture kind in line: {line!r}")
+        rssi = None if parts[5] == "-" else int(parts[5])
+    return CaptureRecord(float(parts[0]), int(parts[1], 16),
+                         int(parts[2], 16), bytes.fromhex(parts[3]),
+                         kind, rssi)
+
+
+def parse_capture_line(line: str):
+    """Inverse of format_capture_line, as a 4-tuple: (t, device_type,
+    device_number, payload). Reads v1 and v2 lines; v2's kind and RSSI are
+    dropped here - parse_capture_record keeps them."""
+    record = parse_capture_record(line)
+    return None if record is None else tuple(record[:4])
 
 
 def write_capture(path: str, records, comments=()) -> None:
-    """Write a capture, with `comments` recorded as # lines above the data."""
+    """Write a capture, with `comments` recorded as # lines above the data.
+
+    Records are 4-tuples (v1) or 6-tuples with kind and RSSI (v2); one 6-tuple
+    with a kind makes the whole file v2 by header."""
+    records = list(records)
+    v2 = any(len(r) >= 6 and r[4] is not None for r in records)
     with open(path, "w") as handle:
-        handle.write(CAPTURE_HEADER + "\n")
+        handle.write((CAPTURE_HEADER_V2 if v2 else CAPTURE_HEADER) + "\n")
         for comment in comments:
             handle.write(f"# {comment}\n")
-        for t, device_type, device_number, payload in records:
-            handle.write(
-                format_capture_line(t, device_type, device_number, payload)
-                + "\n")
+        for record in records:
+            t, device_type, device_number, payload = record[:4]
+            kind = record[4] if len(record) >= 6 else None
+            rssi = record[5] if len(record) >= 6 else None
+            handle.write(format_capture_line(t, device_type, device_number,
+                                             payload, kind, rssi) + "\n")
 
 
 def read_capture(path: str) -> list:
-    """Read a capture written by write_capture. Returns a list of records."""
+    """Read a capture written by write_capture. Returns a list of 4-tuple
+    records (v2 columns dropped; read_capture_records keeps them)."""
+    return [tuple(r[:4]) for r in read_capture_records(path)]
+
+
+def read_capture_records(path: str) -> list:
+    """Read a v1 or v2 capture as CaptureRecords."""
     records = []
     with open(path) as handle:
         for line in handle:
-            record = parse_capture_line(line)
+            record = parse_capture_record(line)
             if record is not None:
                 records.append(record)
     return records
@@ -4669,6 +5035,12 @@ PROFILES = {
         "period": FEC_PERIOD,
         "pages": (PAGE_FEC_GENERAL, PAGE_FEC_TRAINER),
         "label": "fitness equipment (indoor bike), device type 0x11",
+    },
+    "radar": {
+        "device_type": RDR_DEVICE_TYPE,
+        "period": RDR_PERIOD,
+        "pages": (PAGE_RDR_TARGETS_A,),
+        "label": "bike radar, device type 0x28",
     },
     "sdm": {
         "device_type": SDM_DEVICE_TYPE,

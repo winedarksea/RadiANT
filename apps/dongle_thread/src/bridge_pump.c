@@ -126,6 +126,9 @@ static void pump_thread_fn(void *a, void *b, void *c)
 	for (;;) {
 		k_sleep(K_MSEC(CONFIG_ANT_DONGLE_BRIDGE_PUMP_MS));
 
+		/* Before the drain, so an "unavailable" it posts goes out on
+		 * this pass rather than the next. */
+		ant_bridge_radar_tick(ant_bridge_now_us());
 		(void)radiant_bridge_drain();
 
 		if (k_uptime_get() >= next_tick_ms) {

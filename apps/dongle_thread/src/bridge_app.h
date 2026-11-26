@@ -62,6 +62,11 @@ uint32_t ant_bridge_channel_source(uint8_t channel);
  * them apart. */
 uint32_t ant_bridge_unbound_drops(void);
 
+/* Bike radar target timeout (2 s, spec 6.4.1): ticks every bound 0x28
+ * binding's adapter. Called from bridge_pump.c's loop; a no-op without
+ * CONFIG_ANT_DONGLE_RADAR. */
+void ant_bridge_radar_tick(uint64_t now_us);
+
 /*
  * Open the pairing window (CONFIG_ANT_DONGLE_PAIRING_WINDOW_S seconds) as
  * though the button had been pressed. Exists so that a shell command or a

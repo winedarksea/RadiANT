@@ -136,6 +136,10 @@ target_sources(app PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/radiant_profile_power.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/radiant_profile_tracker.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/radiant_profile_controls.c"
+  # Bike Radar (0x28): codecs plus a master. Listed for the reason the
+  # radiant_profile_rd.c line below records - the suites are globbed and the
+  # implementations are not.
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/profiles/radiant_profile_radar.c"
   # Running dynamics. Listed here for the same reason as its two neighbours -
   # src/test_profile_rd.c is in this application's test sources, so leaving the
   # implementation out is a link error, not a missing test. It was exactly that
@@ -222,6 +226,9 @@ target_sources(app PRIVATE
   # two page decoders rather than re-deriving the bit splits, which is why the
   # src/profiles include directory above is not optional for this file.
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge/radiant_rd_adapter.c"
+  # The bike radar adapter (0x28): nearest target, threat, the 2 s
+  # target-unavailable timeout. Includes radiant_profile_radar.h for the codecs.
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge/radiant_radar_adapter.c"
   # P6: the binding table (section 5) and the rule evaluator (section 6.1/6.2).
   # radiant_rules.c registers itself as an ordinary RADIANT_SINK_DEFINE()
   # sink, so it needs nothing from CMake beyond being compiled and linked -
