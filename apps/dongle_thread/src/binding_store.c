@@ -89,9 +89,9 @@ static int find_slot(uint16_t devnum, uint8_t devtype, uint8_t trans)
 	return -1;
 }
 
-static void slot_key(int i, char *out, size_t len)
+static void slot_key(uint8_t i, char *out, size_t len)
 {
-	(void)snprintf(out, len, SUBTREE "/%d", i);
+	(void)snprintf(out, len, SUBTREE "/%u", (unsigned int)i);
 }
 
 static int load_one(const char *key, size_t len, settings_read_cb read_cb,
@@ -303,7 +303,7 @@ int binding_store_save(const struct radiant_binding *b)
 		return -EINVAL;
 	}
 	slot = pick_save_slot(b);
-	slot_key(slot, key, sizeof(key));
+	slot_key((uint8_t)slot, key, sizeof(key));
 	if (cache[slot].valid &&
 	    !same_key(&cache[slot].rec, rec.devnum, rec.devtype, rec.trans)) {
 		LOG_INF("binding store full: forgetting device %u (type 0x%02x), "
@@ -339,7 +339,7 @@ void binding_store_evict(const struct radiant_binding *b)
 	if (slot >= 0) {
 		int rc;
 
-		slot_key(slot, key, sizeof(key));
+		slot_key((uint8_t)slot, key, sizeof(key));
 		rc = settings_delete(key);
 		if (rc != 0) {
 			/* Still dropped from the cache, so this boot does not
