@@ -430,7 +430,13 @@ uint32_t radiant_frame_tail_us(const struct radiant_pkt_format *fmt);
  *                 Garmin Varia RTL510 acknowledges acknowledged data with
  *                 0xF3 (2026-11-25, archive/captures/radio/2026-11-25-
  *                 ackbug-sniff.log), and a Garmin USB-m slave accepts that
- *                 ack. So RECEIVING treats bit 0 as don't-care (010 or 011);
+ *                 ack. BIT 1 IS NOT CONSTANT EITHER: a legacy ANT+ heart
+ *                 rate strap (#11625, type 0x78, trans 1) broadcasts 0x08,
+ *                 i.e. 000, on every frame, and a Garmin watch tracks it
+ *                 and answers in its slot (2026-11-25, archive/captures/
+ *                 radio/2026-11-25-legacy-hrm-sniff.log: 176 CRC-valid
+ *                 0x08 frames, no 0x0A). So RECEIVING checks bit 2 only
+ *                 (000..011) - bit 2 has never been seen set - while
  *                 everything this tree TRANSMITS still carries 010.
  *
  * THE BURST SEQUENCE IS ONE BIT, SEQUENCES 2..7 DO NOT EXIST: a 17-packet
@@ -463,9 +469,11 @@ uint32_t radiant_frame_tail_us(const struct radiant_pkt_format *fmt);
 #define RADIANT_CTRL_SLOT      0x08u
 #define RADIANT_CTRL_LOW_MASK  0x07u
 #define RADIANT_CTRL_LOW_VALUE 0x02u
-/* What a RECEIVED byte must match: bits 2:1 = 01, bit 0 either value. The
- * transmit side keeps RADIANT_CTRL_LOW_VALUE in all three bits. */
-#define RADIANT_CTRL_RX_LOW_MASK 0x06u
+/* What a RECEIVED byte must match: bit 2 clear, bits 1:0 any value (010 and
+ * 011 from current stacks, 000 from a legacy HR strap). The transmit side
+ * keeps RADIANT_CTRL_LOW_VALUE in all three bits. */
+#define RADIANT_CTRL_RX_LOW_MASK  0x04u
+#define RADIANT_CTRL_RX_LOW_VALUE 0x00u
 /* The one received value outside Spike B's table that is known on air: a
  * Garmin Varia's acknowledgement of acknowledged data (0xF2 with bit 0 set).
  * Before 2026-11-25 every RadiANT slave reported TRANSFER_TX_FAILED for
@@ -557,7 +565,7 @@ struct radiant_ctrl_fields {
  * only, which is why radiant_ack.c and radiant_burst.c share one encoder.
  */
 enum radiant_msg_type {
-	/* b2:0 != 010, or a flag combination never measured: b7 = 0 with any
+	/* b2 set, or a flag combination never measured: b7 = 0 with any
 	 * of b6/b5 set. Never an error here - the frame layer reports it and
 	 * the layer above decides. */
 	RADIANT_MSG_UNKNOWN = 0,
@@ -575,10 +583,11 @@ enum radiant_msg_type {
  *
  * TWO forms, one per direction. What this tree TRANSMITS keeps all three
  * bits at 010 - the encoders refuse anything else, as before. What it
- * RECEIVES is checked on bits 2:1 only, because bit 0 is set by at least
- * one shipping stack (a Garmin Varia's ack is 0xF3, see b2:0 above) and a
- * frame the radio delivered with a good CRC is not ours to refuse over a
- * bit nothing here gives a meaning. */
+ * RECEIVES is checked on bit 2 only, because shipping stacks vary both
+ * other bits (a Garmin Varia's ack is 0xF3, a legacy HR strap broadcasts
+ * 0x08, see b2:0 above) and a frame the radio delivered with a good CRC is
+ * not ours to refuse over a bit nothing here gives a meaning. Refusing bit
+ * 1 made that strap invisible to every RadiANT receiver. */
 static inline bool radiant_ctrl_low_ok(uint8_t ctrl)
 {
 	return (uint8_t)(ctrl & RADIANT_CTRL_LOW_MASK) == RADIANT_CTRL_LOW_VALUE;
@@ -586,7 +595,7 @@ static inline bool radiant_ctrl_low_ok(uint8_t ctrl)
 
 static inline bool radiant_ctrl_low_ok_rx(uint8_t ctrl)
 {
-	return (uint8_t)(ctrl & RADIANT_CTRL_RX_LOW_MASK) == RADIANT_CTRL_LOW_VALUE;
+	return (uint8_t)(ctrl & RADIANT_CTRL_RX_LOW_MASK) == RADIANT_CTRL_RX_LOW_VALUE;
 }
 
 static inline bool radiant_ctrl_is_exchange(uint8_t ctrl)
@@ -627,8 +636,8 @@ static inline bool radiant_ctrl_is_slot_opener(uint8_t ctrl)
  * been transmitted is radiant_ctrl_observed()'s question. */
 uint8_t radiant_ctrl_encode(const struct radiant_ctrl_fields *f);
 
-/* Unpack. RADIANT_FRAME_ECTRL, and out untouched, if bits 2:1 are not 01
- * (bit 0 is don't-care on receive). */
+/* Unpack. RADIANT_FRAME_ECTRL, and out untouched, if bit 2 is set (bits 1:0
+ * are don't-care on receive). */
 int radiant_ctrl_decode(uint8_t ctrl, struct radiant_ctrl_fields *out);
 
 /* True only for the eleven values measured on air - the guard that keeps
@@ -731,8 +740,9 @@ struct radiant_frame {
 	/*
 	 * Byte 3 exactly as it appears on air. A stated field, not
 	 * derived from payload_len - Spike B confirmed none of its bits
-	 * depend on payload length. Only cross-check is bits 2:0 == 010;
-	 * use the radiant_ctrl_* accessors for the five flags above it.
+	 * depend on payload length. Only cross-check is bits 2:0 == 010 on
+	 * transmit, bit 2 clear on receive; use the radiant_ctrl_*
+	 * accessors for the five flags above it.
 	 */
 	uint8_t ctrl_byte;
 	uint8_t payload_len;
