@@ -1594,6 +1594,17 @@ Three tiers of honesty, then, and they should be presented to the user in this
 order: booleans (correct and free), MQTT (correct and one add-on), passenger
 cluster (free and mislabelled).
 
+**Implemented, off by default.** `radiant_matter.c` has no Kconfig, so the
+switch is a runtime call, `radiant_matter_set_hr_passenger(bool)`; nothing calls
+it unless an image opts in, and `apps/dongle_thread` does so only with
+`CONFIG_ANT_DONGLE_MATTER_HR_PASSENGER=y` (default `n`). On, `0x26` heart rate
+gets a row: a Flow Sensor (`0x0306`) endpoint whose Flow Measurement
+`MeasuredValue` is bpm × 10 (the cluster's unit is 0.1 m³/h, so a controller
+shows the bpm figure as m³/h), with a 2 bpm deadband and a 60 s heartbeat. Heart
+rate streams, so that heartbeat really does fire, unlike the change-only
+occupancy row's. The endpoint is one more per strap out of the 16 of §8.1.
+`radiant_matter_reset()` does not turn the switch off.
+
 ### 8.4 The dongle as a Matter client — the latency floor
 
 For "elevated HR → fan on", the dongle does not need to represent heart rate in
@@ -2140,7 +2151,7 @@ before anything expensive is built on top of them.
 | 4 | **Matter: commissioning and the §8.1 type map** — the four occupancy endpoints, plus `0x10` temperature and `0x11` humidity for any `0x60` source that announces them | The flash ceiling of §11, and it delivers tier 1 — the first end-to-end demo is strap → QR scan → four HA `binary_sensor`s, no host and nothing installed |
 | 5 | MQTT-over-Thread sink + discovery generator + the WebSerial provisioning page | Tier 2. Adds the number in bpm |
 | 6 | Personalisation §6.3–6.5: histogram, conjugate update, capped store, NVM on session end | Pure addition. No endpoint moves, because prior-only was already `n = 0` of the same path |
-| 7 | Matter remainder: the MEI cluster, client binding, page `0x10` as the reverse path, and the §8.3b passenger cluster behind its default-off switch | — |
+| 7 | Matter remainder: the MEI cluster, client binding, page `0x10` as the reverse path, and the §8.3b passenger cluster behind its default-off switch (the passenger has landed; the rest is open) | — |
 | 8 | BLE sink | — |
 
 **Phases 4 and 5 used to be the other way round, and that was an ordering

@@ -598,6 +598,7 @@ different and more informative answer than `n`.
 | `CONFIG_CHIP_ENABLE_READ_CLIENT` | y | — | — | ABSENT |
 | `CONFIG_CHIP_FACTORY_DATA_NONE` | y | — | — | ABSENT |
 | `CONFIG_DK_LIBRARY` | **ABSENT** | — | — | ABSENT |
+| `CONFIG_ANT_DONGLE_MATTER_HR_PASSENGER` | **not set** (default `n`; `docs/radiant-bridge.md` §8.3b) | — | — | ABSENT (inside `if CHIP`) |
 | `CONFIG_CHIP_OTA_REQUESTOR` / `_FACTORY_DATA` / `BOOTLOADER_MCUBOOT` | not set | not set | not set | — |
 | `CONFIG_FLASH_LOAD_OFFSET` / `_SIZE` | — | 0 / 0 (app owns the whole 1 MB) | — | — |
 | settings backend | `SETTINGS_ZMS=y` (RRAM) | | `SETTINGS_NVS=y` | |
@@ -987,7 +988,19 @@ comparing before conversion would make it depend on whichever exponent a decoder
 happened to pick. The heartbeat is not optional: without one a sensor whose
 reading never changes stops writing forever, and "unchanged" becomes
 indistinguishable from "gone" to anything reading timestamps rather than
-`Reachable`.
+`Reachable`. The heartbeat is checked only when a sample arrives, so it fires
+on streaming rows; the occupancy row is change-only and needs none, because the
+CHIP attribute holds its last value.
+
+**`CONFIG_ANT_DONGLE_MATTER_HR_PASSENGER`** (default `n`, defined in
+`src/matter/Kconfig` inside `if CHIP`) makes `src/main.c` call
+`radiant_matter_set_hr_passenger(true)` before the Matter task starts. Each
+heart-rate binding then gains a Flow Sensor (`0x0306`) endpoint carrying bpm × 10
+in Flow Measurement `MeasuredValue` (deadband 2 bpm, heartbeat 60 s), served by
+`MeasurementSensorDevice`'s fourth device type. The Flow Measurement cluster has
+a ZAP server count of 0, as Occupancy Sensing and Pressure Measurement do; the
+endpoint's cluster list is dynamic. Deliberately mislabelled, which is why it is
+off: see `docs/radiant-bridge.md` §8.3b.
 
 **Tests.** `radiant_matter` is 28 cases; the full `radiant/tests` application is
 **723 passing, 0 failing**, run on real hardware (nRF5340 DK) via
