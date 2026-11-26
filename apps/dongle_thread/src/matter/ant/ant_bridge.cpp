@@ -60,6 +60,12 @@
  * set of endpoints at every power cycle until the sixteen ran out - the exact
  * failure trap 8 is about, arrived at by following trap 8's own instructions.
  *
+ * (2026-11-26: that premise has since changed - src/binding_store.c persists
+ * bindings with their uuid, and a re-pair of a known channel ID keeps it. The
+ * channel-identity key below is kept anyway: it is still correct, it already
+ * matches every endpoint persisted before the change, and a user eviction
+ * mints a new uuid for the same sensor, which must not orphan its endpoints.)
+ *
  * What IS stable across a reboot is the sensor's ANT channel identity, so the
  * key persisted here is a 64-bit FNV-1a hash of (devnum, devtype, trans_type),
  * paired with the field_id - and, for a measured field, the field type too,

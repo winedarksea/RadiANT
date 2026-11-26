@@ -599,6 +599,10 @@ different and more informative answer than `n`.
 | `CONFIG_CHIP_FACTORY_DATA_NONE` | y | — | — | ABSENT |
 | `CONFIG_DK_LIBRARY` | **ABSENT** | — | — | ABSENT |
 | `CONFIG_ANT_DONGLE_MATTER_HR_PASSENGER` | **not set** (default `n`; `docs/radiant-bridge.md` §8.3b) | — | — | ABSENT (inside `if CHIP`) |
+| `CONFIG_RADIANT_BRIDGE_RULES_EQUIPMENT_CLEAR_S` | **30** (In Use clear delay; was a fixed 5 s) | — | — | same in the MQTT bridge arm |
+| `CONFIG_RADIANT_BRIDGE_HR_MAX_PRIOR` / `_HR_REST_PRIOR` | **180 / 65** (zone prior, `docs/radiant-bridge.md` §6.2) | — | — | same in the MQTT bridge arm |
+| `CONFIG_RADIANT_BRIDGE_HR_PROFILES` / `_HR_PRIOR_WEIGHT_S` | **8 / 1800** (§6.3–6.5; 0 slots = prior only) | — | — | same in the MQTT bridge arm |
+| `CONFIG_ANT_DONGLE_BINDING_STORE` | y (bindings persisted under `radiant/bind/<n>`) | — | — | y |
 | `CONFIG_CHIP_OTA_REQUESTOR` / `_FACTORY_DATA` / `BOOTLOADER_MCUBOOT` | not set | not set | not set | — |
 | `CONFIG_FLASH_LOAD_OFFSET` / `_SIZE` | — | 0 / 0 (app owns the whole 1 MB) | — | — |
 | settings backend | `SETTINGS_ZMS=y` (RRAM) | | `SETTINGS_NVS=y` | |
@@ -988,6 +992,17 @@ records are written on a bind and an eviction only, through the same
 settings/ZMS store as the Matter fabric data (key prefix `radiant/bind/`,
 separate from the glue's `br/`). `CONFIG_ANT_DONGLE_PAIRING_WINDOW_AT_BOOT` is
 therefore needed once, to pair, and not on every boot of a bench image.
+
+Once a restored sensor is heard, every occupancy output it feeds posts its
+current value straight away (normally `false`: the rules announce each output
+on its first input), so a restored endpoint becomes Reachable on the sensor's
+first sample rather than at its next state change. Before 2026-11-26 an idle
+trainer had no In Use endpoint at all until it was first ridden, and a restored
+one stayed unreachable until then. An eviction also erases the strap's
+heart-rate profile (`radiant/hrp/<uuid>`, `docs/radiant-bridge.md` §6.5), and a
+bind or unbind resets the slot's rule and liveness state, so a different
+sensor paired into the slot reports its first occupancy rather than inheriting
+the previous sensor's.
 
 **Deadbands.** `radiant_matter.h` carries `deadband` and `heartbeat_s` per row,
 with sentinels `RADIANT_MATTER_DEADBAND_EVERY` (−1) and `_ON_CHANGE` (0), so a
