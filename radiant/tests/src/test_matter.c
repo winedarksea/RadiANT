@@ -95,6 +95,9 @@ static void matter_before(void *f)
 	memset(writes, 0, sizeof(writes));
 	n_writes = 0u;
 	radiant_matter_reset();
+	/* Not part of reset (see radiant_matter.h), so every case starts
+	 * from the shipped default explicitly. */
+	radiant_matter_set_hr_passenger(false);
 }
 
 ZTEST_SUITE(radiant_matter, NULL, NULL, matter_before, NULL, NULL);
@@ -146,15 +149,50 @@ ZTEST(radiant_matter, test_the_four_rows_section_8_1_lists_are_all_present)
 	zassert_equal(r->cluster, RADIANT_MATTER_CLUSTER_POWER_SOURCE);
 }
 
-ZTEST(radiant_matter, test_heart_rate_has_no_row_and_that_is_the_design)
+ZTEST(radiant_matter, test_heart_rate_has_no_row_by_default_and_that_is_the_design)
 {
 	/*
 	 * Section 8.1's table: "0x26 heart rate | none, and section 1 is the
-	 * whole reason". If this ever starts passing a non-NULL row, somebody
-	 * has added the Flow Measurement hack of section 8.3b or the MEI
-	 * cluster of section 8.3 to tier 1, and both are explicitly outside it.
+	 * whole reason". If this ever starts passing a non-NULL row with the
+	 * switch at its default, somebody has put the Flow Measurement hack of
+	 * section 8.3b (or the MEI cluster of section 8.3) into tier 1, and
+	 * both are explicitly outside it.
 	 */
 	zassert_is_null(radiant_matter_row(RADIANT_FIELD_HEART_RATE));
+}
+
+ZTEST(radiant_matter, test_the_hr_passenger_row_exists_only_when_switched_on)
+{
+	const struct radiant_matter_type_map *r;
+
+	radiant_matter_set_hr_passenger(true);
+	r = radiant_matter_row(RADIANT_FIELD_HEART_RATE);
+	zassert_not_null(r);
+	/* Section 8.3b: Flow Sensor / Flow Measurement, MeasuredValue =
+	 * bpm x 10, deadband 2 bpm, 60 s heartbeat. */
+	zassert_equal(r->device_type, RADIANT_MATTER_DEVTYPE_FLOW_SENSOR);
+	zassert_equal(r->device_type, 0x0306u);
+	zassert_equal(r->cluster, RADIANT_MATTER_CLUSTER_FLOW_MEASUREMENT);
+	zassert_equal(r->cluster, 0x0404u);
+	zassert_equal(r->attribute, RADIANT_MATTER_ATTR_MEASURED_VALUE);
+	zassert_equal(r->deadband, 20);
+	zassert_equal(r->heartbeat_s, 60u);
+
+	/* The switch does not touch any other row. */
+	zassert_not_null(radiant_matter_row(RADIANT_FIELD_OCCUPANCY));
+	zassert_is_null(radiant_matter_row(RADIANT_FIELD_ACTIVE_POWER));
+
+	radiant_matter_set_hr_passenger(false);
+	zassert_is_null(radiant_matter_row(RADIANT_FIELD_HEART_RATE));
+}
+
+ZTEST(radiant_matter, test_reset_does_not_turn_the_hr_passenger_off)
+{
+	/* A factory reset of the endpoint table is not a change of the image's
+	 * configuration: an app that opted in at init stays opted in. */
+	radiant_matter_set_hr_passenger(true);
+	radiant_matter_reset();
+	zassert_not_null(radiant_matter_row(RADIANT_FIELD_HEART_RATE));
 }
 
 ZTEST(radiant_matter, test_a_type_with_no_row_is_declined_not_an_error)
@@ -704,6 +742,171 @@ ZTEST(radiant_matter, test_a_suppressed_run_does_not_postpone_the_heartbeat)
 	s = mk_at(12u, 0u, RADIANT_FIELD_TEMPERATURE, 29825, -2, 62000000u);
 	post_drain(&s);
 	zassert_equal(last.writes, 2u);
+}
+
+/* ---------------------------------------------------------------------------
+ * Section 8.3b - the raw-bpm passenger, switched on
+ *
+ * These count Flow Measurement writes only, never `last.writes`: a heart-rate
+ * sample also feeds radiant_rules.c, whose derived booleans land on the same
+ * seam, and how many of those a bare HR sample produces is the rules' business
+ * rather than this row's.
+ * ---------------------------------------------------------------------------
+ */
+
+static uint32_t flow_writes(int64_t *last_value, uint16_t *last_endpoint)
+{
+	uint32_t i;
+	uint32_t n = 0u;
+
+	for (i = 0u; i < n_writes; i++) {
+		if (writes[i].cluster == RADIANT_MATTER_CLUSTER_FLOW_MEASUREMENT) {
+			zassert_equal(writes[i].attribute,
+				      RADIANT_MATTER_ATTR_MEASURED_VALUE);
+			if (last_value != NULL) {
+				*last_value = writes[i].value;
+			}
+			if (last_endpoint != NULL) {
+				*last_endpoint = writes[i].endpoint_id;
+			}
+			n++;
+		}
+	}
+	return n;
+}
+
+ZTEST(radiant_matter, test_the_hr_passenger_is_silent_when_off)
+{
+	struct radiant_sample s;
+
+	s = mk_at(4u, 0u, RADIANT_FIELD_HEART_RATE, 72, 0, 1000000u);
+	post_drain(&s);
+
+	zassert_equal(flow_writes(NULL, NULL), 0u);
+	zassert_is_null(radiant_matter_endpoint_for(4u, 0u, RADIANT_FIELD_HEART_RATE));
+}
+
+ZTEST(radiant_matter, test_the_hr_passenger_writes_bpm_x10_to_a_flow_sensor)
+{
+	const struct radiant_matter_endpoint *e;
+	struct radiant_sample s;
+	int64_t v = 0;
+	uint16_t ep = 0u;
+
+	radiant_matter_set_hr_passenger(true);
+
+	s = mk_at(4u, 0u, RADIANT_FIELD_HEART_RATE, 72, 0, 1000000u);
+	post_drain(&s);
+
+	e = radiant_matter_endpoint_for(4u, 0u, RADIANT_FIELD_HEART_RATE);
+	zassert_not_null(e);
+	zassert_equal(e->device_type, RADIANT_MATTER_DEVTYPE_FLOW_SENSOR);
+	zassert_false(e->derived);
+
+	zassert_equal(flow_writes(&v, &ep), 1u);
+	zassert_equal(ep, e->endpoint_id);
+	zassert_equal(v, 720, "%lld", (long long)v);
+}
+
+ZTEST(radiant_matter, test_the_hr_passenger_deadband_is_two_bpm)
+{
+	struct radiant_sample s;
+	int64_t v = 0;
+
+	radiant_matter_set_hr_passenger(true);
+
+	s = mk_at(4u, 0u, RADIANT_FIELD_HEART_RATE, 72, 0, 1000000u);
+	post_drain(&s);
+	zassert_equal(flow_writes(NULL, NULL), 1u);
+
+	/* 1 and 2 bpm either side of the written value: beat-to-beat noise,
+	 * suppressed. */
+	s = mk_at(4u, 0u, RADIANT_FIELD_HEART_RATE, 73, 0, 1250000u);
+	post_drain(&s);
+	s = mk_at(4u, 0u, RADIANT_FIELD_HEART_RATE, 70, 0, 1500000u);
+	post_drain(&s);
+	s = mk_at(4u, 0u, RADIANT_FIELD_HEART_RATE, 74, 0, 1750000u);
+	post_drain(&s);
+	zassert_equal(flow_writes(NULL, NULL), 1u);
+
+	/* 3 bpm: written. */
+	s = mk_at(4u, 0u, RADIANT_FIELD_HEART_RATE, 75, 0, 2000000u);
+	post_drain(&s);
+	zassert_equal(flow_writes(&v, NULL), 2u);
+	zassert_equal(v, 750, "%lld", (long long)v);
+}
+
+ZTEST(radiant_matter, test_the_hr_passenger_heartbeat_fires_on_a_steady_stream)
+{
+	struct radiant_sample s;
+	int64_t v = 0;
+	uint64_t t;
+
+	radiant_matter_set_hr_passenger(true);
+
+	s = mk_at(4u, 0u, RADIANT_FIELD_HEART_RATE, 60, 0, 1000000u);
+	post_drain(&s);
+	zassert_equal(flow_writes(NULL, NULL), 1u);
+
+	/* A rider sitting still at 60-61 bpm, sampled every 250 ms up to
+	 * 59.75 s after the write: nothing new to say. */
+	for (t = 1250000u; t < 61000000u; t += 250000u) {
+		s = mk_at(4u, 0u, RADIANT_FIELD_HEART_RATE,
+			  ((t / 250000u) & 1u) ? 61 : 60, 0, t);
+		post_drain(&s);
+	}
+	zassert_equal(flow_writes(NULL, NULL), 1u);
+
+	/* 60 s after the write: written anyway. Heart rate streams, so unlike
+	 * the change-only occupancy row this heartbeat genuinely fires. */
+	s = mk_at(4u, 0u, RADIANT_FIELD_HEART_RATE, 61, 0, 61000000u);
+	post_drain(&s);
+	zassert_equal(flow_writes(&v, NULL), 2u);
+	zassert_equal(v, 610, "%lld", (long long)v);
+}
+
+/* The same strap-plus-trainer traffic as
+ * test_a_heart_rate_binding_shows_three_and_a_power_meter_one. */
+static void post_strap_and_trainer(void)
+{
+	struct radiant_sample s;
+	uint8_t f;
+
+	s = mk(1u, 0u, RADIANT_FIELD_HEART_RATE, 72, 0);
+	radiant_bridge_post(&s);
+	for (f = 1u; f <= 3u; f++) {
+		s = mk(1u, f, RADIANT_FIELD_OCCUPANCY, 1, 0);
+		s.flags = RADIANT_SAMPLE_DERIVED;
+		radiant_bridge_post(&s);
+	}
+	s = mk(2u, 0u, RADIANT_FIELD_ACTIVE_POWER, 250, 0);
+	radiant_bridge_post(&s);
+	s = mk(2u, 1u, RADIANT_FIELD_OCCUPANCY, 1, 0);
+	s.flags = RADIANT_SAMPLE_DERIVED;
+	radiant_bridge_post(&s);
+	radiant_bridge_drain();
+}
+
+ZTEST(radiant_matter, test_a_heart_rate_binding_with_the_passenger_shows_one_more)
+{
+	uint16_t off;
+
+	/* Raw bpm is no longer declined, so the strap costs exactly one more
+	 * endpoint out of the 16 - and the power meter's raw watts are still
+	 * declined. Measured against the same traffic with the switch off,
+	 * so the number is this row's and not the rules'. */
+	radiant_rules_reset();
+	post_strap_and_trainer();
+	off = radiant_matter_endpoint_count();
+
+	matter_before(NULL);
+	radiant_rules_reset();
+	radiant_matter_set_hr_passenger(true);
+	post_strap_and_trainer();
+
+	zassert_equal(radiant_matter_endpoint_count(), off + 1u, "off %u on %u",
+		      (unsigned int)off,
+		      (unsigned int)radiant_matter_endpoint_count());
 }
 
 ZTEST(radiant_matter, test_occupancy_is_on_change_only)

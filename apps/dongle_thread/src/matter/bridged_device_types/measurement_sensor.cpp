@@ -1,8 +1,9 @@
 /*
  * SPDX-License-Identifier: Apache-2.0
  *
- * Package E4's temperature, humidity and pressure bridged device types. See
- * measurement_sensor.h for why they share one class and three sets of static
+ * Package E4's temperature, humidity and pressure bridged device types, plus
+ * the section 8.3b passenger's flow sensor. See
+ * measurement_sensor.h for why they share one class and four sets of static
  * metadata.
  */
 
@@ -102,6 +103,33 @@ static constexpr EmberAfDeviceType kBridgedPressureDeviceTypes[] = {
 	  MatterBridgedDevice::kDefaultDynamicEndpointVersion }
 };
 
+/* ── Flow Measurement (0x0404) - the section 8.3b raw-bpm passenger ─────── */
+
+/* MeasuredValue, Min and Max only: Tolerance is optional and there is no
+ * honest tolerance for a mislabelled quantity. All three are int16u. */
+DECLARE_DYNAMIC_ATTRIBUTE_LIST_BEGIN(flowSensorAttrs)
+DECLARE_DYNAMIC_ATTRIBUTE(Clusters::FlowMeasurement::Attributes::MeasuredValue::Id, INT16U, 2, 0),
+	DECLARE_DYNAMIC_ATTRIBUTE(Clusters::FlowMeasurement::Attributes::MinMeasuredValue::Id, INT16U, 2, 0),
+	DECLARE_DYNAMIC_ATTRIBUTE(Clusters::FlowMeasurement::Attributes::MaxMeasuredValue::Id, INT16U, 2, 0),
+	DECLARE_DYNAMIC_ATTRIBUTE(Clusters::FlowMeasurement::Attributes::FeatureMap::Id, BITMAP32, 4, 0),
+	DECLARE_DYNAMIC_ATTRIBUTE_LIST_END();
+
+DECLARE_DYNAMIC_CLUSTER_LIST_BEGIN(bridgedFlowClusters)
+DECLARE_DYNAMIC_CLUSTER(Clusters::FlowMeasurement::Id, flowSensorAttrs, ZAP_CLUSTER_MASK(SERVER), nullptr, nullptr),
+	DECLARE_DYNAMIC_CLUSTER(Clusters::Descriptor::Id, descriptorAttrs, ZAP_CLUSTER_MASK(SERVER), nullptr, nullptr),
+	DECLARE_DYNAMIC_CLUSTER(Clusters::BridgedDeviceBasicInformation::Id, bridgedDeviceBasicAttrs,
+				ZAP_CLUSTER_MASK(SERVER), nullptr, nullptr),
+	DECLARE_DYNAMIC_CLUSTER_LIST_END;
+
+DECLARE_DYNAMIC_ENDPOINT(bridgedFlowEndpoint, bridgedFlowClusters);
+
+static constexpr EmberAfDeviceType kBridgedFlowDeviceTypes[] = {
+	{ static_cast<chip::DeviceTypeId>(RadiantMatter::kDeviceTypeFlowSensor),
+	  RadiantMatter::kFlowSensorDeviceVersion },
+	{ static_cast<chip::DeviceTypeId>(MatterBridgedDevice::DeviceType::BridgedNode),
+	  MatterBridgedDevice::kDefaultDynamicEndpointVersion }
+};
+
 /* ── The class ──────────────────────────────────────────────────────────── */
 
 MeasurementSensorDevice::MeasurementSensorDevice(uint16_t deviceType, const char *uniqueID, const char *nodeLabel)
@@ -153,6 +181,13 @@ MeasurementSensorDevice::MeasurementSensorDevice(uint16_t deviceType, const char
 		mMinScaledValue = 3000;
 		mMaxScaledValue = 12000;
 		break;
+	case RadiantMatter::kDeviceTypeFlowSensor:
+		mEp = &bridgedFlowEndpoint;
+		mDeviceTypeList = kBridgedFlowDeviceTypes;
+		mDeviceTypeListSize = ARRAY_SIZE(kBridgedFlowDeviceTypes);
+		mDataVersionSize = MATTER_ARRAY_SIZE(bridgedFlowClusters);
+		/* The bounds are served from HandleReadFlow()'s constants. */
+		break;
 	default:
 		/* mEp stays null. See the header: CreateEndpoint() rejects it. */
 		return;
@@ -170,6 +205,8 @@ CHIP_ERROR MeasurementSensorDevice::HandleRead(ClusterId clusterId, AttributeId 
 		return HandleReadMeasurement(attributeId, buffer, maxReadLength);
 	case Clusters::PressureMeasurement::Id:
 		return HandleReadPressure(attributeId, buffer, maxReadLength);
+	case Clusters::FlowMeasurement::Id:
+		return HandleReadFlow(attributeId, buffer, maxReadLength);
 	default:
 		return CHIP_ERROR_INVALID_ARGUMENT;
 	}
@@ -238,6 +275,40 @@ CHIP_ERROR MeasurementSensorDevice::HandleReadPressure(AttributeId attributeId, 
 	}
 }
 
+/*
+ * The passenger's three. The bounds are the range of the quantity actually
+ * carried, not of any flow: ANT+ heart rate is one byte, 0-255 bpm, so 0 to
+ * 2550 in MeasuredValue's units (radiant_matter.c writes bpm x 10).
+ */
+CHIP_ERROR MeasurementSensorDevice::HandleReadFlow(AttributeId attributeId, uint8_t *buffer, uint16_t maxReadLength)
+{
+	static constexpr uint16_t kMinFlow = 0;
+	static constexpr uint16_t kMaxFlow = 2550;
+
+	switch (attributeId) {
+	case Clusters::FlowMeasurement::Attributes::MeasuredValue::Id:
+		return CopyAttribute(&mFlowMeasuredValue, sizeof(mFlowMeasuredValue), buffer, maxReadLength);
+	case Clusters::FlowMeasurement::Attributes::MinMeasuredValue::Id: {
+		uint16_t v = kMinFlow;
+		return CopyAttribute(&v, sizeof(v), buffer, maxReadLength);
+	}
+	case Clusters::FlowMeasurement::Attributes::MaxMeasuredValue::Id: {
+		uint16_t v = kMaxFlow;
+		return CopyAttribute(&v, sizeof(v), buffer, maxReadLength);
+	}
+	case Clusters::FlowMeasurement::Attributes::ClusterRevision::Id: {
+		uint16_t rev = GetFlowMeasurementClusterRevision();
+		return CopyAttribute(&rev, sizeof(rev), buffer, maxReadLength);
+	}
+	case Clusters::FlowMeasurement::Attributes::FeatureMap::Id: {
+		uint32_t featureMap = 0;
+		return CopyAttribute(&featureMap, sizeof(featureMap), buffer, maxReadLength);
+	}
+	default:
+		return CHIP_ERROR_INVALID_ARGUMENT;
+	}
+}
+
 CHIP_ERROR MeasurementSensorDevice::HandleAttributeChange(chip::ClusterId clusterId, chip::AttributeId attributeId,
 							  void *data, size_t dataSize)
 {
@@ -249,6 +320,17 @@ CHIP_ERROR MeasurementSensorDevice::HandleAttributeChange(chip::ClusterId cluste
 
 	if (clusterId == Clusters::BridgedDeviceBasicInformation::Id) {
 		return HandleWriteDeviceBasicInformation(clusterId, attributeId, data, dataSize);
+	}
+
+	/* Flow's MeasuredValue is a nullable int16u: 0xFFFF is null, so the
+	 * largest storable reading is 0xFFFE. Refused, not clamped. */
+	if (clusterId == Clusters::FlowMeasurement::Id) {
+		if (attributeId != Clusters::FlowMeasurement::Attributes::MeasuredValue::Id ||
+		    !Narrow(data, dataSize, 0, UINT16_MAX - 1, v)) {
+			return CHIP_ERROR_INVALID_ARGUMENT;
+		}
+		mFlowMeasuredValue = static_cast<uint16_t>(v);
+		return CHIP_NO_ERROR;
 	}
 
 	if (clusterId == Clusters::PressureMeasurement::Id &&

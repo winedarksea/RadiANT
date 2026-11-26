@@ -149,6 +149,7 @@ static_assert(RadiantMatter::kDeviceTypeOccupancySensor == RADIANT_MATTER_DEVTYP
 static_assert(RadiantMatter::kDeviceTypeTemperatureSensor == RADIANT_MATTER_DEVTYPE_TEMPERATURE_SENSOR, "");
 static_assert(RadiantMatter::kDeviceTypeHumiditySensor == RADIANT_MATTER_DEVTYPE_HUMIDITY_SENSOR, "");
 static_assert(RadiantMatter::kDeviceTypePressureSensor == RADIANT_MATTER_DEVTYPE_PRESSURE_SENSOR, "");
+static_assert(RadiantMatter::kDeviceTypeFlowSensor == RADIANT_MATTER_DEVTYPE_FLOW_SENSOR, "");
 
 /*
  * Attribute slots per endpoint. THREE, and the number is the pressure row:
@@ -473,6 +474,9 @@ bool ClusterIsServed(uint32_t cluster)
 	case Clusters::TemperatureMeasurement::Id:
 	case Clusters::RelativeHumidityMeasurement::Id:
 	case Clusters::PressureMeasurement::Id:
+	/* Only ever written when radiant_matter_set_hr_passenger(true) is in
+	 * effect - docs/radiant-bridge.md section 8.3b. */
+	case Clusters::FlowMeasurement::Id:
 		return true;
 	default:
 		/* Power Source, today. See "WHAT THIS FILE DOES NOT DO". */
@@ -492,6 +496,7 @@ Nrf::MatterBridgedDevice *MakeDevice(uint16_t deviceType, const char *uniqueID, 
 	case RadiantMatter::kDeviceTypeTemperatureSensor:
 	case RadiantMatter::kDeviceTypeHumiditySensor:
 	case RadiantMatter::kDeviceTypePressureSensor:
+	case RadiantMatter::kDeviceTypeFlowSensor:
 		return chip::Platform::New<MeasurementSensorDevice>(deviceType, uniqueID, label);
 	default:
 		return nullptr;
