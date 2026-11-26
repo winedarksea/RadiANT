@@ -425,7 +425,13 @@ uint32_t radiant_frame_tail_us(const struct radiant_pkt_format *fmt);
  *   b5 last       1 = last packet of the transfer; echoed by its ack
  *   b4 seq        a ONE-BIT alternating sequence number
  *   b3 slot       1 = this frame opens the channel slot `[inferred]`
- *   b2:0          always 010. Meaning unknown; it is not a length
+ *   b2:0          010 on everything Spike B captured. Meaning unknown; it is
+ *                 not a length. BIT 0 IS NOT CONSTANT ON EVERY STACK: a
+ *                 Garmin Varia RTL510 acknowledges acknowledged data with
+ *                 0xF3 (2026-11-25, archive/captures/radio/2026-11-25-
+ *                 ackbug-sniff.log), and a Garmin USB-m slave accepts that
+ *                 ack. So RECEIVING treats bit 0 as don't-care (010 or 011);
+ *                 everything this tree TRANSMITS still carries 010.
  *
  * THE BURST SEQUENCE IS ONE BIT, SEQUENCES 2..7 DO NOT EXIST: a 17-packet
  * and a 51-packet burst captured end to end (sniffer ring-drop counter zero
@@ -457,6 +463,14 @@ uint32_t radiant_frame_tail_us(const struct radiant_pkt_format *fmt);
 #define RADIANT_CTRL_SLOT      0x08u
 #define RADIANT_CTRL_LOW_MASK  0x07u
 #define RADIANT_CTRL_LOW_VALUE 0x02u
+/* What a RECEIVED byte must match: bits 2:1 = 01, bit 0 either value. The
+ * transmit side keeps RADIANT_CTRL_LOW_VALUE in all three bits. */
+#define RADIANT_CTRL_RX_LOW_MASK 0x06u
+/* The one received value outside Spike B's table that is known on air: a
+ * Garmin Varia's acknowledgement of acknowledged data (0xF2 with bit 0 set).
+ * Before 2026-11-25 every RadiANT slave reported TRANSFER_TX_FAILED for
+ * an acked message such a master had received and acted on. */
+#define RADIANT_CTRL_ACK_LAST_SEQ1_B0  0xF3u
 
 /* Slot openers - part 1's three values, the only ones a master was ever
  * seen to send. Run C isolated the difference: same hardware, stack, script
@@ -557,10 +571,22 @@ enum radiant_msg_type {
 
 /* --- Field accessors. Named so that every read of this byte is greppable. -- */
 
-/* The one invariant the byte has. Everything else is dispatch. */
+/* The one invariant the byte has. Everything else is dispatch.
+ *
+ * TWO forms, one per direction. What this tree TRANSMITS keeps all three
+ * bits at 010 - the encoders refuse anything else, as before. What it
+ * RECEIVES is checked on bits 2:1 only, because bit 0 is set by at least
+ * one shipping stack (a Garmin Varia's ack is 0xF3, see b2:0 above) and a
+ * frame the radio delivered with a good CRC is not ours to refuse over a
+ * bit nothing here gives a meaning. */
 static inline bool radiant_ctrl_low_ok(uint8_t ctrl)
 {
 	return (uint8_t)(ctrl & RADIANT_CTRL_LOW_MASK) == RADIANT_CTRL_LOW_VALUE;
+}
+
+static inline bool radiant_ctrl_low_ok_rx(uint8_t ctrl)
+{
+	return (uint8_t)(ctrl & RADIANT_CTRL_RX_LOW_MASK) == RADIANT_CTRL_LOW_VALUE;
 }
 
 static inline bool radiant_ctrl_is_exchange(uint8_t ctrl)
@@ -601,7 +627,8 @@ static inline bool radiant_ctrl_is_slot_opener(uint8_t ctrl)
  * been transmitted is radiant_ctrl_observed()'s question. */
 uint8_t radiant_ctrl_encode(const struct radiant_ctrl_fields *f);
 
-/* Unpack. RADIANT_FRAME_ECTRL, and out untouched, if bits 2:0 are not 010. */
+/* Unpack. RADIANT_FRAME_ECTRL, and out untouched, if bits 2:1 are not 01
+ * (bit 0 is don't-care on receive). */
 int radiant_ctrl_decode(uint8_t ctrl, struct radiant_ctrl_fields *out);
 
 /* True only for the eleven values measured on air - the guard that keeps

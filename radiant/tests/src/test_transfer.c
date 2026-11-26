@@ -39,6 +39,7 @@
 #include <zephyr/ztest.h>
 
 #include "../fake_radio.h"
+#include <radiant/radiant_frame.h>
 #include <radiant/radiant_transfer.h>
 
 /* ---------------------------------------------------------------------------
@@ -660,6 +661,54 @@ ZTEST(transfer, test_every_control_byte_we_can_originate_can_be_acknowledged)
  * Separate from the sweep above so that if a capture ever settles bit 3 the
  * other way, exactly one test fails and it is the one holding the claim.
  */
+/*
+ * On air, 2026-11-25 (archive/captures/radio/2026-11-25-ackbug-sniff.log): a
+ * RadiANT slave's acknowledged data, 0xA2, answered by a Garmin Varia RTL510
+ * master +1562 us later with 0xF3 - Spike B's 0xF2 with bit 0 SET - payload
+ * 22 03 03 00 00 00 00 00. A Garmin USB-m slave counted those as delivered;
+ * every RadiANT slave reported TRANSFER_TX_FAILED (BAD_ACK: the frame decode
+ * refused bits 2:0 = 011). Receive now treats bit 0 as don't-care.
+ */
+ZTEST(transfer, test_garmin_varia_ack_with_bit_0_set_completes)
+{
+	struct radiant_frame_wire w;
+	struct radiant_frame f;
+	uint8_t buf[64];
+	uint16_t crc;
+	/* Spike B's measured frame, with the Varia's ack byte and payload. */
+	static const uint8_t varia_payload[8] = {0x22, 0x03, 0x03, 0x00,
+						 0x00, 0x00, 0x00, 0x00};
+
+	zassert_true(radiant_transfer_ack_matches(RADIANT_CTRL_BURST_LAST_SEQ0,
+						  RADIANT_CTRL_ACK_LAST_SEQ1_B0));
+	zassert_false(radiant_transfer_ack_is_stale(RADIANT_CTRL_BURST_LAST_SEQ0,
+						    RADIANT_CTRL_ACK_LAST_SEQ1_B0));
+	/* Bit 0 does not make an ack of anything else. */
+	zassert_false(radiant_transfer_ack_matches(RADIANT_CTRL_BURST_SEQ0,
+						   RADIANT_CTRL_ACK_LAST_SEQ1_B0));
+
+	/* And the whole frame decodes: [A6 C5 dlo dhi dtype ttype ctrl d0..d7]. */
+	memset(buf, 0, sizeof(buf));
+	buf[0] = 0xA6u; buf[1] = 0xC5u; buf[2] = 0x4Bu; buf[3] = 0x6Bu;
+	buf[4] = 0x28u; buf[5] = 0x85u; buf[6] = RADIANT_CTRL_ACK_LAST_SEQ1_B0;
+	memcpy(&buf[7], varia_payload, sizeof(varia_payload));
+	crc = radiant_crc16(RADIANT_CRC_INIT, buf, 15u);
+	buf[15] = (uint8_t)(crc >> 8);
+	buf[16] = (uint8_t)(crc & 0xFFu);
+	zassert_equal(radiant_frame_from_bytes(RADIANT_FRAME_CFG_TRACKING, buf,
+					       sizeof(buf), &w), 17);
+	zassert_equal(radiant_frame_decode(RADIANT_FRAME_CFG_TRACKING, &w, 0, &f),
+		      RADIANT_FRAME_OK);
+	zassert_equal(f.ctrl_byte, 0xF3u);
+	zassert_equal(radiant_frame_msg_type(f.ctrl_byte), RADIANT_MSG_TRANSFER_ACK);
+	zassert_mem_equal(f.payload, varia_payload, sizeof(varia_payload));
+
+	/* What this tree transmits is unchanged: still 010 in bits 2:0. */
+	zassert_equal(radiant_transfer_reply_ctrl(RADIANT_CTRL_BURST_LAST_SEQ0) & 0x07u,
+		      RADIANT_CTRL_LOW_VALUE);
+	end_of_test();
+}
+
 ZTEST(transfer, test_a_slot_openers_acknowledgement_clears_bit_3)
 {
 	zassert_equal(RADIANT_CTRL_ACK_SEQ1,
@@ -1514,7 +1563,9 @@ ZTEST(transfer, test_the_stale_acknowledgement_predicate)
 	zassert_false(radiant_transfer_ack_is_stale(0xC2u, 0xC2u));
 	/* Illegal low bits on either side. */
 	zassert_false(radiant_transfer_ack_is_stale(0x83u, 0xC2u));
-	zassert_false(radiant_transfer_ack_is_stale(0x82u, 0xC3u));
+	zassert_false(radiant_transfer_ack_is_stale(0x82u, 0xC0u));
+	/* Bit 0 of a RECEIVED ack is don't-care (a Garmin Varia sets it). */
+	zassert_true(radiant_transfer_ack_is_stale(0x82u, 0xC3u));
 }
 
 /* One stale acknowledgement: the packet goes out again, same control byte, one
