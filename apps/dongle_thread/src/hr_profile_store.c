@@ -24,6 +24,7 @@
 
 #include <radiant/radiant_hr_profile.h>
 
+#include "binding_store.h"
 #include "hr_profile_store.h"
 
 LOG_MODULE_REGISTER(hr_profile_store, LOG_LEVEL_INF);
@@ -113,5 +114,23 @@ static const struct radiant_hr_profile_store ops = {
 
 void hr_profile_store_init(void)
 {
+	int rc = settings_subsys_init();
+
+	if (rc != 0) {
+		LOG_ERR("hrp: settings init failed (%d): HR profiles will not "
+			"survive a reboot", rc);
+		return;
+	}
 	radiant_hr_profile_set_store(&ops);
+}
+
+/*
+ * User eviction (binding_store.c, the self-channel thread): section 6.5's
+ * per-binding reset. Overrides binding_store.c's __weak no-op. The stored
+ * profile is erased at once; the RAM slot is dropped on the pump thread
+ * before its next lookup (radiant_hr_profile_forget()'s contract).
+ */
+void binding_store_on_evict(uint64_t uuid)
+{
+	radiant_hr_profile_forget(uuid);
 }

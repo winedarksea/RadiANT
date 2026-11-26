@@ -40,6 +40,7 @@
 #include "bridge_app.h"
 #if defined(CONFIG_ANT_DONGLE_SELF_CHANNELS) && CONFIG_ANT_DONGLE_SELF_CHANNELS > 0
 #include "binding_store.h"
+#include "hr_profile_store.h"
 #endif
 
 LOG_MODULE_REGISTER(bridge_pump, LOG_LEVEL_INF);
@@ -115,6 +116,11 @@ static void pump_thread_fn(void *a, void *b, void *c)
 	radiant_binding_init();
 	radiant_liveness_reset();
 	radiant_bridge_reset();
+	/* Per-strap HR personalisation (docs/radiant-bridge.md 6.3-6.5): the
+	 * settings store behind radiant_hr_profile. Profiles load lazily, on a
+	 * strap's first heart-rate sample, so this only registers the store. */
+	radiant_hr_profile_reset();
+	hr_profile_store_init();
 
 #if defined(CONFIG_ANT_DONGLE_SELF_CHANNELS) && CONFIG_ANT_DONGLE_SELF_CHANNELS > 0
 	/* Paired sensors from before the reboot, into the table the line above
