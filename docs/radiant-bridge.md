@@ -448,6 +448,7 @@ The two zone outputs answer "is this person working hard, or clearly resting?"
 |---|---|
 | at rest | monitor worn **and** HR below the rest threshold |
 | training, zone 2 or above | monitor worn **and** HR at or above the Z2 threshold |
+| training, zone 3 or above | monitor worn **and** HR at or above the Z3 threshold |
 
 **Both require the monitor to be worn.** A strap on a table reads no pulse, and
 a bridge that reported "at rest" for it would switch the air conditioning off in
@@ -462,14 +463,25 @@ sensitive of the two models to differences in resting heart rate:
 HRR       = HR_max - HR_rest
 rest      < HR_rest + 0.15 x HRR
 zone 2+   >= HR_rest + 0.60 x HRR
+zone 3+   >= HR_rest + 0.70 x HRR
 ```
 
 With the population prior for an adult of unknown age and fitness —
 `HR_max ~ N(180, 15^2)`, `HR_rest ~ N(65, 10^2)` — that is **HRR = 115, rest
-below 82 bpm, zone 2 and above at 134 bpm**. Those two numbers are what a
+below 82 bpm, zone 2 and above at 134 bpm, zone 3 and above at 146 bpm**
+(rest is rounded down, the zones up). Those numbers are what a
 never-personalised bridge ships with, and they are good enough to separate a
 hard workout from clear rest, which is the whole use case. Nothing here claims
 to be a training tool.
+
+**The prior is Kconfig** (`CONFIG_RADIANT_BRIDGE_HR_MAX_PRIOR`, default 180,
+and `CONFIG_RADIANT_BRIDGE_HR_REST_PRIOR`, default 65). A single-user home
+sets them to the rider's own numbers and sets
+`CONFIG_RADIANT_BRIDGE_HR_PROFILES=0`; a shared gym keeps the population prior
+and lets 6.3 personalise each strap, because one fixed pair of numbers cannot
+be right for every member. Zone 3 was added (field id 5, after the equipment
+output, because ids are stable) because "zone 2 or above" alone could not
+drive a second fan speed.
 
 `hysteresis` and `dwell_s` still apply and are not polish: a 4 Hz stream
 crossing a bare threshold produces a boolean that chatters several times a
@@ -484,6 +496,10 @@ and the failure mode a gate would prevent — a wrong threshold flipping a
 boolean — is already handled by hysteresis and dwell.
 
 ### 6.3 The optional personalisation, and why it is 76 bytes
+
+**Implemented** (`radiant/src/bridge/radiant_hr_profile.c`, 2026-11-26). The
+notes below are the design; the paragraph at the end of this section says how
+it was made concrete.
 
 A per-binding histogram of observed non-zero heart rates, from which the two
 endpoints are estimated:
@@ -530,6 +546,21 @@ semantics never change, no Matter endpoint moves when personalisation is
 enabled, cold start needs no special case, and — see below — running out of
 storage is a graceful degradation rather than an error.
 
+**As implemented.** The conjugate update is written as a sample-count blend,
+`est = (prior x N0 + obs x N) / (N0 + N)`, where `N` is the histogram total in
+1 Hz samples and `N0 = CONFIG_RADIANT_BRIDGE_HR_PRIOR_WEIGHT_S` (default 1800:
+half an hour of wear weighs as much as the population prior). That is the
+formula above with the variance ratio expressed as a count, in integer
+arithmetic. Two additions the design did not have: the blended estimates are
+clamped to HR_max 140–220 and HR_rest 35–100, which alone guarantees HRR ≥ 40,
+so a strap that misreads for days cannot invert or collapse the zones; and
+readings outside 30–219 bpm are dropped rather than clamped into an end bin.
+The histogram is fed from the zone rule only while the strap is worn and
+reading, decimated to 1 Hz. **Thresholds are recomputed only when a binding
+first reports and at session end** (worn clears, or the source goes STALE),
+never mid-session, so a boolean never moves under a running automation because
+the estimate drifted.
+
 ### 6.4 The histogram store is capped, and eviction is not a failure
 
 **A gym may see thousands of heart-rate monitors.** The binding table is capped
@@ -548,6 +579,10 @@ So the store is capped independently:
   aggregate-only builds (section 10), where the bridge is deliberately not
   modelling individuals at all.
 
+Implemented as written. "Recently active" is a monotonic session sequence
+number stamped at attach and at each session end; there is no RTC. An evicted
+slot gets one gated save on its way out.
+
 That graceful path exists only because 6.3 made prior-only the `n = 0` case. A
 design with two implementations would have had to choose between a hard cap and
 an allocation failure.
@@ -563,6 +598,17 @@ It keys on `binding_uuid` (section 5) and **never** on the ANT device number, or
 a coin-cell change discards months of convergence. Two people sharing one strap
 corrupt each other's estimate; the answer is a per-binding reset, not an
 inference.
+
+**As implemented.** The library stays storage-free:
+`radiant_hr_profile_set_store()` takes load, save and erase callbacks, and
+`apps/dongle_thread` implements them with Zephyr settings under
+`radiant/hrp/<uuid hex>` (record v1: version byte, reserved byte, 38 bins).
+Writes are gated three ways: only at session end; only after at least 5 min
+of new worn samples since the last save; and at most 16 saves per slot per
+boot, so a spoofed strap that toggles worn cannot drive flash wear. The
+per-binding reset is user eviction (the button), which erases the profile with
+the binding record. The uuid is stable because bindings are persisted and a
+re-pair of a known channel ID keeps its uuid (section 5).
 
 ### 6.6 One honest bias, recorded rather than corrected
 
@@ -585,6 +631,18 @@ change-or-heartbeat contract — `publish if (changed by more than deadband) or
 (max_interval elapsed)`, floored by `min_interval`. ~4 Hz into MQTT is 345,000
 messages a day per strap, and Matter's attribute reporting has its own
 minimum-interval negotiation that a 4 Hz writer simply violates.
+
+
+**The rule outputs announce themselves once.** Every derived boolean is posted
+as its current value (normally `false`) on the first sample that feeds it for
+a bound source, and afterwards only on change. Before 2026-11-26 they were
+posted on change only, so an idle trainer or a strap that was never worn
+produced no record, and neither Matter nor MQTT discovery ever learned the
+output existed: no endpoint until first use. A Matter attribute holds its
+value, so the one announcement is enough and no heartbeat is needed for these.
+A bind or unbind resets the source's rule and liveness state (through
+`binding_changed`, applied on the pump thread), so a sensor that reuses a slot
+announces afresh instead of inheriting its predecessor's outputs.
 
 ---
 
@@ -1278,8 +1336,12 @@ three copies, and this is a new `field_id` beside the existing four.
 
 **The dwell is asymmetric the other way from §6.1's.** There is no assert dwell
 — waiting two seconds to believe a direct report only adds latency to a fact
-already established — and there is a short (5 s) clear dwell, so that a runner
-stepping off for a drink does not flicker a gym display. `STALE` still
+already established — and there is a clear dwell,
+`CONFIG_RADIANT_BRIDGE_RULES_EQUIPMENT_CLEAR_S` (default **30 s**; it was 5 s
+until 2026-11-26), so that a runner stepping off for a drink does not flicker a
+gym display. 5 s was too short for a trainer: FE-C trainers report READY
+whenever cadence is zero, so In Use cleared at every traffic light and every
+interval rest. `STALE` still
 overrides both, immediately, which is what stops an unplugged machine reading
 "in use" forever.
 
