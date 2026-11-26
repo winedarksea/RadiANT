@@ -219,6 +219,9 @@ struct radiant_profile_radar_cfg {
 #define RADIANT_PROFILE_RADAR_DEFAULT_ABORTED_MSGS     81u /* 10.1 s; units: 10.0 s */
 #define RADIANT_PROFILE_RADAR_DEFAULT_STATUS_EVERY     2u
 #define RADIANT_PROFILE_RADAR_DEFAULT_STAY_ON_DELAY    12u
+/* Page 70 with count 0 (the Common Pages "invalid" value): copies sent. The
+ * spec gives no answer; all three Garmin units sent 5 (C4 captures). */
+#define RADIANT_PROFILE_RADAR_REQ_COUNT0_COPIES        5u
 
 struct radiant_profile_radar {
 	struct radiant_profile_radar_cfg cfg;

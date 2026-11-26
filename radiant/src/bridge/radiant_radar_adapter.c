@@ -95,15 +95,21 @@ static uint32_t on_targets(struct radiant_radar_adapter *a, uint32_t source,
 	}
 	base = (page == RADIANT_PROFILE_RADAR_PAGE_TARGETS_B) ? 4u : 0u;
 	memcpy(&a->targets[base], got, sizeof(got));
-	/* Page 48 alone means at most four targets: a stale page-49 half from
-	 * an earlier >4 episode must not linger. A radar reporting >4
-	 * alternates 48/49 every message, so 49's half is refreshed within
-	 * one period when it is real. */
-	if (page == RADIANT_PROFILE_RADAR_PAGE_TARGETS_A &&
-	    t_us - a->last_target_us > 300000u) {
+	if (base != 0u) {
+		a->last_b_us = t_us;
+	} else if (t_us - a->last_b_us >= RADIANT_RADAR_PAGE_B_EXPIRY_US) {
+		/* Page 48 alone means at most four targets (6.3.6): a page-49
+		 * half from an earlier > 4 episode must not linger. Timed on
+		 * page 49 itself - page 48 keeps arriving every 125 ms after
+		 * the radar drops back to four, so a gap between target pages
+		 * of any kind never opens. */
 		memset(&a->targets[4], 0, 4u * sizeof(a->targets[0]));
 	}
 	a->last_target_us = t_us;
+	if (a->shutdown_latch) {
+		/* Kept current, not shown: the radar is going down (6.7.1). */
+		return 0u;
+	}
 	a->have_targets = true;
 
 	force = (++a->pages_since_repost >= RADIANT_RADAR_REPOST);
@@ -178,9 +184,11 @@ uint32_t radiant_radar_adapter_decode(struct radiant_radar_adapter *a, uint32_t 
 		n += post_if(&a->last_state, st.state, false, source,
 			     RADIANT_RADAR_FIELD_DEVICE_STATE,
 			     RADIANT_FIELD_ENUM_GENERIC, 0, st.state, t_us);
-		if (st.clear_targets ||
-		    st.state == RADIANT_PROFILE_RADAR_STATE_SHUTDOWN_REQUESTED ||
-		    st.state == RADIANT_PROFILE_RADAR_STATE_SHUTDOWN_FORCED) {
+		a->last_status_us = t_us;
+		a->shutdown_latch =
+			st.state == RADIANT_PROFILE_RADAR_STATE_SHUTDOWN_REQUESTED ||
+			st.state == RADIANT_PROFILE_RADAR_STATE_SHUTDOWN_FORCED;
+		if (st.clear_targets || a->shutdown_latch) {
 			n += go_unavailable(a, source, t_us);
 		}
 		return n;
@@ -210,6 +218,12 @@ uint32_t radiant_radar_adapter_tick(struct radiant_radar_adapter *a, uint32_t so
 	if (!a->posted_available) {
 		/* From connection until the first target page: unavailable. */
 		return post_available(a, source, false, true, now_us);
+	}
+	if (a->shutdown_latch &&
+	    now_us - a->last_status_us >= RADIANT_RADAR_TIMEOUT_US) {
+		/* No page 1 for 2 s: the shutdown pattern is over and the radar
+		 * is still talking, so let target pages show again. */
+		a->shutdown_latch = false;
 	}
 	if (a->have_targets && now_us - a->last_target_us >= RADIANT_RADAR_TIMEOUT_US) {
 		return go_unavailable(a, source, now_us);

@@ -1691,6 +1691,14 @@ order and should be confirmed against the labels.
 Every unit also opens a Bike Lights `0x23` channel on the same device number and
 transmission type (§3.19 when it lands), 12.5 ms (~410 counts) from the radar's
 slot: radar after light on the RTL510/515, before it on the RearVue `[on-air: c2]`.
+All three set the light's page 1 byte 2 bit 1, "Bike Radar Supported" (Bike
+Lights Rev 2.0 §7.4.2; byte 2 = `0x2A`: radar supported, taillight, battery
+new/full) `[on-air: c1, c2]`. That bit is the Bike Lights profile's only radar
+content: it does not name device type `0x28` or say how a combined unit exposes
+its radar channel. Bike Radar Rev 2.1 §7.1 adds only two certification test
+numbers for combined units (`MD_RDR_LGT_001`, `_003`) without saying what they
+test. A display can treat the bit as a hint to look for a `0x28` channel on the
+same device number.
 
 **Channel.** Master, device type `0x28`, RF 57, period **4084** (~8.02 Hz;
 measured 4083.9–4084.4 on all three `[on-air: c1, c2]`), transmission type low
@@ -1729,7 +1737,31 @@ speed, and a radar must send them as 0. Targets are **not guaranteed sorted**
 | §6.6 page 49 (> 4 targets) | not seen (walking cannot produce 5 targets) | spec-only, not seen on air; sim "traffic" scenario |
 | §6.10.4 page 87 error | not seen | spec-only, not seen on air; sim "error" scenario |
 | §6.11.1 page 70: answer 80/81/82; some radars ignore the acked flag | answered with exactly the requested count in consecutive slots ~0.3 s later; **ack-reply bit ignored** (broadcast replies); page 48 / `0x55` requests: no answer; page 1 requests: RearVue and RTL515 answer, **RTL510 does not**; count byte `0x00`: **5 copies** `[on-air: c4]` | master: answers 80/81/82/1, broadcast only |
+| §6.3.3–6.3.6 page 48 ≥ 4/8 while page 1 is interleaved | in the 10 s aborted pattern every unit still drops a background page into a page-48 slot about once in 65 (`…1.12.1…`), briefly 3/8 `[on-air: c5a, c5b]` | master does the same (background counter keeps running) |
+| §6.11.1 page 70 count byte `0x00` ("invalid") | **5 copies** from every unit `[on-air: c4]` | master: 5 copies (`RADIANT_PROFILE_RADAR_REQ_COUNT0_COPIES`) |
+| §6.10.3 low-battery shutdown: interleave page 82 before powering off (recommended) | not seen | not implemented: `begin_shutdown(forced)` runs the plain status pattern |
 | ACK of an acked message | the radar's ACK control byte is **`0xF3`** (Spike B's `0xF2` with bit 0 set), payload `22 03 03 00…`, +1562 µs `[on-air: ackbug-sniff]` | radiant now accepts bit 0 on receive (see below) |
+
+**Display-side rules the adapter applies** (spec §6.4, §6.7, §7):
+
+- unavailable from connection until the first page 48/49, and 2 s after the
+  last one, timed by `radiant_radar_adapter_tick()`, not by received frames
+  (§6.4.1);
+- page 87 clears regardless of its content (§6.4.2); page 1 with the
+  clear-targets bit at 0 clears (§6.7.2);
+- page 1 state 1 or 3 clears **and latches**: in the shutdown pattern page 1
+  alternates with page 48 (§6.3.3), and without the latch each page 48 would
+  flip AVAILABLE back at 8 Hz. The latch releases on page 1 with state 0 or 2,
+  or after 2 s with no page 1. Spec-only, not seen on air (no unit sends
+  state 1);
+- targets 5–8 are dropped when no page 49 has arrived for 750 ms: page 48
+  keeps arriving every 125 ms after a radar drops back to four targets, so
+  only page 49's own absence can be the signal (§6.3.6);
+- threat 0 is never decoded further (§6.5.1); the nearest target is computed,
+  not assumed (Rev 2.1: not sorted);
+- acknowledged data from a radar is decoded like broadcast (§7 item 2;
+  `apps/dongle_thread` admits `0x4F` for radar bindings only); burst data
+  is ignored (§7 item 3).
 
 **What a Garmin display does** `[on-air: c2, c3]` (heard because RadiANT's Rx
 scan mode reports a slave's acked frames — see TODO): page 70 requests for 80,

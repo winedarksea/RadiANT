@@ -14,7 +14,11 @@
  *                 (6.4.2), on device state Shutdown Requested/Forced (6.7.1)
  *                 and on the clear-targets bit (6.7.2). Starts at 0: a
  *                 display shows "unavailable" until the first target page
- *                 (6.4.1).
+ *                 (6.4.1). Shutdown Requested/Forced LATCHES it at 0: in
+ *                 that pattern page 1 alternates with page 48 (6.3.3), and
+ *                 without the latch every page 48 would flip it back to 1
+ *                 at 8 Hz. The latch releases on a page 1 with state 0 or
+ *                 2, or after 2 s with no page 1.
  *   TARGET_COUNT  enum 0..8, targets with threat > 0
  *   THREAT        enum 0..3, the highest threat of any target
  *   NEAREST_RANGE length (m, exp -3), the closest target - computed here,
@@ -61,11 +65,18 @@ extern "C" {
 #define RADIANT_RADAR_TIMEOUT_US 2000000u
 /* Re-post everything every N target pages (~8 s at 8 Hz). */
 #define RADIANT_RADAR_REPOST     64u
+/* Targets 5-8 are dropped when no page 49 has arrived for this long. A radar
+ * reporting > 4 targets alternates 48/49, so page 49 comes every 250 ms;
+ * 750 ms rides out one lost page 49 without the count flickering. */
+#define RADIANT_RADAR_PAGE_B_EXPIRY_US 750000u
 
 struct radiant_radar_adapter {
 	struct radiant_profile_radar_target targets[RADIANT_PROFILE_RADAR_MAX_TARGETS];
 	uint64_t last_target_us; /* t of the last page 48/49 */
+	uint64_t last_b_us;      /* t of the last page 49 */
+	uint64_t last_status_us; /* t of the last page 1 */
 	bool     have_targets;   /* at least one target page since unavailable */
+	bool     shutdown_latch; /* page 1 said Shutdown Requested/Forced */
 	bool     available;
 	bool     posted_available;
 	uint16_t pages_since_repost;

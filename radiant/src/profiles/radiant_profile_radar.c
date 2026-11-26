@@ -394,7 +394,11 @@ int radiant_profile_radar_rx(struct radiant_profile_radar *r, const uint8_t *bod
 		    page == RADIANT_PROFILE_COMMON_PAGE_82 ||
 		    page == RADIANT_PROFILE_RADAR_PAGE_STATUS) {
 			r->req_page = page;
-			r->req_left = count;
+			/* decode_request() turns count 0 into 1; the units
+			 * answer it with 5 copies, so the master does too. */
+			r->req_left = ((body[5] & 0x7Fu) == 0u)
+					      ? RADIANT_PROFILE_RADAR_REQ_COUNT0_COPIES
+					      : count;
 			return 0;
 		}
 		return -ENOTSUP;

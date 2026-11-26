@@ -360,6 +360,22 @@ ZTEST(radiant_profile_radar, test_error_state_and_request)
 	zassert_equal(radiant_profile_radar_rx(&master, req), -ENOTSUP);
 }
 
+ZTEST(radiant_profile_radar, test_varia_request_count_zero_gets_five)
+{
+	/* On air (C4): count byte 0x00 ("invalid") -> 5 copies from all units. */
+	static const uint8_t req[8] = {0x46, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x52, 0x01};
+	uint8_t body[8];
+
+	master_init();
+	zassert_equal(radiant_profile_radar_rx(&master, req), 0);
+	for (int i = 0; i < 5; i++) {
+		zassert_equal(radiant_profile_radar_next(&master, body),
+			      RADIANT_PROFILE_RADAR_SLOT_COMMON_82, "copy %d", i);
+	}
+	zassert_equal(radiant_profile_radar_next(&master, body),
+		      RADIANT_PROFILE_RADAR_SLOT_TARGETS_A);
+}
+
 ZTEST(radiant_profile_radar, test_spec_only_not_detecting_sends_status)
 {
 	uint8_t body[8];

@@ -255,11 +255,19 @@ void ant_dongle_rx_tap(const struct radiant_ant_msg *msg)
 	 * been written against is how a bridge starts publishing decoded
 	 * garbage. Widen this when an adapter needs it, not before.
 	 *
+	 * One adapter does: Bike Radar Rev 2.1 section 7 item 2 says a display
+	 * "shall treat data sent as acknowledged messages from a sensor no
+	 * differently than data sent as broadcast". Acknowledged data passes
+	 * this test and is dropped below unless the binding is a radar. Burst
+	 * stays out (item 3: a display ignores a sensor's bursts).
+	 *
 	 * LEN counts the channel byte, so a full 8-byte page is LEN 9. Shorter
 	 * is not an error worth logging at this rate - it is a message class
 	 * this filter should have excluded - so it is simply not decoded.
 	 */
-	if (msg->id != RADIANT_WIRE_MESG_BROADCAST_DATA_ID || msg->len < 9u) {
+	if ((msg->id != RADIANT_WIRE_MESG_BROADCAST_DATA_ID &&
+	     msg->id != RADIANT_WIRE_MESG_ACKNOWLEDGED_DATA_ID) ||
+	    msg->len < 9u) {
 		return;
 	}
 
@@ -280,6 +288,16 @@ void ant_dongle_rx_tap(const struct radiant_ant_msg *msg)
 		 * action and it may legitimately race one broadcast. */
 		unbound_drops++;
 		return;
+	}
+
+	if (msg->id == RADIANT_WIRE_MESG_ACKNOWLEDGED_DATA_ID) {
+#ifdef CONFIG_ANT_DONGLE_RADAR
+		if (b->devtype != RADIANT_PROFILE_RADAR_DEVICE_TYPE) {
+			return;
+		}
+#else
+		return;
+#endif
 	}
 
 	/*

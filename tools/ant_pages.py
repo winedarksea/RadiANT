@@ -1246,6 +1246,7 @@ RDR_STATUS_EVERY = 2        # page 1 every other message: all 3 units (C5)
 RDR_SHUTDOWN_MSGS = 24      # >= 2.5 s
 RDR_ABORTED_MSGS = 81       # >= 10 s; units measured 10.0 s
 RDR_STAY_ON_DELAY = 12      # Shutdown cmd -> aborted pattern: units 1.52 s
+RDR_REQ_COUNT0_COPIES = 5   # page 70 count byte 0x00: units send 5 (C4)
 
 
 class RadarMaster:
@@ -1318,7 +1319,8 @@ class RadarMaster:
             page = payload[6]
             if page in (0x50, 0x51, 0x52, PAGE_RDR_STATUS):
                 self.req_page = page
-                self.req_left = (payload[5] & 0x7F) or 1
+                # Count 0 is "invalid"; every Garmin unit sent 5 (C4).
+                self.req_left = (payload[5] & 0x7F) or RDR_REQ_COUNT0_COPIES
                 return True
         return False
 
