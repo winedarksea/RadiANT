@@ -302,6 +302,11 @@ if(CONFIG_ANT_DONGLE_SELF_CHANNELS GREATER 0)
   # where radiant/tests can reach them (this app's sources it cannot); the
   # module compiles that file under CONFIG_RADIANT_BRIDGE. See that header.
   target_sources(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/self_channels.c")
+  # Pairings that survive a reboot. Always compiled with the self channels:
+  # without CONFIG_ANT_DONGLE_BINDING_STORE its I/O is a no-op (binding_store.h).
+  target_sources(app PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/binding_store.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/binding_store_codec.c")
   # try_bind() once fell off its end and the built code returned a stale
   # register, rotating a just-bound channel away (review 2026-10-31, C3-1).
   # Per file, not app-wide: app-wide would reach vendored and zap C++.

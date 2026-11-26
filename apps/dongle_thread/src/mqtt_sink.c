@@ -373,9 +373,11 @@ static bool avail_online[RADIANT_BINDING_MAX];
  * keepalive thread every 500 ms, and at the top of every publish - applies it:
  *
  *   rearm         clear the per-source announce/subtype/availability state. A
- *                 re-pair gets a new uuid (radiant_binding.h), so its retained
- *                 discovery messages are new topics and must be sent again,
- *                 and the slot may now hold a different physical machine.
+ *                 re-pair after an eviction gets a new uuid (binding_store.h),
+ *                 so its retained discovery messages are new topics and must
+ *                 be sent again, and the slot may now hold a different
+ *                 physical machine. A re-pair that kept its uuid re-announces
+ *                 the same topics, which is harmless.
  *   owed_offline  the released sensor's status still reads "online" on the
  *                 broker and must be overwritten. Kept until a publish of it
  *                 SUCCEEDS; it used to be dropped. A release made while
@@ -1240,11 +1242,11 @@ static void mqtt_binding_changed(uint32_t source, const struct radiant_binding *
 		(void)radiant_owed_add(&owed_offline, bound_uuid[source]);
 	}
 
-	/* DEFENSIVE, and not reachable today: radiant_binding_bind() mints a new
-	 * uuid for every row and a release frees the row before the sink is told,
-	 * so a bind never carries a uuid that is owed. Kept (on ANY source) so
-	 * that if a bind ever reuses a uuid, its "offline" is not sent over the
-	 * "online" the next sample publishes. It does NOT cover a real re-pair. */
+	/* REACHABLE since the binding store: a sensor released when a host took
+	 * its channel keeps its record, and pairing it again reuses its uuid
+	 * (binding_store.h), so a bind can carry a uuid whose "offline" is still
+	 * owed. Cancelled on ANY source, so that "offline" is not sent over the
+	 * "online" the next sample publishes. */
 	if (b != NULL) {
 		(void)radiant_owed_cancel(&owed_offline, b->uuid);
 	}

@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# The self-channel binding record (src/binding_store.h): encode/decode round
+# trips, the pinned v1 byte layout, and refusal of every malformed record.
+# Pure arithmetic over byte buffers - native_sim is the right place.
+#
+# On Windows there is no native_sim (no host C compiler):
+#
+#   .\scripts\run_ztest_hw.ps1 -App apps\dongle_thread\tests\binding_store
+tests:
+  dongle_thread.binding_store:
+    tags:
+      - radiant
+      - bridge
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
