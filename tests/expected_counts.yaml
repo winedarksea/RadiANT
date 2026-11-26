@@ -292,7 +292,9 @@ min_scenarios: 30
 # 2026-11-26: matter-occupancy follow-ups: +6 binding store suite, +4
 # test_binding.c and +19 rules/hr_profile in each unit scenario. Cassandra
 # twister occ4: 10019 executed.
-min_testcases: 10019
+# 2026-11-26: +42 (raw-BPM passenger, 7 net test_matter.c cases in each unit
+# scenario). Cassandra twister occ5: 10061 executed.
+min_testcases: 10061
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -341,21 +343,24 @@ min_testcases: 10019
 # 2026-11-25: +3 (radar spec audit: adapter shutdown latch x2, master
 # page 70 count 0 -> 5 copies).
 # 2026-11-26: +19 (Zone 3, announce/rebind rules cases, test_hr_profile.c).
-min_cases.radiant.unit: 1345
+# 2026-11-26: +7 (HR passenger, test_matter.c).
+min_cases.radiant.unit: 1352
 # 2026-11-24: raised to the observed count on 430562b (was 1163).
 # 2026-11-25: +25 (bike radar: radiant_profile_radar 16, radiant_radar_adapter 8,
 # transfer: a Garmin Varia's 0xF3 ack completes 1).
 # 2026-11-25: +3 (radar spec audit: adapter shutdown latch x2, master
 # page 70 count 0 -> 5 copies).
 # 2026-11-26: +19 (Zone 3, announce/rebind rules cases, test_hr_profile.c).
-min_cases.radiant.unit.sec_modes: 1345
+# 2026-11-26: +7 (HR passenger, test_matter.c).
+min_cases.radiant.unit.sec_modes: 1352
 # 2026-11-24: raised to the observed count on 430562b (was 1099).
 # 2026-11-25: +25 (bike radar: radiant_profile_radar 16, radiant_radar_adapter 8,
 # transfer: a Garmin Varia's 0xF3 ack completes 1).
 # 2026-11-25: +3 (radar spec audit: adapter shutdown latch x2, master
 # page 70 count 0 -> 5 copies).
 # 2026-11-26: +19 (Zone 3, announce/rebind rules cases, test_hr_profile.c).
-min_cases.radiant.unit.no_pairing: 1268
+# 2026-11-26: +7 (HR passenger, test_matter.c).
+min_cases.radiant.unit.no_pairing: 1275
 # radiant.unit.pairing_no_rng: 1218, the observed count on sec/item8-pair-rng
 # (2026-11-20), including test_pair_begin_without_an_rng_uses_the_kdf_scalar.
 # +4 (HAL drift item 5 settled, as radiant.unit).
@@ -371,7 +376,8 @@ min_cases.radiant.unit.no_pairing: 1268
 # 2026-11-25: +3 (radar spec audit: adapter shutdown latch x2, master
 # page 70 count 0 -> 5 copies).
 # 2026-11-26: +19 (Zone 3, announce/rebind rules cases, test_hr_profile.c).
-min_cases.radiant.unit.pairing_no_rng: 1332
+# 2026-11-26: +7 (HR passenger, test_matter.c).
+min_cases.radiant.unit.pairing_no_rng: 1339
 # 2026-11-24: raised to the observed count on 430562b (was 91).
 # 2026-11-24: +9 (wip/s24-ttype: transmission type on clean tracked frames).
 min_cases.radiant.api: 129
@@ -458,7 +464,8 @@ min_cases.treadmill.hr_rx: 3
 # 2026-11-24: +3 (radiant_sec: the scan guess budget, as radiant.unit).
 # 2026-11-24: raised to the observed count on 430562b (was 1170).
 # 2026-11-26: +19 (Zone 3, announce/rebind rules cases, test_hr_profile.c).
-min_cases.radiant.unit.ack_faults: 1326
+# 2026-11-26: +7 (HR passenger, test_matter.c).
+min_cases.radiant.unit.ack_faults: 1333
 # radiant.unit.diag: the unit suites with CONFIG_RADIANT_DIAG_COUNTERS.
 # 1127 (2026-11-16, Bluefin twister on fix/diag-page9-done-cb): the observed
 # count, including the four page-9/page-12 scheduler cases.
@@ -480,7 +487,8 @@ min_cases.radiant.unit.ack_faults: 1326
 # 2026-11-24: +3 (radiant_sec: the scan guess budget, as radiant.unit).
 # 2026-11-24: raised to the observed count on 430562b (was 1241).
 # 2026-11-26: +19 (Zone 3, announce/rebind rules cases, test_hr_profile.c).
-min_cases.radiant.unit.diag: 1328
+# 2026-11-26: +7 (HR passenger, test_matter.c).
+min_cases.radiant.unit.diag: 1335
 min_cases.trainer.model: 14
 # radiant.lp_clock (power plan pass B2): the low-power timebase arithmetic,
 # 31 unit cases and seven 100 000-cycle drift simulations (three of them
