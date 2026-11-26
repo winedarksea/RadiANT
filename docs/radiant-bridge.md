@@ -458,7 +458,7 @@ and no knowledge of the person, which is why they are what tier 1 ships
 
 Liveness follows the envelope's own rule: a heartbeat interval exists precisely
 so that "no data" is never silent (`radiant-telemetry.md` section 8). A sink
-publishes `STALE` after `3 x` the expected interval, which clears the activity
+publishes `STALE` after `8 x` the expected interval (§9.3b), which clears the activity
 output and — because 6.2's zone outputs are gated on it — clears those too.
 
 ### 6.2 Zones: a standard-human prior, optionally personalised
@@ -1863,7 +1863,7 @@ field in it comes from somewhere the envelope already defines:
 | `state_class` | `total_increasing` if the `accumulate` bit is set, else `measurement` |
 | `device_class` | the vocabulary type, where one maps; omitted where none does |
 | `suggested_display_precision` | derived from the field's `exp` and width |
-| `expire_after` | the sparse heartbeat interval, or the channel period x 3 |
+| `expire_after` | the sparse heartbeat interval, or the channel period x 8 (§9.3b) |
 | `availability_topic` | the per-binding status topic |
 | `unique_id` | `binding_uuid` + field id |
 | `name` | `radiant_naming_format()`, the same composer the Matter plane uses — §8.2a. It was the binding label (or the literal `RadiANT`) plus the raw field id, i.e. `RadiANT 4`, five times over for one strap. **`unique_id` is unchanged and still keys on `binding_uuid`**: the name carries a device number because a human reads it off the sensor, while the topic and the id are what automations and history are keyed on |
@@ -1944,10 +1944,21 @@ trainer's two sources and *not one* from the strap on the same bench. Because
 §9.3's per-binding availability topic is driven from STALE, a perfectly healthy
 trainer flapped its whole device offline and back **once a second**.
 
-The quiet that matters belongs to the **source**: nothing from it at all for 3×
+The quiet that matters belongs to the **source**: nothing from it at all for 8×
 its period. A page rotation is still traffic, so it cannot fake that, and the
 out-of-range guarantee for a strap is unchanged. When a source does go quiet
 every tracked field of it is posted stale, so sinks still learn per field.
+
+**Why 8×, not 3×** (2026-11-26). Liveness hears *samples*, not frames, so a
+page no adapter decodes is silence. An FE-C treadmill rotates 16, 16, 19, 19,
+17 and only page 16 posts, so its source is quiet for 4 periods (1.0 s) on
+every rotation, past 3× (0.75 s). On the nRF54L15 Matter image a sim treadmill
+heard at 100 % went STALE every ~5 s. Each STALE forced In Use false, so the
+30 s equipment clear delay collapsed to 2 s after the machine stopped. 8× is
+the count after which the ANT channel itself raises `RX_FAIL_GO_TO_SEARCH`
+(`RADIANT_CHANNEL_RX_FAIL_TO_SEARCH`), so "gone" means the same thing above and
+below the bus. A strap out of range is now reported after 2.0 s instead of
+0.75 s.
 
 Two other things fell out of the same sitting:
 

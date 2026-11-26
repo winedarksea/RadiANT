@@ -754,16 +754,16 @@ static bool keepalive_connect(void)
 
 /*
  * expire_after (section 9.2): "the sparse heartbeat interval, or the channel
- * period x 3". This is the ONE key section 9.2 singles out as the one to get
+ * period x 8" (it was x 3; see radiant_liveness.c's STALE_MULTIPLE). This is the ONE key section 9.2 singles out as the one to get
  * right, because it is the MQTT expression of the envelope's rule that "no
  * data" must never be produced silently - and without it a strap that walks
  * out of range leaves its last reading on screen indefinitely, which for a
  * heart-rate-driven AC is not a stale number, it is a wrong actuator.
  *
- * The same 3x rule radiant_liveness.c applies, from the same
+ * The same 8x rule radiant_liveness.c applies, from the same
  * struct radiant_binding::period, so the two cannot disagree. Rounded UP to a
  * whole second, and never to zero: HA reads expire_after 0 as "never expire",
- * so rounding 750 ms down would turn the one key that matters into its exact
+ * so rounding a sub-second expiry down would turn the one key that matters into its exact
  * opposite. A binding with no period gets no expire_after key at all rather
  * than a guessed one.
  */
@@ -774,7 +774,7 @@ static uint32_t expire_after_s(uint16_t period_32k)
 	if (period_32k == 0u) {
 		return 0u;
 	}
-	us = ((uint64_t)period_32k * 3u * 15625u) / 512u;
+	us = ((uint64_t)period_32k * 8u * 15625u) / 512u;
 	return (uint32_t)((us + 999999u) / 1000000u);
 }
 
@@ -809,7 +809,7 @@ static bool compose_discovery(uint32_t source, const struct radiant_sample *s)
 	 * NO expire_after ON A DERIVED OR ROTATED FIELD, and both halves are
 	 * corrections made against a measurement.
 	 *
-	 * expire_after_s() is the channel period x 3 - "three consecutive misses
+	 * expire_after_s() is the channel period x 8 - "eight consecutive misses
 	 * and the reading is stale" - which is right for a series that
 	 * republishes at the channel rate. radiant_rules.c publishes its
 	 * booleans ONLY WHEN THE DEBOUNCED STATE CHANGES, which on a worn strap

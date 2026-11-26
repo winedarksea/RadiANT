@@ -8,8 +8,9 @@
  * Eight things earn their place here, and each of them is a way the module
  * could be wrong while looking right:
  *
- *   - It must not fire early. 3x the period, not 1x - a strap that misses two
- *     broadcasts in a row is normal on a 0.4 % loss floor.
+ *   - It must not fire early. 8x the period, not 1x or 3x - the count after
+ *     which the ANT channel itself gives up and searches, and longer than
+ *     any page rotation in which only some pages are decoded.
  *   - It must fire ONCE. An un-edged implementation posts a STALE record every
  *     tick, which is a 1 Hz stream of traffic from a source that has stopped
  *     transmitting - the opposite of what the flag means.
@@ -79,11 +80,11 @@ static void liveness_test_reset(void *unused)
 /*
  * 8192 counts of 32768 Hz is 250 ms - the 4 Hz every ANT+ heart-rate profile
  * uses, and the value radiant_ant_channel_period_set()'s own contract quotes. So the
- * expiry under test is 750 ms, and every timestamp below is chosen against
- * that rather than against a round second.
+ * expiry under test is 8 periods = 2000 ms, and every timestamp below is
+ * chosen against that rather than against a round second.
  */
 #define PERIOD_4HZ 8192u
-#define EXPIRY_US  ((uint64_t)750000u)
+#define EXPIRY_US  ((uint64_t)2000000u)
 
 /* Bind, and give the binding the period the way the real binder does: read off
  * the channel at bind time, not learned from the traffic. */
@@ -125,7 +126,7 @@ static uint32_t tick(uint64_t now_us)
 	return n;
 }
 
-ZTEST(radiant_liveness, test_does_not_expire_before_three_periods)
+ZTEST(radiant_liveness, test_does_not_expire_before_eight_periods)
 {
 	uint32_t src = bound_source(1u, PERIOD_4HZ);
 
@@ -202,14 +203,14 @@ ZTEST(radiant_liveness, test_a_binding_with_no_period_never_expires)
 
 ZTEST(radiant_liveness, test_period_scales_the_threshold)
 {
-	/* 32768 counts is 1 s, so the expiry is 3 s - four times the 4 Hz
+	/* 32768 counts is 1 s, so the expiry is 8 s - four times the 4 Hz
 	 * case, which is the property that would be lost if the threshold were
 	 * a constant with a period-shaped name. */
 	uint32_t src = bound_source(1u, 32768u);
 
 	post_hr(src, 0u, 70, 0u);
-	zassert_equal(tick(3u * US_PER_S), 0u);
-	zassert_equal(tick(3u * US_PER_S + 1u), 1u);
+	zassert_equal(tick(8u * US_PER_S), 0u);
+	zassert_equal(tick(8u * US_PER_S + 1u), 1u);
 }
 
 ZTEST(radiant_liveness, test_unbinding_frees_the_row)
@@ -268,7 +269,7 @@ ZTEST(radiant_liveness, test_a_page_rotation_is_not_a_sensor_going_away)
 	 * flapped offline and back once a second in Home Assistant.
 	 *
 	 * Two fields, strictly alternating at 1 s, for 10 s. Every individual
-	 * field is silent for 2 s at a stretch, far past the 750 ms threshold.
+	 * field is silent for 2 s at a stretch, past the old 750 ms threshold.
 	 * Nothing may expire: the source is demonstrably on air the whole time.
 	 */
 	uint32_t src = bound_source(1u, PERIOD_4HZ);
@@ -282,12 +283,42 @@ ZTEST(radiant_liveness, test_a_page_rotation_is_not_a_sensor_going_away)
 
 	/*
 	 * And the guarantee the module exists for is unchanged: when the whole
-	 * source really does stop, BOTH fields are reported, on the same 3x
+	 * source really does stop, BOTH fields are reported, on the same 8x
 	 * period the header promises - not just the one that happened to be
 	 * carried by the last page received.
 	 */
 	zassert_equal(tick(10u * US_PER_S + EXPIRY_US + 1u), 2u);
 	zassert_equal(cap_n, 2u, NULL);
+}
+
+ZTEST(radiant_liveness, test_a_treadmill_rotation_is_not_a_sensor_going_away)
+{
+	/*
+	 * THE SECOND REGRESSION, 2026-11-26. Liveness hears samples, not
+	 * frames, and a page no adapter decodes is silence. An FE-C treadmill
+	 * rotates 16,16,19,19,17 at 4 Hz and only page 16 posts, so the SOURCE
+	 * is quiet for 4 periods (1.0 s) on every 1.25 s rotation. At 3x the
+	 * nRF54L15 Matter image posted STALE every ~5 s from a treadmill heard
+	 * at 100 %, and each one cleared In Use. 60 s of that rotation, ticked
+	 * at 1 Hz as the pump does, must post nothing.
+	 */
+	uint32_t src = bound_source(1u, PERIOD_4HZ);
+	uint64_t next_tick = US_PER_S;
+	uint32_t msg;
+
+	for (msg = 0u; msg < 240u; msg++) {
+		uint64_t t = (uint64_t)msg * 250000u;
+
+		if ((msg % 5u) < 2u) {
+			post_hr(src, 0u, 0, t); /* page 16, posted */
+		} /* pages 19, 19, 17: decoded by nothing */
+		while (next_tick <= t) {
+			zassert_equal(tick(next_tick), 0u, "STALE at %llu us",
+				      (unsigned long long)next_tick);
+			next_tick += US_PER_S;
+		}
+	}
+	zassert_equal(cap_n, 0u);
 }
 
 ZTEST(radiant_liveness, test_its_own_output_does_not_rearm_it)
@@ -296,7 +327,7 @@ ZTEST(radiant_liveness, test_its_own_output_does_not_rearm_it)
 	 * The STALE record goes back round the bus and reaches this module's
 	 * own want(). If it were accepted as a fresh arrival the edge would be
 	 * re-armed by the edge, and the source would produce one STALE record
-	 * every 3x period forever. Two ticks well past a second expiry window
+	 * every 8x period forever. Two ticks well past a second expiry window
 	 * prove it does not.
 	 */
 	uint32_t src = bound_source(1u, PERIOD_4HZ);

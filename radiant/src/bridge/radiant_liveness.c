@@ -19,10 +19,22 @@
  * use). Converting to microseconds is 1000000/32768, which reduces exactly to
  * 15625/512 - so this is integer arithmetic with no rounding at all, not an
  * approximation that happens to be close. Kept in that order (multiply then
- * divide) for the same reason: 65535 * 3 * 15625 is ~3.07e9, which is why the
+ * divide) for the same reason: 65535 * 8 * 15625 is ~8.2e9, which is why the
  * intermediate is uint64_t rather than uint32_t.
+ *
+ * EIGHT PERIODS: the same count after which the ANT channel itself gives up
+ * on the master and raises RX_FAIL_GO_TO_SEARCH (RADIANT_CHANNEL_RX_FAIL_TO_
+ * SEARCH in radiant_channel.h - spelled here rather than included, because
+ * this module sits above the stack). "Gone" then means one thing on both
+ * sides of the bus. It was 3, and 3 is shorter than an ordinary page
+ * rotation: liveness hears SAMPLES, not frames, and a page that no adapter
+ * decodes is silence. An FE-C treadmill rotates 16,16,19,19,17 and only page
+ * 16 posts, so its source is quiet for 4 periods (1.0 s) on every rotation.
+ * Measured 2026-11-26 on the nRF54L15 Matter image: STALE every ~5 s from a
+ * sim treadmill heard at 100 %, each one forcing In Use false - which
+ * defeated the 30 s equipment clear delay 2 s after the machine stopped.
  */
-#define STALE_MULTIPLE 3u
+#define STALE_MULTIPLE 8u
 
 static uint64_t stale_after_us(uint16_t period_32k)
 {
@@ -119,7 +131,7 @@ const struct radiant_liveness_stats *radiant_liveness_stats_get(void)
  *
  *   - STALE. This module's own output comes back round the bus. Recording it
  *     as a fresh arrival would re-arm the edge from the edge, so a source that
- *     went away would produce one STALE record every 3x period forever instead
+ *     went away would produce one STALE record every 8x period forever instead
  *     of once.
  *   - DERIVED. Rule outputs (radiant_rules.c) are published once on their
  *     first input and then on CHANGE only - an occupancy boolean that stays

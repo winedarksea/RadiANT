@@ -13,7 +13,10 @@
  * WHAT IT IS. An ordinary sink (RADIANT_SINK_DEFINE(), same precedent as
  * radiant_rules.c) that remembers the last sample per (source, field_id),
  * and a 1 Hz caller re-posts those samples with STALE set, once, when the
- * SOURCE has gone quiet for longer than 3x the binding's channel period.
+ * SOURCE has gone quiet for longer than 8x the binding's channel period -
+ * the count after which the ANT channel itself raises RX_FAIL_GO_TO_SEARCH
+ * (2.0 s at 4 Hz; see STALE_MULTIPLE in radiant_liveness.c for why 3 was
+ * too short).
  *
  * THE QUIET IS MEASURED PER SOURCE, NOT PER FIELD. Per field, "3x the
  * channel period" assumes every field is carried by every message - true of
@@ -29,9 +32,12 @@
  * availability topic from STALE, so a healthy trainer flapped its whole
  * device offline and back once a second.
  *
- * A source is quiet when NOTHING from it has arrived for 3x its period. That
+ * A source is quiet when NOTHING from it has arrived for 8x its period. That
  * answers "has this sensor gone away" without being confused by a page
- * rotation, since a rotation is still traffic. When the source goes quiet,
+ * rotation, since a rotation is still traffic - PROVIDED some page in it is
+ * decoded. Liveness hears samples, not frames, so pages no adapter decodes
+ * are silence: an FE-C treadmill (16,16,19,19,17, only 16 decoded) is quiet
+ * for 4 periods on every rotation, which the old 3x expired. When the source goes quiet,
  * EVERY tracked field of it is posted stale, so a sink still learns per
  * field and nothing downstream had to change.
  *

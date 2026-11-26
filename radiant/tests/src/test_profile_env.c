@@ -300,7 +300,7 @@ ZTEST(profile_env, test_page0_the_other_rate_and_the_reserved_ones)
 }
 
 /*
- * The 0.5 Hz option is trap 18: radiant_liveness.c's threshold is period x 3,
+ * The 0.5 Hz option is trap 18: radiant_liveness.c's threshold is period x 8,
  * so the two rates differ eightfold in how long a sensor may be quiet before
  * it is called stale. This asserts the mapping the binding's period comes
  * from, and that a reserved rate abstains rather than guessing.

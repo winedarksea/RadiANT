@@ -63,8 +63,8 @@
  *
  * Two consequences a reader will otherwise meet the hard way:
  *
- *   LIVENESS. radiant_liveness.c's stale_after_us() is period x 3, so the
- *   staleness threshold for this profile is 6.0 s at 0.5 Hz against 750 ms at
+ *   LIVENESS. radiant_liveness.c's stale_after_us() is period x 8, so the
+ *   staleness threshold for this profile is 16 s at 0.5 Hz against 2 s at
  *   4 Hz - an eightfold difference. struct radiant_binding::period defaults to
  *   0 meaning "never set", which radiant_liveness.c treats as "no honest
  *   expiry" and counts in stats.no_period rather than guessing 8192. So a

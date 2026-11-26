@@ -66,7 +66,7 @@ BUILD_ASSERT(CONFIG_ANT_DONGLE_SELF_CHANNELS * RADIANT_LIVENESS_FIELDS_PER_SOURC
 #endif
 
 /* The liveness sweep's period. 1 Hz is section 9.2's granularity, not a tuning
- * knob: the expiry itself is 3x the channel period (250 ms x 3 = 750 ms for a
+ * knob: the expiry itself is 8x the channel period (250 ms x 8 = 2 s for a
  * 4 Hz profile), so a 1 s sweep resolves it to within one sweep, and a faster
  * sweep would only make the report earlier by a fraction of a second while
  * running the whole table more often. */
