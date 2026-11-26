@@ -233,9 +233,102 @@ ZTEST(radiant_radar_adapter, test_page_49_half_and_its_expiry)
 	REQUIRE(s, RADIANT_RADAR_FIELD_NEAREST_RANGE);
 	zassert_equal(s->raw, 15625, "target 5 is the nearest");
 
-	/* Page 48 only, after a gap: the stale page-49 half is dropped. */
-	radiant_radar_adapter_decode(&ad, SRC, pa, 1600000u);
+	/* One page 49 lost: 48, 48, 48, then 49 500 ms after the last one.
+	 * Target 5 must not flicker out. */
+	for (uint64_t t = 1250000u; t <= 1500000u; t += 125000u) {
+		radiant_radar_adapter_decode(&ad, SRC, pa, t);
+	}
+	radiant_radar_adapter_decode(&ad, SRC, pb, 1625000u);
+	drain();
+	zassert_is_null(find(RADIANT_RADAR_FIELD_TARGET_COUNT),
+			"a single lost page 49 changed the count");
+
+	/* Back to four targets: page 48 only, every 125 ms with no gap. The
+	 * page-49 half goes once page 49 has been absent 750 ms. */
+	for (uint64_t t = 1750000u; t < 2375000u; t += 125000u) {
+		radiant_radar_adapter_decode(&ad, SRC, pa, t);
+	}
+	drain();
+	zassert_is_null(find(RADIANT_RADAR_FIELD_TARGET_COUNT), "dropped early");
+	radiant_radar_adapter_decode(&ad, SRC, pa, 2375000u);
 	drain();
 	REQUIRE(s, RADIANT_RADAR_FIELD_TARGET_COUNT);
 	zassert_equal(s->raw, 4);
+}
+
+ZTEST(radiant_radar_adapter, test_shutdown_pattern_latches_unavailable)
+{
+	/* Shutdown Requested (6.3.3): page 1 state 1 alternating with page 48
+	 * that still carries a target. */
+	static const uint8_t requested[8] = {0x01, 0xFD, 0xFF, 0xFF, 0xFF, 0xFF,
+					     0xFF, 0xFE};
+	static const uint8_t aborted[8] = {0x01, 0xFE, 0xFF, 0xFF, 0xFF, 0xFF,
+					   0xFF, 0xFF};
+	struct radiant_profile_radar_target a[4] = {{true, 1u, 0u, 8u, 2u}};
+	uint8_t pa[8];
+	const struct radiant_sample *s;
+	uint64_t t = 1000000u;
+
+	targets(0x30u, a, pa);
+	radiant_radar_adapter_decode(&ad, SRC, pa, t);
+	drain();
+	for (int i = 0; i < 10; i++) {
+		t += 125000u;
+		radiant_radar_adapter_decode(&ad, SRC, requested, t);
+		t += 125000u;
+		radiant_radar_adapter_decode(&ad, SRC, pa, t);
+		(void)radiant_radar_adapter_tick(&ad, SRC, t);
+	}
+	drain();
+	{
+		uint32_t avail = 0u;
+
+		for (uint32_t i = 0u; i < cap_n; i++) {
+			if (cap[i].field_id == RADIANT_RADAR_FIELD_AVAILABLE) {
+				avail++;
+				zassert_equal(cap[i].raw, 0, "flipped back to available");
+			}
+		}
+		zassert_equal(avail, 1u, "AVAILABLE=0 once, not per page");
+	}
+	zassert_is_null(find(RADIANT_RADAR_FIELD_NEAREST_RANGE),
+			"targets shown while shutting down");
+
+	/* Aborted (another display sent Abort Shutdown): targets show again. */
+	t += 125000u;
+	radiant_radar_adapter_decode(&ad, SRC, aborted, t);
+	t += 125000u;
+	radiant_radar_adapter_decode(&ad, SRC, pa, t);
+	drain();
+	REQUIRE(s, RADIANT_RADAR_FIELD_AVAILABLE);
+	zassert_equal(s->raw, 1);
+	REQUIRE(s, RADIANT_RADAR_FIELD_NEAREST_RANGE);
+	zassert_equal(s->raw, 25000);
+}
+
+ZTEST(radiant_radar_adapter, test_shutdown_latch_releases_without_page_1)
+{
+	static const uint8_t forced[8] = {0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+					  0xFF, 0xFE};
+	struct radiant_profile_radar_target a[4] = {{true, 1u, 0u, 8u, 2u}};
+	uint8_t pa[8];
+	const struct radiant_sample *s;
+	uint64_t t;
+
+	targets(0x30u, a, pa);
+	radiant_radar_adapter_decode(&ad, SRC, pa, 1000000u);
+	drain();
+	radiant_radar_adapter_decode(&ad, SRC, forced, 1125000u);
+	/* Page 48 only from here; page 1 stops. Still latched before 2 s. */
+	for (t = 1250000u; t < 3125000u; t += 125000u) {
+		radiant_radar_adapter_decode(&ad, SRC, pa, t);
+		(void)radiant_radar_adapter_tick(&ad, SRC, t);
+	}
+	drain();
+	zassert_is_null(find(RADIANT_RADAR_FIELD_NEAREST_RANGE), "released early");
+	(void)radiant_radar_adapter_tick(&ad, SRC, 3125000u);
+	radiant_radar_adapter_decode(&ad, SRC, pa, 3125000u);
+	drain();
+	REQUIRE(s, RADIANT_RADAR_FIELD_AVAILABLE);
+	zassert_equal(s->raw, 1);
 }

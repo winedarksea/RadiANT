@@ -1396,6 +1396,12 @@ class TestRadarMaster(unittest.TestCase):
         self.assertEqual([m.next()[0], m.next()[0]], [0x51, 0x51])
         self.assertFalse(m.rx(ap.encode_common_70(0x30, 2)))
 
+    def test_request_count_zero_answered_five_times(self):
+        # Seen on air (C4): count byte 0x00 -> five copies from every unit.
+        m = ap.RadarMaster(self.COMMON)
+        self.assertTrue(m.rx(bytes.fromhex("46ffffffff005201")))
+        self.assertEqual([m.next()[0] for _ in range(6)], [0x52] * 5 + [0x30])
+
 
 class TestCaptureFormat(unittest.TestCase):
     """.antcap v1 and v2 lines: v2 appends kind and RSSI, v1 stays as it was."""
