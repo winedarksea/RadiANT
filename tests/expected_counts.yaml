@@ -294,7 +294,8 @@ min_scenarios: 30
 # twister occ4: 10019 executed.
 # 2026-11-26: +42 (raw-BPM passenger, 7 net test_matter.c cases in each unit
 # scenario). Cassandra twister occ5: 10061 executed.
-min_testcases: 10061
+# 2026-11-26: 10067 observed (liveness 8x, +1 case in 6 scenarios).
+min_testcases: 10067
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -344,7 +345,8 @@ min_testcases: 10061
 # page 70 count 0 -> 5 copies).
 # 2026-11-26: +19 (Zone 3, announce/rebind rules cases, test_hr_profile.c).
 # 2026-11-26: +7 (HR passenger, test_matter.c).
-min_cases.radiant.unit: 1352
+# 2026-11-26: +1 (liveness 8x: treadmill rotation is not a dropout).
+min_cases.radiant.unit: 1353
 # 2026-11-24: raised to the observed count on 430562b (was 1163).
 # 2026-11-25: +25 (bike radar: radiant_profile_radar 16, radiant_radar_adapter 8,
 # transfer: a Garmin Varia's 0xF3 ack completes 1).
@@ -352,7 +354,8 @@ min_cases.radiant.unit: 1352
 # page 70 count 0 -> 5 copies).
 # 2026-11-26: +19 (Zone 3, announce/rebind rules cases, test_hr_profile.c).
 # 2026-11-26: +7 (HR passenger, test_matter.c).
-min_cases.radiant.unit.sec_modes: 1352
+# 2026-11-26: +1 (liveness 8x: treadmill rotation is not a dropout).
+min_cases.radiant.unit.sec_modes: 1353
 # 2026-11-24: raised to the observed count on 430562b (was 1099).
 # 2026-11-25: +25 (bike radar: radiant_profile_radar 16, radiant_radar_adapter 8,
 # transfer: a Garmin Varia's 0xF3 ack completes 1).
@@ -360,7 +363,8 @@ min_cases.radiant.unit.sec_modes: 1352
 # page 70 count 0 -> 5 copies).
 # 2026-11-26: +19 (Zone 3, announce/rebind rules cases, test_hr_profile.c).
 # 2026-11-26: +7 (HR passenger, test_matter.c).
-min_cases.radiant.unit.no_pairing: 1275
+# 2026-11-26: +1 (liveness 8x: treadmill rotation is not a dropout).
+min_cases.radiant.unit.no_pairing: 1276
 # radiant.unit.pairing_no_rng: 1218, the observed count on sec/item8-pair-rng
 # (2026-11-20), including test_pair_begin_without_an_rng_uses_the_kdf_scalar.
 # +4 (HAL drift item 5 settled, as radiant.unit).
@@ -377,7 +381,8 @@ min_cases.radiant.unit.no_pairing: 1275
 # page 70 count 0 -> 5 copies).
 # 2026-11-26: +19 (Zone 3, announce/rebind rules cases, test_hr_profile.c).
 # 2026-11-26: +7 (HR passenger, test_matter.c).
-min_cases.radiant.unit.pairing_no_rng: 1339
+# 2026-11-26: +1 (liveness 8x: treadmill rotation is not a dropout).
+min_cases.radiant.unit.pairing_no_rng: 1340
 # 2026-11-24: raised to the observed count on 430562b (was 91).
 # 2026-11-24: +9 (wip/s24-ttype: transmission type on clean tracked frames).
 min_cases.radiant.api: 129
@@ -465,7 +470,8 @@ min_cases.treadmill.hr_rx: 3
 # 2026-11-24: raised to the observed count on 430562b (was 1170).
 # 2026-11-26: +19 (Zone 3, announce/rebind rules cases, test_hr_profile.c).
 # 2026-11-26: +7 (HR passenger, test_matter.c).
-min_cases.radiant.unit.ack_faults: 1333
+# 2026-11-26: +1 (liveness 8x: treadmill rotation is not a dropout).
+min_cases.radiant.unit.ack_faults: 1334
 # radiant.unit.diag: the unit suites with CONFIG_RADIANT_DIAG_COUNTERS.
 # 1127 (2026-11-16, Bluefin twister on fix/diag-page9-done-cb): the observed
 # count, including the four page-9/page-12 scheduler cases.
@@ -488,7 +494,8 @@ min_cases.radiant.unit.ack_faults: 1333
 # 2026-11-24: raised to the observed count on 430562b (was 1241).
 # 2026-11-26: +19 (Zone 3, announce/rebind rules cases, test_hr_profile.c).
 # 2026-11-26: +7 (HR passenger, test_matter.c).
-min_cases.radiant.unit.diag: 1335
+# 2026-11-26: +1 (liveness 8x: treadmill rotation is not a dropout).
+min_cases.radiant.unit.diag: 1336
 min_cases.trainer.model: 14
 # radiant.lp_clock (power plan pass B2): the low-power timebase arithmetic,
 # 31 unit cases and seven 100 000-cycle drift simulations (three of them
