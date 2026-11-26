@@ -148,6 +148,12 @@ if(CONFIG_RADIANT_BRIDGE)
   # The application half: the drain pump and the 1 Hz liveness clock.
   target_sources(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/bridge_pump.c")
   target_include_directories(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+  # Settings behind radiant_hr_profile's storage seam (section 6.5). The
+  # condition is hr_profile_store.h's, which stubs init() out otherwise.
+  if(CONFIG_RADIANT_BRIDGE_RULES AND CONFIG_SETTINGS AND
+     CONFIG_RADIANT_BRIDGE_HR_PROFILES GREATER 0)
+    target_sources(app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/hr_profile_store.c")
+  endif()
 endif()
 
 # ── The CHIP stack and the vendored Matter bridge core (package E3/E7) ──────
