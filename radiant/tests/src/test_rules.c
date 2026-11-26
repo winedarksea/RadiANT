@@ -937,6 +937,14 @@ ZTEST(radiant_rules, test_stale_drops_equipment_occupancy_immediately)
 
 ZTEST(radiant_rules, test_equipment_occupancy_is_per_source)
 {
+	uint32_t a;
+	uint32_t b;
+
+	zassert_equal(radiant_binding_bind(10u, 0x11u, 5u, NULL, &a), 0);
+	zassert_equal(radiant_binding_bind(11u, 0x11u, 5u, NULL, &b), 0);
+	zassert_equal(a, 0u);
+	zassert_equal(b, 1u);
+
 	post_fe_state(0u, FEC_STATE_IN_USE, 1u * US_PER_S, 0u);
 	post_fe_state(1u, FEC_STATE_READY, 1u * US_PER_S, 0u);
 
@@ -1114,10 +1122,13 @@ static uint64_t make_worn(uint32_t src, int64_t *beats, uint64_t t)
 ZTEST(radiant_rules, test_an_idle_trainer_announces_in_use_false)
 {
 	const struct radiant_sample *out;
+	uint32_t src;
 
 	/* THE REVIEWER'S POINT 3. A trainer nobody has ridden reports READY
 	 * forever; change-only publishing posted nothing, so the Matter plane
 	 * never created its In Use endpoint until somebody first rode it. */
+	zassert_equal(radiant_binding_bind(52233u, 0x11u, 5u, NULL, &src), 0);
+	zassert_equal(src, 0u);
 	post_fe_state(0u, FEC_STATE_READY, 1u * US_PER_S, 0u);
 
 	out = last_with(RADIANT_RULE_FIELD_EQUIPMENT_IN_USE);
@@ -1130,6 +1141,16 @@ ZTEST(radiant_rules, test_an_idle_trainer_announces_in_use_false)
 		post_fe_state(0u, FEC_STATE_READY, (2u + i) * US_PER_S, 0u);
 	}
 	zassert_equal(cap_n, 1u);
+}
+
+ZTEST(radiant_rules, test_an_unbound_source_is_not_announced)
+{
+	/* The tail of an evicted sensor (or a harness) has no endpoint to
+	 * create; only a change is posted for it. */
+	post_fe_state(3u, FEC_STATE_READY, 1u * US_PER_S, 0u);
+	zassert_equal(cap_n, 0u);
+	post_fe_state(3u, FEC_STATE_IN_USE, 2u * US_PER_S, 0u);
+	zassert_true(is_on(RADIANT_RULE_FIELD_EQUIPMENT_IN_USE));
 }
 
 ZTEST(radiant_rules, test_first_inputs_announce_every_output_they_feed)

@@ -295,13 +295,21 @@ static void post_occupancy(uint32_t source, uint8_t field_id, bool occupied,
  * the first sample that feeds the rule makes the endpoint exist at once, and
  * also makes a restored endpoint reachable as soon as its sensor is heard. The
  * attribute then holds its value, so nothing needs re-posting afterwards.
+ *
+ * ONLY FOR A BOUND SOURCE. The announcement exists to give a binding its
+ * endpoints. A source with no binding is either a test harness posting raw
+ * samples or the tail of a sensor that was just evicted, whose queued samples
+ * must not re-announce the outputs the eviction removed. Changes are still
+ * posted for an unbound source, as they always were.
  */
 static void emit(uint32_t source, uint8_t field_id, bool value, bool changed,
 		 uint64_t t_us)
 {
 	uint8_t bit = (uint8_t)BIT(field_id);
 
-	if (changed || (states[source].announced & bit) == 0u) {
+	if (changed ||
+	    ((states[source].announced & bit) == 0u &&
+	     radiant_binding_get(source) != NULL)) {
 		states[source].announced |= bit;
 		post_occupancy(source, field_id, value, t_us);
 	}

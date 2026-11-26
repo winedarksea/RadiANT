@@ -1196,9 +1196,11 @@ ZTEST(radiant_matter_combo, test_a_bound_heart_rate_strap_still_gets_worn)
 
 	worn = find_endpoint(source, RADIANT_RULE_FIELD_WORN, RADIANT_MATTER_DEVTYPE_OCCUPANCY_SENSOR);
 	zassert_not_null(worn, "no WORN endpoint for a strap");
+	/* Two: the rules announce `false` on the first beat count (so the
+	 * endpoint exists before the strap is worn), then the assert. */
 	zassert_equal(writes_on(worn->endpoint_id, RADIANT_MATTER_CLUSTER_OCCUPANCY_SENSING,
 				RADIANT_MATTER_ATTR_OCCUPANCY),
-		      1u);
+		      2u);
 	zassert_true(find_write(RADIANT_MATTER_CLUSTER_OCCUPANCY_SENSING,
 				RADIANT_MATTER_ATTR_OCCUPANCY_SENSOR_TYPE, &v, NULL) >= 1);
 	zassert_equal(v, RADIANT_MATTER_OCCUPANCY_TYPE_PHYSICAL_CONTACT);
