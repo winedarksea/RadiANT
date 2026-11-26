@@ -323,7 +323,8 @@ Consequences worth naming:
   re-arms its retained discovery message from it; the Matter sink adds or
   removes an endpoint. Neither polls.
 - **`binding_changed` runs on the caller's thread — the self-channel poll,
-  1536 B of stack — so it must not block.** No network I/O, and no lock that
+  1536 B of stack (2048 B with the binding store of section 5) — so it must
+  not block.** No network I/O, and no lock that
   network I/O is done under. The MQTT sink only records what it owes (a
   re-arm, and the released sensor's `"offline"` status) under a spinlock and
   publishes it from its keepalive thread and its publish path; the Matter sink
@@ -342,19 +343,38 @@ and an MQTT topic or a Matter endpoint has to survive a battery change and a
 re-pair. Worse, a device number collision across two straps in the same room is
 a one-in-65535 event that will happen at a trade show.
 
-The binding table is the pivot, and it **is specified to be persisted and is
-not yet**:
+The binding table is the pivot, and **it is persisted, by the application**.
+The table itself (`radiant/src/bridge/radiant_binding.c`) stays RAM only and
+storage-free, like the rest of `radiant/`; `apps/dongle_thread` keeps one
+record per paired channel ID and puts it back with `radiant_binding_restore()`
+(`src/binding_store.h`, `CONFIG_ANT_DONGLE_BINDING_STORE`, on wherever the
+settings subsystem is, which is every image layered on `thread.conf`):
 
-> **Corrected 2026-08-15.** This sentence read "and it is persisted", and the
-> code has never done that. `radiant/include/radiant/radiant_binding.h` says so in as
-> many words — "RAM-backed for now" — and the code is the truth. The consequence
-> is concrete and it is the reason this correction is a paragraph rather than a
-> word: **every reboot loses all bindings, and re-pairing mints a new `uuid`**,
-> hence new MQTT topics and a fresh set of Home Assistant entities. A dashboard
-> accumulates orphans on every power cut. For a bench that is a nuisance; for
-> the gym deployment of `docs/treadmill-reference-design.md` §8 it is a
-> prerequisite rather than a nicety, because the whole point of the `uuid` is
-> that it survives exactly this.
+- **Record v1**, 35 bytes under the settings key `radiant/bind/<n>`: version,
+  device number, device type, transmission type, `uuid`, label, channel
+  period and a bind sequence. The sequence decides which records get the self
+  channels at boot when there are more records than channels (the newest),
+  and the order a long press walks back through after a reboot.
+- **At boot** the newest records, one per self channel, are restored and their
+  channels come up **pinned, with no button press**. Every sink is told, as
+  for a fresh bind, so MQTT topics and Matter endpoints carry on under the
+  same identity.
+- **A re-pair of a channel ID that still has a record reuses its `uuid`.**
+- **A user eviction deletes the record**: the short press that frees the
+  longest-absent channel, and the long press. This is the per-binding reset,
+  and it calls `binding_store_on_evict(uuid)` so per-`uuid` data (section
+  6.5's histogram) can be erased with it. Pairing the same sensor after an
+  eviction mints a new `uuid`.
+- **A host taking a self channel keeps the record dormant**: the binding is
+  released, and the next boot pins the sensor again.
+- **Writes happen only on a bind and an eviction**, both behind the button.
+  Nothing a sensor transmits can cause a flash write.
+
+> **History.** Until 2026-11-26 this section said the table "is specified to be
+> persisted and is not yet" (corrected 2026-08-15 from an earlier "and it is
+> persisted" that the code never matched). Every reboot lost every binding and
+> each re-pair minted a new `uuid`, hence new MQTT topics, and a restored Matter
+> endpoint stayed unreachable until someone pressed `sw0`.
 
 ```
 binding[i] = {
@@ -367,11 +387,12 @@ binding[i] = {
 
 - `i` is what the bus carries as `source`. Every topic, endpoint and rule hangs
   off it, and none of them ever see a device number.
-- `uuid` is generated at first bind and **survives a re-pair of the same
-  physical strap**, which is how a HA entity keeps its history when the user
-  replaces a CR2032 and the strap re-rolls. Matching a re-paired strap back to
-  its `uuid` is a user action, not an inference — the bridge offers the last
-  binding with the same label and lets a human confirm.
+- `uuid` is generated at first bind and **survives a reboot and a re-pair of
+  the same channel ID** (the record above). A strap whose device number
+  re-rolls (a CR2032 change on some straps) is a new channel ID; matching it
+  back to its old `uuid` is a user action, not an inference — the bridge would
+  offer the last binding with the same label and let a human confirm. No such
+  UI exists yet, so today that re-pair is a new `uuid`.
 - Table capacity sizes the Matter endpoint count, the ANT tracked-channel count
   and the coexistence budget of section 7 **together**. Eight for the household
   SKU. Raising it is a radio decision before it is a memory decision.

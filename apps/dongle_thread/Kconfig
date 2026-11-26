@@ -436,6 +436,22 @@ config ANT_DONGLE_SELF_CHANNELS
 
 	  Acquiring a device is NOT binding it. See ANT_DONGLE_PAIRING_WINDOW_S.
 
+config ANT_DONGLE_BINDING_STORE
+	bool "Keep self-channel pairings across a reboot"
+	default y
+	depends on ANT_DONGLE_SELF_CHANNELS > 0 && SETTINGS
+	help
+	  Saves each pairing under the settings key radiant/bind/<n>
+	  (src/binding_store.h) and, at boot, restores the newest ones and
+	  pins their self channels with no button press. A user eviction
+	  (short or long press) deletes the record; a host taking a self
+	  channel keeps it, so the next boot pins the sensor again. Writes
+	  happen only on a bind and an eviction, never from traffic.
+
+	  Needs the settings subsystem, which thread.conf already enables for
+	  OpenThread (and so every image layered on it). Off, the self
+	  channels work as before: every reboot needs a re-pair.
+
 config ANT_DONGLE_SELF_CHANNELS_DELAY_S
 	int "Seconds after boot before the self channels open"
 	default 5

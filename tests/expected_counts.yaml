@@ -72,7 +72,9 @@
 # backend built with the shipping short match, caps parity only).
 # 2026-11-21: 29, radiant.backend.short_match (the nRF backend suite built with
 # the shipping short match, so caps parity compares the shipping nRF rows).
-min_scenarios: 29
+# 2026-11-26: 30, dongle_thread.binding_store (the self-channel binding
+# record codec, reached through `-T app/apps/dongle_thread/tests`).
+min_scenarios: 30
 
 # Total ztest cases twister executes, summed over every scenario. It equals the
 # sum of the per-scenario floors below, so the backstop and the floors cannot
@@ -287,7 +289,7 @@ min_scenarios: 29
 # combo suite, UniqueID + orphan policy in matter_storage). Merged: 9421.
 # 2026-11-25: +100 (bike radar + 0xF3 ack, 25 in each unit scenario).
 # 2026-11-25: +12 (radar spec audit, 3 in each unit scenario).
-min_testcases: 9533
+min_testcases: 9539
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -526,3 +528,6 @@ min_cases.radiant.backend_cc26xx.coex: 68
 min_cases.dongle_thread.matter_storage: 64
 # radiant.backend_cc26xx.short_match (item 7): caps parity, short-match row only.
 min_cases.radiant.backend_cc26xx.short_match: 1
+# dongle_thread.binding_store (2026-11-26): the self-channel binding record
+# codec - round trips, the pinned v1 layout, encode and decode refusals.
+min_cases.dongle_thread.binding_store: 6

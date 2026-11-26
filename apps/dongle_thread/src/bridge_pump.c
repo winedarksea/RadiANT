@@ -38,6 +38,9 @@
 #include <radiant/radiant_liveness.h>
 
 #include "bridge_app.h"
+#if defined(CONFIG_ANT_DONGLE_SELF_CHANNELS) && CONFIG_ANT_DONGLE_SELF_CHANNELS > 0
+#include "binding_store.h"
+#endif
 
 LOG_MODULE_REGISTER(bridge_pump, LOG_LEVEL_INF);
 
@@ -112,6 +115,15 @@ static void pump_thread_fn(void *a, void *b, void *c)
 	radiant_binding_init();
 	radiant_liveness_reset();
 	radiant_bridge_reset();
+
+#if defined(CONFIG_ANT_DONGLE_SELF_CHANNELS) && CONFIG_ANT_DONGLE_SELF_CHANNELS > 0
+	/* Paired sensors from before the reboot, into the table the line above
+	 * just cleared: at most one per self channel, the newest pairings.
+	 * self_channels.c gives them their channels, pinned, when it starts
+	 * (CONFIG_ANT_DONGLE_SELF_CHANNELS_DELAY_S later); no sink is told
+	 * until then, and nothing is attributed to them before that either. */
+	(void)binding_store_boot_restore(CONFIG_ANT_DONGLE_SELF_CHANNELS);
+#endif
 
 	sinks = count_sinks();
 	LOG_INF("bridge: %u sinks", (unsigned int)sinks);

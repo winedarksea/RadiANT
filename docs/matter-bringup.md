@@ -972,6 +972,22 @@ observe it). The Matter arm therefore links four and `bridge_pump.c` logs
 `assert_sink_names` diffs them as an **exact set**, not a subset, so an
 out-of-date list fails the build; the row lists four.
 
+**Reboot and recovery.** Paired sensors survive a reboot
+(`CONFIG_ANT_DONGLE_BINDING_STORE`, default y here because `thread.conf`
+enables settings; `docs/radiant-bridge.md` section 5). At boot `bridge_pump.c`
+restores the newest stored bindings, one per self channel (two on this arm),
+with their old `uuid`s, and `self_channels.c` gives each its channel pinned,
+**with no button press and no pairing window**. The glue is told through the
+same `binding_changed` a fresh bind uses, so the source is bound again before
+its first sample and the endpoints persisted against its stable key are
+adopted rather than re-created. A long or short press that evicts a sensor
+deletes its record, so the next boot does not bring it back; a host that takes
+a self channel only releases the binding, and the next boot re-pins it. The
+records are written on a bind and an eviction only, through the same
+settings/ZMS store as the Matter fabric data (key prefix `radiant/bind/`,
+separate from the glue's `br/`). `CONFIG_ANT_DONGLE_PAIRING_WINDOW_AT_BOOT` is
+therefore needed once, to pair, and not on every boot of a bench image.
+
 **Deadbands.** `radiant_matter.h` carries `deadband` and `heartbeat_s` per row,
 with sentinels `RADIANT_MATTER_DEADBAND_EVERY` (−1) and `_ON_CHANGE` (0), so a
 zeroed row gets on-change suppression — the one suppression that can never lose
