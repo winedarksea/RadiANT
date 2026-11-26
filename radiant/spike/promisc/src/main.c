@@ -107,6 +107,18 @@ BUILD_ASSERT(!IS_ENABLED(CONFIG_NRF_802154_RADIO_DRIVER),
 #define SPIKE_TTYPE    0x05u
 #endif
 
+/* An optional second device, for a two-channel unit whose channels do not
+ * share a device number (a radar + tail light combo). 0 = off. Like the first
+ * it is a hardware prefix filter on devnum_lo, at its own logical address.
+ * All five come in from CMake as -DSPIKE_<NAME>=<value> cache variables (see
+ * CMakeLists.txt), so a new device needs no source edit. */
+#ifndef SPIKE_DEVNUM2
+#define SPIKE_DEVNUM2  0u
+#endif
+#ifndef SPIKE_DTYPE2
+#define SPIKE_DTYPE2   SPIKE_DTYPE
+#endif
+
 /* Which of the eight logical addresses gets the real devnum_lo. Deliberately
  * not 0: RXMATCH reads 0 both when slot 0 matched and when nothing was
  * programmed, so slot 0 cannot distinguish "RXMATCH works" from "RXMATCH is
@@ -114,6 +126,7 @@ BUILD_ASSERT(!IS_ENABLED(CONFIG_NRF_802154_RADIO_DRIVER),
 #ifndef SPIKE_REAL_SLOT
 #define SPIKE_REAL_SLOT 5u
 #endif
+#define SPIKE_REAL_SLOT2 6u
 
 #define ANT_NET_HI     0xA6u
 #define ANT_NET_LO     0xC5u
@@ -121,6 +134,7 @@ BUILD_ASSERT(!IS_ENABLED(CONFIG_NRF_802154_RADIO_DRIVER),
 
 #define DEVNUM_LO      ((uint8_t)(SPIKE_DEVNUM & 0xFFu))
 #define DEVNUM_HI      ((uint8_t)((SPIKE_DEVNUM >> 8) & 0xFFu))
+#define DEVNUM2_LO     ((uint8_t)(SPIKE_DEVNUM2 & 0xFFu))
 
 /* Body bytes the radio puts in RAM with a 3-byte address and STATLEN = 12:
  *   [devnum_hi][device_type][trans_type][byte 3][d0..d7]
@@ -446,8 +460,12 @@ static void print_rec(const struct rec *r)
 	/* See the header note "what counts as ours": the device number decides,
 	 * the type bytes are reported. Requiring them would throw away exactly
 	 * the frame this run exists to see. */
-	const bool ours = (devnum == (uint16_t)SPIKE_DEVNUM);
-	const bool typical = ((dty & 0x7Fu) == SPIKE_DTYPE) && (tty == SPIKE_TTYPE);
+	const bool ours = (devnum == (uint16_t)SPIKE_DEVNUM) ||
+			  ((SPIKE_DEVNUM2 != 0u) &&
+			   (devnum == (uint16_t)SPIKE_DEVNUM2));
+	const bool typical = (((dty & 0x7Fu) == SPIKE_DTYPE) ||
+			      ((dty & 0x7Fu) == SPIKE_DTYPE2)) &&
+			     ((tty & 0x0Fu) == (SPIKE_TTYPE & 0x0Fu));
 	int32_t dt;
 
 	if (r->crc_ok) {
@@ -515,6 +533,11 @@ static void banner(void)
 	printk("Listening for device #%u (0x%04X), type 0x%02X, trans %u\n",
 	       (unsigned int)SPIKE_DEVNUM, (unsigned int)SPIKE_DEVNUM,
 	       SPIKE_DTYPE, SPIKE_TTYPE);
+	if (SPIKE_DEVNUM2 != 0u) {
+		printk("Second device #%u (0x%04X), type 0x%02X\n",
+		       (unsigned int)SPIKE_DEVNUM2, (unsigned int)SPIKE_DEVNUM2,
+		       SPIKE_DTYPE2);
+	}
 	printk("Body in RAM: [devnum_hi][dtype][ttype][BYTE 3][d0..d7]  "
 	       "- byte 3 is the field under test\n");
 	printk("P lines: t/dt/air in us, dt against the previous frame of this "
@@ -540,11 +563,15 @@ int main(void)
 		 * real value, so a stuck RXMATCH cannot be mistaken for a
 		 * working one. */
 		prefix_onair[i] = (uint8_t)(0x11u * (i + 1u));
-		if (prefix_onair[i] == DEVNUM_LO) {
-			prefix_onair[i] = (uint8_t)(DEVNUM_LO ^ 0xFFu);
+		while (prefix_onair[i] == DEVNUM_LO ||
+		       (SPIKE_DEVNUM2 != 0u && prefix_onair[i] == DEVNUM2_LO)) {
+			prefix_onair[i] = (uint8_t)(prefix_onair[i] + 0x07u);
 		}
 	}
 	prefix_onair[SPIKE_REAL_SLOT] = DEVNUM_LO;
+	if (SPIKE_DEVNUM2 != 0u) {
+		prefix_onair[SPIKE_REAL_SLOT2] = DEVNUM2_LO;
+	}
 
 	timebase_start();
 

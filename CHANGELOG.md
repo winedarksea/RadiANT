@@ -11,6 +11,29 @@ reads.
 
 ## [Unreleased]
 
+### Added
+
+- **ANT+ Bike Radar (device type 0x28).** Codecs and a radar master
+  (`radiant_profile_radar.c`), a bridge adapter publishing nearest-target
+  range, closing speed, side, threat, target count and availability with the
+  profile's 2 s target timeout (opt-in, `CONFIG_ANT_DONGLE_RADAR`), the Python
+  mirror, and `ant_sim.py --profile radar` scenarios. Cross-checked on air
+  against a Varia RTL510, RTL515 and RearVue 820; a Garmin Edge paired with the
+  simulated radar and showed its vehicles. Telemetry only, not a certified
+  radar display.
+- **Capture tools.** `tools/ant_record.py` (scan or pinned channels, message
+  kind, RSSI, receiver timestamps, scheduled acked sends, walk-test marks),
+  `.antcap` v2 (kind and RSSI columns; v1 files still read), `ant_sim.py
+  --replay`, and `tools/promisc_log.py` for the promiscuous sniffer, which
+  now takes its device numbers from the build line.
+
+### Fixed
+
+- **Acknowledged messages to Garmin radars were always reported failed.** The
+  radars acknowledge with control byte `0xF3`, and RadiANT's frame decoder
+  required bits 2:0 to be `010`. Receiving now ignores bit 0; what RadiANT
+  transmits is unchanged. Before: 0 of 24 completed; after: 6 of 6.
+
 ## [1.3.0] - 2026-11-25
 
 ### Added

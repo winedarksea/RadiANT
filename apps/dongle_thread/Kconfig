@@ -682,6 +682,21 @@ config ANT_DONGLE_MATTER_MAP
 	  .config gains one `# CONFIG_ANT_DONGLE_MATTER_MAP is not set` COMMENT
 	  line. Its image is unchanged.
 
+config ANT_DONGLE_RADAR
+	bool "Decode ANT+ bike radar (device type 0x28)"
+	depends on ANT_DONGLE_PROFILES_EXTRA
+	default n
+	help
+	  Discover bike radars (0x28 at 4084 counts) in src/self_channels.c
+	  and publish nearest-target range, closing speed, side, threat,
+	  target count and an "available" flag through
+	  radiant_radar_adapter.c, with the profile's 2 s target timeout
+	  ticked from bridge_pump.c.
+
+	  Default n until the live gate (a real radar's targets reaching MQTT
+	  and clearing within 2 s) has passed on this image. Telemetry only:
+	  not a certified radar display.
+
 config ANT_DONGLE_PROFILES_EXTRA
 	bool "Decode more than heart rate: power, FE-C, environment, common pages"
 	default y if ANT_DONGLE_MATTER

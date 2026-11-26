@@ -34,3 +34,14 @@ find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(ant_spike_promisc)
 
 target_sources(app PRIVATE src/main.c)
+
+# Which device(s) to log, without a source edit. NEEDS --no-sysbuild: under
+# sysbuild these stay in the sysbuild cache and never reach the image, which
+# then silently listens for the defaults (found 2026-11-25).
+#   west build --no-sysbuild ... -- -DSPIKE_DEVNUM=1234 -DSPIKE_DTYPE=0x28 -DSPIKE_TTYPE=5 #                     -DSPIKE_DEVNUM2=5678 -DSPIKE_DTYPE2=0x23
+# Unset ones keep src/main.c's defaults (device 14871, type 0x0B, trans 5).
+foreach(var SPIKE_DEVNUM SPIKE_DTYPE SPIKE_TTYPE SPIKE_DEVNUM2 SPIKE_DTYPE2)
+  if(DEFINED ${var})
+    target_compile_definitions(app PRIVATE ${var}=${${var}}u)
+  endif()
+endforeach()

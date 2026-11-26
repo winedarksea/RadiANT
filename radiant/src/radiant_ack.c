@@ -89,7 +89,8 @@ uint8_t radiant_transfer_reply_ctrl(uint8_t data_ctrl)
 
 bool radiant_transfer_ack_matches(uint8_t data_ctrl, uint8_t ack_ctrl)
 {
-	if (!radiant_ctrl_low_ok(data_ctrl) || !radiant_ctrl_low_ok(ack_ctrl)) {
+	/* data_ctrl is what WE sent (strict); ack_ctrl came off the air. */
+	if (!radiant_ctrl_low_ok(data_ctrl) || !radiant_ctrl_low_ok_rx(ack_ctrl)) {
 		return false;
 	}
 	if (!radiant_ctrl_is_exchange(data_ctrl) || !radiant_ctrl_is_exchange(ack_ctrl)) {
@@ -116,7 +117,7 @@ bool radiant_transfer_ack_matches(uint8_t data_ctrl, uint8_t ack_ctrl)
 
 bool radiant_transfer_ack_is_stale(uint8_t data_ctrl, uint8_t ack_ctrl)
 {
-	if (!radiant_ctrl_low_ok(data_ctrl) || !radiant_ctrl_low_ok(ack_ctrl)) {
+	if (!radiant_ctrl_low_ok(data_ctrl) || !radiant_ctrl_low_ok_rx(ack_ctrl)) {
 		return false;
 	}
 	if (!radiant_ctrl_is_exchange(data_ctrl) || !radiant_ctrl_is_exchange(ack_ctrl)) {

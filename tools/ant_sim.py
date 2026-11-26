@@ -1084,6 +1084,181 @@ class StrideSensor(Sensor):
             calories=int(self.calories) & 0xFF)
 
 
+class RadarSensor(Sensor):
+    """ANT+ Bike Radar (0x28) playing a scripted traffic scenario.
+
+    Page selection is ap.RadarMaster (the mirror of radiant_profile_radar.c):
+    page 48 with one background page in 65, 48/49 alternating above four
+    targets, page 87 in an error, the 1-in-8 status interleave around a
+    shutdown. Pages a display sends (page 2 commands, page 70 requests)
+    reach it through on_rx(), so an Edge can shut the sim down.
+
+    Scenarios (--radar-scenario):
+      car       one vehicle every 20 s, 120 m out, closing at 8 m/s
+      fast      the same at 16 m/s ("fast approach", threat 2)
+      traffic   six vehicles staggered 8 m apart: more than four targets,
+                so pages 48 and 49 alternate
+      error     clean for 10 s, then 10 s of error page 87 (unit skew,
+                warning), repeating
+      shutdown  one car, then at 15 s the radar decides to power off
+                (Shutdown Requested, abortable by a display)
+      idle      no targets at all - what a parked unit sends
+    The threat-2 threshold (12 m/s) is this sim's choice: neither the spec
+    nor the walk tests pin one.
+    """
+
+    device_type = ap.RDR_DEVICE_TYPE
+    period = ap.RDR_PERIOD
+    label = "bike radar"
+    SCENARIOS = ("car", "fast", "traffic", "error", "shutdown", "idle")
+    FAST_MPS = 12.0
+
+    def __init__(self, *args, scenario: str = "car", **kwargs):
+        super().__init__(*args, **kwargs)
+        if scenario not in self.SCENARIOS:
+            raise ValueError(f"unknown radar scenario {scenario!r}")
+        self.scenario = scenario
+        battery = bytearray(ap.encode_common_82(0x53, 4, 1))
+        battery[2] = 0x01           # one battery, as all three Garmin units
+        self.master = ap.RadarMaster({
+            0x50: ap.encode_common_80(HW_REVISION, MANUFACTURER_ID,
+                                      MODEL_NUMBER),
+            0x51: ap.encode_common_81(SW_REVISION, self.serial_number),
+            0x52: bytes(battery),
+        })
+        self.label = f"bike radar ({scenario})"
+        self.shutdown_begun = False
+
+    def vehicles(self) -> list[tuple[float, float]]:
+        """(range m, closing speed m/s) of every vehicle in view at self.t."""
+        s = self.scenario
+        if s == "idle":
+            return []
+        if s == "traffic":
+            cycle, speed = 30.0, 6.0
+            phase = self.t % cycle
+            return [(120.0 - speed * phase + 8.0 * i, speed) for i in range(6)
+                    if 0.0 < 120.0 - speed * phase + 8.0 * i <= 196.0]
+        speed = 16.0 if s == "fast" else 8.0
+        phase = self.t % 20.0
+        rng = 120.0 - speed * phase
+        return [(rng, speed)] if rng > 0.0 else []
+
+    def advance(self, dt: float) -> None:
+        targets = []
+        for rng, speed in sorted(self.vehicles()):
+            threat = 2 if speed >= self.FAST_MPS else 1
+            targets.append((threat, 0, min(63, round(rng / 3.125)),
+                            min(15, round(speed / 3.04))))
+        self.master.set_targets(targets)
+        if self.scenario == "error":
+            self.master.error = ((0x0F, 1, 1, 0xFFFFFFFF)
+                                 if (self.t % 20.0) >= 10.0 else None)
+        if (self.scenario == "shutdown" and self.t >= 15.0
+                and not self.shutdown_begun):
+            self.shutdown_begun = True
+            self.master.begin_shutdown(False)
+
+    def on_rx(self, payload: bytes) -> None:
+        if self.master.rx(payload):
+            print(f"  radar: display sent {payload.hex()} -> state "
+                  f"{ap.RDR_STATE[self.master.state]}")
+
+    def next_payload(self):
+        self.t += self.period_s
+        self.messages += 1
+        self.advance(self.period_s)
+        payload = self.master.next()
+        # Powered off: a real radar closes its channel. The sim keeps the
+        # last page in the buffer (nothing written) and says so once.
+        if payload is None and not getattr(self, "_said_off", False):
+            self._said_off = True
+            print("  radar: shutdown pattern complete - a real unit "
+                  "would power off now")
+        return payload
+
+
+class ReplaySensor(Sensor):
+    """Plays a captured device's payloads back, in order, one per EVENT_TX.
+
+    Generic, not profile-specific: whatever the capture holds for one
+    (device type, device number) goes back on the air under that channel ID,
+    common pages included - the capture already carries the device's own
+    rotation, so the base class's common-page insertion is bypassed.
+
+    Only master-direction records are played (v1 lines, and v2 kinds B/A/S);
+    a display's commands (lower-case kinds) are not the sensor's to send.
+    Frames the recorder MISSED are filled by repeating the previous payload
+    (fill_gaps): the real master transmitted in that slot, and a replay that
+    dropped the slot would run the scenario faster than it happened. At the
+    end the sequence loops.
+    """
+
+    label = "capture replay"
+
+    def __init__(self, channel: int, trans_type: int, path: str,
+                 device: tuple[int, int] | None = None,
+                 period: int | None = None, fill_gaps: bool = True):
+        records = [r for r in ap.read_capture_records(path)
+                   if r.kind is None or r.kind.isupper()]
+        if not records:
+            raise ValueError(f"{path}: no master-direction records")
+        if device is None:
+            counts: dict[tuple[int, int], int] = {}
+            for r in records:
+                key = (r.device_type, r.device_number)
+                counts[key] = counts.get(key, 0) + 1
+            device = max(counts, key=counts.get)
+        records = [r for r in records
+                   if (r.device_type, r.device_number) == tuple(device)]
+        if not records:
+            raise ValueError(f"{path}: nothing from device {device}")
+        self.device_type = device[0]
+        if period is None:
+            period = replay_period(records, device[0])
+        self.period = period
+        super().__init__(channel, device[1], trans_type,
+                         Signal(0, 0, random.Random(0)),
+                         Signal(0, 0, random.Random(0)))
+        self.frames = replay_frames(records, period / ANT_TICKS_PER_S,
+                                    fill_gaps)
+        self.index = 0
+        self.label = (f"replay of {Path(path).name} "
+                      f"(0x{device[0]:02X} #{device[1]}, "
+                      f"{len(self.frames)} slots)")
+
+    def next_payload(self) -> bytes:
+        self.t += self.period_s
+        self.messages += 1
+        payload = self.frames[self.index % len(self.frames)]
+        self.index += 1
+        return payload
+
+
+def replay_period(records, device_type: int) -> int:
+    """The profile's period if PROFILES knows the device type; otherwise the
+    median spacing of the capture, rounded to ticks."""
+    for prof in ap.PROFILES.values():
+        if prof.get("device_type") == device_type:
+            return prof["period"]
+    gaps = sorted(b.t - a.t for a, b in zip(records, records[1:], strict=False)
+                  if b.t > a.t)
+    if not gaps:
+        return 8192
+    return round(gaps[len(gaps) // 2] * ANT_TICKS_PER_S)
+
+
+def replay_frames(records, period_s: float, fill_gaps: bool) -> list[bytes]:
+    """The payload per slot: a gap of n periods holds n-1 repeats."""
+    frames = [records[0].payload]
+    for prev, cur in zip(records, records[1:], strict=False):
+        if fill_gaps:
+            slots = round((cur.t - prev.t) / period_s)
+            frames.extend([prev.payload] * max(0, min(slots, 10000) - 1))
+        frames.append(cur.payload)
+    return frames
+
+
 SENSORS = {
     "power": StandardPowerSensor,
     "power-torque": TorquePowerSensor,
@@ -1098,6 +1273,7 @@ SENSORS = {
     # about 32 s.
     "fec-treadmill": TreadmillSensor,
     "sdm": StrideSensor,
+    "radar": RadarSensor,
 }
 
 # Which profiles --attest can be applied to. Device type 0x79 is absent
@@ -1154,6 +1330,13 @@ def run(dev, reader, sensors: list[Sensor], seconds: float,
                     and body[0] in by_channel):
                 stats[body[0]]["events"] += 1
                 send(by_channel[body[0]])
+            elif (msg_id in (0x4E, 0x4F) and len(body) >= 9
+                  and body[0] in by_channel
+                  and hasattr(by_channel[body[0]], "on_rx")):
+                # A page the display sent back to this master (a command
+                # or a page-70 request): only profiles that answer them
+                # define on_rx.
+                by_channel[body[0]].on_rx(bytes(body[1:9]))
 
         now = time.monotonic()
         for channel, sensor in by_channel.items():
@@ -1297,6 +1480,10 @@ def main() -> int:
                              "hostless node the epoch is the boot counter, and "
                              "a receiver recovers it by searching forward "
                              "against the beacon's key-group hint")
+    parser.add_argument("--radar-scenario", default="car",
+                        choices=RadarSensor.SCENARIOS,
+                        help="traffic script for --profile radar (see "
+                             "RadarSensor; default: car)")
     parser.add_argument("--bpm", type=float, default=DEFAULT_BPM,
                         help=f"heart rate to simulate, in beats per minute "
                              f"(default: {DEFAULT_BPM:.0f})")
@@ -1356,6 +1543,23 @@ def main() -> int:
     parser.add_argument("--record", metavar="FILE",
                         help="write the transmitted payloads to a capture "
                              "file (required by --dry-run)")
+    parser.add_argument(
+        "--replay", metavar="FILE.antcap",
+        help="play a capture back as a master instead of simulating a "
+             "profile: one device's payloads, in order, under its own device "
+             "type and number (see ReplaySensor). --trans-type still applies")
+    parser.add_argument(
+        "--replay-device", metavar="DT:DN",
+        help="which device of a multi-device capture to replay (default: the "
+             "one with the most records)")
+    parser.add_argument(
+        "--replay-period", type=int, metavar="TICKS",
+        help="channel period for --replay (default: the profile's, else the "
+             "capture's median spacing)")
+    parser.add_argument(
+        "--replay-no-fill", action="store_true",
+        help="do not repeat the previous payload into slots the recorder "
+             "missed")
     parser.add_argument("-q", "--quiet", action="store_true")
     args = parser.parse_args()
 
@@ -1383,6 +1587,18 @@ def main() -> int:
                   f"{ai.TIER_DESCRIPTIONS[identity.tier]}")
 
     def build_sensors() -> list[Sensor]:
+        if args.replay:
+            device = None
+            if args.replay_device:
+                dt, dn = (int(v, 0) for v in args.replay_device.split(":"))
+                device = (dt, dn)
+            sensor = ReplaySensor(args.channel, args.trans_type, args.replay,
+                                  device=device, period=args.replay_period,
+                                  fill_gaps=not args.replay_no_fill)
+            if args.rf_freq is not None:
+                sensor.rf_freq = args.rf_freq
+            sensor.tx_power = args.tx_power
+            return [sensor]
         built = []
         for index, name in enumerate(profiles):
             rng = random.Random(args.seed + index)
@@ -1392,6 +1608,8 @@ def main() -> int:
                               speed_kph=args.speed)
             elif name == "heart-rate":
                 kwargs = dict(bpm=args.bpm)
+            elif name == "radar":
+                kwargs = dict(scenario=args.radar_scenario)
             sensor = SENSORS[name](
                 args.channel + index, base_device_number + index,
                 args.trans_type,

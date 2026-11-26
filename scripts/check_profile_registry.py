@@ -130,6 +130,7 @@ ANT_PAGES_TYPES = [
     ("RD_DEVICE_TYPE", "RD_PERIOD"),
     ("TRK_DEVICE_TYPE", "TRK_PERIOD"),
     ("CTRL_DEVICE_TYPE", "CTRL_PERIOD"),
+    ("RDR_DEVICE_TYPE", "RDR_PERIOD"),
     # The treadmill's two masters, cross-checked like the rest: 8134 and 8192
     # are one digit apart, and a channel told the wrong one simply never opens.
     ("FEC_DEVICE_TYPE", "FEC_PERIOD"),
@@ -154,6 +155,7 @@ ANT_PAGES_PERIOD_SETS = [
     ("RD_DEVICE_TYPE", "RD_PERIOD", "RD_PERIODS"),
     ("TRK_DEVICE_TYPE", "TRK_PERIOD", "TRK_PERIODS"),
     ("CTRL_DEVICE_TYPE", "CTRL_PERIOD", "CTRL_PERIODS"),
+    ("RDR_DEVICE_TYPE", "RDR_PERIOD", "RDR_PERIODS"),
     ("FEC_DEVICE_TYPE", "FEC_PERIOD", "FEC_PERIODS"),
     ("SDM_DEVICE_TYPE", "SDM_PERIOD", "SDM_PERIODS"),
 ]

@@ -243,7 +243,7 @@ int radiant_ctrl_decode(uint8_t ctrl, struct radiant_ctrl_fields *out)
 	if (out == NULL) {
 		return RADIANT_FRAME_EINVAL;
 	}
-	if (!radiant_ctrl_low_ok(ctrl)) {
+	if (!radiant_ctrl_low_ok_rx(ctrl)) {
 		return RADIANT_FRAME_ECTRL;
 	}
 
@@ -295,7 +295,7 @@ uint8_t radiant_ctrl_reply_for(uint8_t data_ctrl)
 
 enum radiant_msg_type radiant_frame_msg_type(uint8_t ctrl_byte)
 {
-	if (!radiant_ctrl_low_ok(ctrl_byte)) {
+	if (!radiant_ctrl_low_ok_rx(ctrl_byte)) {
 		return RADIANT_MSG_UNKNOWN;
 	}
 
@@ -724,7 +724,7 @@ int radiant_frame_lr_parse(const uint8_t *body, uint8_t body_len,
 		return RADIANT_FRAME_ETRUNC;
 	}
 
-	if (!radiant_ctrl_low_ok(body[3])) {
+	if (!radiant_ctrl_low_ok_rx(body[3])) {
 		return RADIANT_FRAME_ECTRL;
 	}
 
@@ -1054,7 +1054,7 @@ int radiant_frame_decode(enum radiant_frame_cfg cfg, const struct radiant_frame_
 	 * Spike B frames) - checking bits 4:0 against payload_len + 2 instead
 	 * (as an earlier version did) rejected every valid slave frame. */
 	ctrl_byte = in->body[hdr - 1];
-	if (!radiant_ctrl_low_ok(ctrl_byte)) {
+	if (!radiant_ctrl_low_ok_rx(ctrl_byte)) {
 		return RADIANT_FRAME_ECTRL;
 	}
 
@@ -1150,7 +1150,7 @@ int radiant_frame_from_bytes(enum radiant_frame_cfg cfg, const uint8_t *buf, siz
 
 	/* The one thing the byte itself has to satisfy. */
 	ctrl_byte = buf[(size_t)addr_len + (size_t)hdr - 1u];
-	if (!radiant_ctrl_low_ok(ctrl_byte)) {
+	if (!radiant_ctrl_low_ok_rx(ctrl_byte)) {
 		return RADIANT_FRAME_ECTRL;
 	}
 

@@ -210,6 +210,37 @@ Driven by `tools/ant_ack_pair.py` (device 14871). Analysis and counts are in
   times in all, the original plus 5, at ~3142 µs. A lost mid-burst ACK is
   retried ~3110-3140 µs after the previous attempt.
 
+## The 2026-11-25 Garmin radar captures (`2026-11-25-varia-*`, `-gate4-*`, `-ack*`)
+
+**Genuine third-party captures** (three Garmin units the owner has), recorded
+for the Bike Radar profile (`docs/device-profiles.md` §3.18, where each finding
+is tagged with the capture name below). Committable as golden vectors under
+this README's rules; the distinct frames are in `tools/vectors/varia-*.antcap`.
+
+Rig: Pro Micro `EE6986854FD72803` (RadiANT, master 93b8079; from the ack-fix
+captures on, master 93b8079 + the 0xF3 fix, sha256 c57d82da…) and the Garmin
+USB-m `006` as a same-window control, both running `tools/ant_record.py`
+(`.antcap` v2, RSSI only from RadiANT - the Garmin reports type 0x10). Units
+on a table about 1-3 m from the dongles: device 27467 (model 2954, inferred
+RTL510, SW 0x25), 59429 (3592, RTL515, SW 0x21/0x28), 25738 (4684, RearVue
+820, SW 0x43). The commands are in each file's second line.
+
+| Capture | What |
+|---|---|
+| `c1-scan-*` | 120 s wildcard Rx scan: channel IDs, period, page mix |
+| `c2-idle-*` | 600 s idle. **Not idle throughout**: the owner's Edge connected at ~102 s, formed a light network (RearVue main, RTL515 secondary), set mode 4, then lights off + radar Shutdown at ~138 s; the RearVue's radar stopped 120 s later, the RTL515's 30 s after that. RTL510 untouched |
+| `c3-walk-*` | 720 s of hallway walks (10-20 m, loosely patterned) plus the same Edge session at ~217-237 s |
+| `c4-request-*`, `c4-ackctl-*` | page 70 requests from RadiANT to each radar; the Garmin vs RadiANT acked control |
+| `c5a-abort-*`, `c5b-shutdown-*` | Shutdown (+ Abort 1.5 s later) / Shutdown alone, sent by the **Garmin** (confirmed delivery); RadiANT scan records |
+| `c7-modes-*` | 180 s of light-mode button cycling, each unit in turn |
+| `gate4-*` | the radar simulator (`ant_sim.py --profile radar`, device 4242, TI LaunchXL) for an Edge; the Edge showed the vehicles |
+| `ackbug-*`, `ackfix-*` | the radiant `0xF3` acknowledgement bug: `promisc` sniffer on the L15 (device 27467) shows the radar's `0xF3` ack at +1562 µs; then RadiANT before (TX_FAILED) and after the fix (TX_COMPLETED) |
+
+Trap for the next session: `radiant/spike/promisc`'s `-DSPIKE_DEVNUM=...`
+reaches the image only with `west build --no-sysbuild`; under sysbuild the
+variables stay in the sysbuild cache and the sniffer silently listens for its
+default device 14871.
+
 ## The format
 
 Line-oriented ASCII, one packet per line, defined by `format_capture_line()` /

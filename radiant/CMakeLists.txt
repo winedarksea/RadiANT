@@ -169,6 +169,7 @@ if(CONFIG_RADIANT_PROFILES)
     src/profiles/radiant_profile_power.c
     src/profiles/radiant_profile_power_decode.c
     src/profiles/radiant_profile_private.c
+    src/profiles/radiant_profile_radar.c
     src/profiles/radiant_profile_rd.c
     src/profiles/radiant_profile_sched.c
     src/profiles/radiant_profile_schedule.c
@@ -186,6 +187,7 @@ if(CONFIG_RADIANT_BRIDGE)
     src/bridge/radiant_common_adapter.c
     src/bridge/radiant_env_adapter.c
     src/bridge/radiant_rd_adapter.c
+    src/bridge/radiant_radar_adapter.c
     src/bridge/radiant_binding.c
     # Pure helpers with no sink, here so radiant/tests can drive them.
     src/bridge/radiant_naming.c

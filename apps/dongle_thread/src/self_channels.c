@@ -191,6 +191,12 @@ static const struct self_profile self_profiles[] = {
 	{ 0x19u, 8192u,  SELF_SEARCH_TICKS_45_S, "environment (4 Hz)" },
 	{ 0x19u, 65535u, SELF_SEARCH_TICKS_45_S, "environment (0.5 Hz)" },
 #endif
+#ifdef CONFIG_ANT_DONGLE_RADAR
+	/* RADIANT_PROFILE_RADAR_PERIOD: 4084 counts, ~8.02 Hz (measured 4084.0 on
+	 * three Garmin units). A combined radar + tail light also opens 0x23
+	 * on the same device number; only 0x28 is discovered here. */
+	{ 0x28u, 4084u, SELF_SEARCH_TICKS_25_S, "bike radar" },
+#endif
 };
 
 #define SELF_PROFILE_N ARRAY_SIZE(self_profiles)

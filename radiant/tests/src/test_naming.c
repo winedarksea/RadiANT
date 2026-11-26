@@ -182,6 +182,13 @@ ZTEST(radiant_naming, test_the_series_a_real_sensor_carries_all_get_their_own_na
 		{ RADIANT_FIELD_PERCENTAGE, 0x06u },  { RADIANT_FIELD_LENGTH, 0x07u },
 	};
 
+	static const struct field radar[] = {
+		{ RADIANT_FIELD_ENUM_GENERIC, 0x00u }, { RADIANT_FIELD_BOOLEAN_STATE, 0x10u },
+		{ RADIANT_FIELD_ENUM_GENERIC, 0x11u }, { RADIANT_FIELD_LENGTH, 0x12u },
+		{ RADIANT_FIELD_SPEED, 0x13u },        { RADIANT_FIELD_ENUM_GENERIC, 0x14u },
+		{ RADIANT_FIELD_ENUM_GENERIC, 0x15u }, { RADIANT_FIELD_ENUM_GENERIC, 0x16u },
+	};
+
 	const struct {
 		const char         *what;
 		uint8_t             devtype;
@@ -198,6 +205,7 @@ ZTEST(radiant_naming, test_the_series_a_real_sensor_carries_all_get_their_own_na
 		{ "unlearned equipment", DEVTYPE_FEC, 0u, fec, ARRAY_SIZE(fec) },
 		{ "environment", DEVTYPE_ENV, 0u, env, ARRAY_SIZE(env) },
 		{ "running dynamics", 0x1Eu, 0u, rd, ARRAY_SIZE(rd) },
+		{ "bike radar", 0x28u, 0u, radar, ARRAY_SIZE(radar) },
 		{ "an unknown device type", 0x5Cu, 0u, hr, ARRAY_SIZE(hr) },
 	};
 

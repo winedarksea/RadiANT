@@ -4908,7 +4908,9 @@ static void tracked_bad_ctrl_is_a_miss(uint8_t ctrl)
 
 ZTEST(api, test_a_clean_frame_that_does_not_decode_is_a_miss)
 {
-	tracked_bad_ctrl_is_a_miss(0x0Bu);
+	/* 0x0C, not 0x0B: bit 0 is don't-care on receive (a Garmin Varia's
+	 * ack sets it), so 0x0B is a legal broadcast now. */
+	tracked_bad_ctrl_is_a_miss(0x0Cu);
 }
 
 ZTEST(api, test_a_tracked_slave_does_not_re_anchor_on_an_unknown_opener)
@@ -4933,7 +4935,7 @@ ZTEST(api, test_only_undecodable_frames_send_the_channel_back_to_search)
 	for (i = 0u; i < 16u &&
 		     radiant_channel_state_get(CH) == RADIANT_CH_STATE_TRACKING;
 	     i++) {
-		(void)air_clean_tt(dev, 0x0Bu, 0x0Bu, 5u);
+		(void)air_clean_tt(dev, 0x0Bu, 0x0Cu, 5u);
 	}
 
 	zassert_equal(RADIANT_CH_STATE_SEARCHING, radiant_channel_state_get(CH),
@@ -5003,7 +5005,7 @@ ZTEST(api, test_a_bad_frame_after_a_repaired_one_keeps_the_window_heard)
 
 	/* The undecodable frame, late in the same window. */
 	len = fake_radio_build_ant_frame(frame, dev, 0x0Bu, 5u, peer_payload);
-	frame[6] = 0x0Bu;
+	frame[6] = 0x0Cu; /* bits 2:1 = 10: undecodable on receive */
 	zassert_equal(RADIANT_RADIO_OK_RC,
 		      fake_radio_air_frame(w->t_open + ((w->t_close - w->t_open) *
 							7u / 8u),

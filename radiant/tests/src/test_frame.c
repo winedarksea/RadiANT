@@ -1017,14 +1017,15 @@ ZTEST(radiant_frame, test_flat_parse_ignores_everything_but_bits_2_0)
 				  NULL);
 	}
 
-	/* And the seven illegal low-bit values, under three different flag
+	/* And the six illegal low-bit values, under three different flag
 	 * sets, because a parser that masked the wrong way round would pass one
-	 * and fail another. */
+	 * and fail another. 011 is legal on receive (a Garmin Varia's ack). */
 	static const uint8_t flag_sets[] = { 0x00u, 0xA0u, 0x80u };
 
 	for (size_t t = 0; t < ARRAY_SIZE(flag_sets); t++) {
 		for (unsigned int low = 0; low < 8u; low++) {
-			if (low == RADIANT_CTRL_LOW_VALUE) {
+			if (low == RADIANT_CTRL_LOW_VALUE ||
+			    low == (RADIANT_CTRL_LOW_VALUE | 1u)) {
 				continue;
 			}
 			memcpy(buf, spike15, sizeof(spike15));
