@@ -158,6 +158,7 @@ ZTEST(radiant_naming, test_the_series_a_real_sensor_carries_all_get_their_own_na
 		{ RADIANT_FIELD_OCCUPANCY, RADIANT_RULE_FIELD_ACTIVE },
 		{ RADIANT_FIELD_OCCUPANCY, RADIANT_RULE_FIELD_AT_REST },
 		{ RADIANT_FIELD_OCCUPANCY, RADIANT_RULE_FIELD_ZONE2 },
+		{ RADIANT_FIELD_OCCUPANCY, RADIANT_RULE_FIELD_ZONE3 },
 	};
 	static const struct field power[] = {
 		{ RADIANT_FIELD_ACTIVE_POWER, 0x00u }, { RADIANT_FIELD_EVENT_COUNT, 0x01u },
@@ -288,6 +289,8 @@ ZTEST(radiant_naming, test_the_five_occupancy_booleans_are_distinguishable)
 			  "Heart Rate 8842 At Rest");
 	zassert_str_equal(occupancy_name(DEVTYPE_HR, 8842u, 0u, RADIANT_RULE_FIELD_ZONE2),
 			  "Heart Rate 8842 Zone 2");
+	zassert_str_equal(occupancy_name(DEVTYPE_HR, 8842u, 0u, RADIANT_RULE_FIELD_ZONE3),
+			  "Heart Rate 8842 Zone 3");
 	zassert_str_equal(occupancy_name(DEVTYPE_FEC, 51234u, FEC_TREADMILL,
 					 RADIANT_RULE_FIELD_EQUIPMENT_IN_USE),
 			  "Treadmill 51234 In Use");

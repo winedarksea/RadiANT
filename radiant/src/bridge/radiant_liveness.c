@@ -6,6 +6,9 @@
 #include <stdbool.h>
 #include <string.h>
 
+#include <zephyr/sys/atomic.h>
+#include <zephyr/sys/util.h>
+
 #include <radiant/radiant_binding.h>
 #include <radiant/radiant_bridge.h>
 #include <radiant/radiant_liveness.h>
@@ -54,11 +57,54 @@ static struct source_state sources[RADIANT_BINDING_MAX];
 
 static struct radiant_liveness_stats stats;
 
+/*
+ * BIT(source): a bind or unbind landed and the source's row must be wiped
+ * before anything else reads it. The tick's own "b == NULL" sweep only
+ * catches an unbind that is still unbound when it runs; a rebind into the
+ * same slot between two ticks (evict + pair, or a re-pair) slipped past it
+ * and let the new sensor inherit the old one's last reading and STALE latch.
+ * Deferred for the reason radiant_rules.c's reset_pending is: the callback
+ * runs on the self-channel thread, the table is the pump's.
+ */
+static atomic_t reset_pending;
+
 void radiant_liveness_reset(void)
 {
 	memset(table, 0, sizeof(table));
 	memset(sources, 0, sizeof(sources));
 	memset(&stats, 0, sizeof(stats));
+	(void)atomic_clear(&reset_pending);
+}
+
+static void liveness_binding_changed(uint32_t source, const struct radiant_binding *b)
+{
+	ARG_UNUSED(b);
+	if (source < RADIANT_BINDING_MAX) {
+		(void)atomic_or(&reset_pending, (atomic_val_t)BIT(source));
+	}
+}
+
+static void apply_resets(void)
+{
+	atomic_val_t pending = atomic_clear(&reset_pending);
+	uint32_t     src;
+	uint32_t     i;
+
+	if (pending == 0) {
+		return;
+	}
+	for (src = 0u; src < RADIANT_BINDING_MAX; src++) {
+		if ((pending & BIT(src)) == 0) {
+			continue;
+		}
+		for (i = 0u; i < RADIANT_LIVENESS_FIELDS_PER_SOURCE; i++) {
+			if (table[src][i].used) {
+				stats.tracked--;
+			}
+		}
+		memset(table[src], 0, sizeof(table[src]));
+		memset(&sources[src], 0, sizeof(sources[src]));
+	}
 }
 
 const struct radiant_liveness_stats *radiant_liveness_stats_get(void)
@@ -75,8 +121,9 @@ const struct radiant_liveness_stats *radiant_liveness_stats_get(void)
  *     as a fresh arrival would re-arm the edge from the edge, so a source that
  *     went away would produce one STALE record every 3x period forever instead
  *     of once.
- *   - DERIVED. Rule outputs (radiant_rules.c) are published on CHANGE only -
- *     an occupancy boolean that stays false is correct and silent - so they
+ *   - DERIVED. Rule outputs (radiant_rules.c) are published once on their
+ *     first input and then on CHANGE only - an occupancy boolean that stays
+ *     false is correct and silent - so they
  *     have no arrival interval to expire against. They are covered anyway:
  *     eval_activity() forces them false the moment the accumulator they are
  *     derived from arrives marked STALE.
@@ -97,6 +144,8 @@ static void liveness_publish(const struct radiant_sample *s)
 	struct entry *row = table[s->source];
 	struct entry *slot = NULL;
 	uint32_t      i;
+
+	apply_resets();
 
 	for (i = 0u; i < RADIANT_LIVENESS_FIELDS_PER_SOURCE; i++) {
 		if (row[i].used && row[i].field_id == s->field_id) {
@@ -137,6 +186,8 @@ uint32_t radiant_liveness_tick(uint64_t now_us)
 	uint32_t posted = 0u;
 	uint32_t src;
 	uint32_t i;
+
+	apply_resets();
 
 	for (src = 0u; src < RADIANT_BINDING_MAX; src++) {
 		const struct radiant_binding *b = radiant_binding_get(src);
@@ -213,4 +264,5 @@ uint32_t radiant_liveness_tick(uint64_t now_us)
 	return posted;
 }
 
-RADIANT_SINK_DEFINE(radiant_liveness_sink, liveness_want, liveness_publish, NULL);
+RADIANT_SINK_DEFINE(radiant_liveness_sink, liveness_want, liveness_publish,
+		    liveness_binding_changed);
