@@ -4908,8 +4908,9 @@ static void tracked_bad_ctrl_is_a_miss(uint8_t ctrl)
 
 ZTEST(api, test_a_clean_frame_that_does_not_decode_is_a_miss)
 {
-	/* 0x0C, not 0x0B: bit 0 is don't-care on receive (a Garmin Varia's
-	 * ack sets it), so 0x0B is a legal broadcast now. */
+	/* 0x0C, not 0x0B: bits 1:0 are don't-care on receive (a Garmin
+	 * Varia's ack sets bit 0, a legacy HR strap clears bit 1), so 0x0B is
+	 * a legal broadcast now. Bit 2 set is still undecodable. */
 	tracked_bad_ctrl_is_a_miss(0x0Cu);
 }
 
@@ -5005,7 +5006,7 @@ ZTEST(api, test_a_bad_frame_after_a_repaired_one_keeps_the_window_heard)
 
 	/* The undecodable frame, late in the same window. */
 	len = fake_radio_build_ant_frame(frame, dev, 0x0Bu, 5u, peer_payload);
-	frame[6] = 0x0Cu; /* bits 2:1 = 10: undecodable on receive */
+	frame[6] = 0x0Cu; /* bit 2 set: undecodable on receive */
 	zassert_equal(RADIANT_RADIO_OK_RC,
 		      fake_radio_air_frame(w->t_open + ((w->t_close - w->t_open) *
 							7u / 8u),

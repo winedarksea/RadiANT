@@ -1777,9 +1777,13 @@ Shutdown command, is what powers the radars down `[on-air: c2, c3]`.
 `TRANSFER_TX_FAILED` for acked messages a Garmin radar had received and acted on
 (0/24), while a Garmin USB-m in the same position got 4/4 completions. The
 radar's ACK frame carries control byte `0xF3`; `radiant_frame_decode()` and
-`radiant_transfer_ack_matches()` required bits 2:0 = `010`. Receive now checks
+`radiant_transfer_ack_matches()` required bits 2:0 = `010`. Receive then checked
 bits 2:1 only (`radiant_ctrl_low_ok_rx()`); transmit still sends `010`. After
-the fix: 6/6 completions across all three units `[on-air: ackfix-final]`.
+the fix: 6/6 completions across all three units `[on-air: ackfix-final]`. The
+same evening a legacy HR strap (#11625, type 0x78, trans 1) turned out to
+broadcast `0x08` (bits 2:0 = `000`) and was invisible to every RadiANT
+receiver, so receive now checks bit 2 only
+(`archive/captures/radio/2026-11-25-legacy-hrm-sniff.log`).
 
 **Code.** `include/radiant/radiant_profile_radar.h`,
 `src/profiles/radiant_profile_radar.c` (codecs and master),
