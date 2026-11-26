@@ -236,6 +236,9 @@ target_sources(app PRIVATE
   # every sink in this application, this one included.
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge/radiant_binding.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge/radiant_rules.c"
+  # Section 6.3-6.5 personalisation: the zone thresholds radiant_rules.c
+  # uses, prior or per-strap. src/test_hr_profile.c is its suite.
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/bridge/radiant_hr_profile.c"
   # The endpoint-name formatter. A pure function over three static tables and
   # NOT a sink, which is why it needs no registration anywhere: both sinks that
   # want a name call it directly. src/test_naming.c is its suite.

@@ -60,6 +60,12 @@
  * set of endpoints at every power cycle until the sixteen ran out - the exact
  * failure trap 8 is about, arrived at by following trap 8's own instructions.
  *
+ * (2026-11-26: that premise has since changed - src/binding_store.c persists
+ * bindings with their uuid, and a re-pair of a known channel ID keeps it. The
+ * channel-identity key below is kept anyway: it is still correct, it already
+ * matches every endpoint persisted before the change, and a user eviction
+ * mints a new uuid for the same sensor, which must not orphan its endpoints.)
+ *
  * What IS stable across a reboot is the sensor's ANT channel identity, so the
  * key persisted here is a 64-bit FNV-1a hash of (devnum, devtype, trans_type),
  * paired with the field_id - and, for a measured field, the field type too,
@@ -149,6 +155,7 @@ static_assert(RadiantMatter::kDeviceTypeOccupancySensor == RADIANT_MATTER_DEVTYP
 static_assert(RadiantMatter::kDeviceTypeTemperatureSensor == RADIANT_MATTER_DEVTYPE_TEMPERATURE_SENSOR, "");
 static_assert(RadiantMatter::kDeviceTypeHumiditySensor == RADIANT_MATTER_DEVTYPE_HUMIDITY_SENSOR, "");
 static_assert(RadiantMatter::kDeviceTypePressureSensor == RADIANT_MATTER_DEVTYPE_PRESSURE_SENSOR, "");
+static_assert(RadiantMatter::kDeviceTypeFlowSensor == RADIANT_MATTER_DEVTYPE_FLOW_SENSOR, "");
 
 /*
  * Attribute slots per endpoint. THREE, and the number is the pressure row:
@@ -473,6 +480,9 @@ bool ClusterIsServed(uint32_t cluster)
 	case Clusters::TemperatureMeasurement::Id:
 	case Clusters::RelativeHumidityMeasurement::Id:
 	case Clusters::PressureMeasurement::Id:
+	/* Only ever written when radiant_matter_set_hr_passenger(true) is in
+	 * effect - docs/radiant-bridge.md section 8.3b. */
+	case Clusters::FlowMeasurement::Id:
 		return true;
 	default:
 		/* Power Source, today. See "WHAT THIS FILE DOES NOT DO". */
@@ -492,6 +502,7 @@ Nrf::MatterBridgedDevice *MakeDevice(uint16_t deviceType, const char *uniqueID, 
 	case RadiantMatter::kDeviceTypeTemperatureSensor:
 	case RadiantMatter::kDeviceTypeHumiditySensor:
 	case RadiantMatter::kDeviceTypePressureSensor:
+	case RadiantMatter::kDeviceTypeFlowSensor:
 		return chip::Platform::New<MeasurementSensorDevice>(deviceType, uniqueID, label);
 	default:
 		return nullptr;

@@ -323,7 +323,8 @@ Consequences worth naming:
   re-arms its retained discovery message from it; the Matter sink adds or
   removes an endpoint. Neither polls.
 - **`binding_changed` runs on the caller's thread — the self-channel poll,
-  1536 B of stack — so it must not block.** No network I/O, and no lock that
+  1536 B of stack (2048 B with the binding store of section 5) — so it must
+  not block.** No network I/O, and no lock that
   network I/O is done under. The MQTT sink only records what it owes (a
   re-arm, and the released sensor's `"offline"` status) under a spinlock and
   publishes it from its keepalive thread and its publish path; the Matter sink
@@ -342,19 +343,38 @@ and an MQTT topic or a Matter endpoint has to survive a battery change and a
 re-pair. Worse, a device number collision across two straps in the same room is
 a one-in-65535 event that will happen at a trade show.
 
-The binding table is the pivot, and it **is specified to be persisted and is
-not yet**:
+The binding table is the pivot, and **it is persisted, by the application**.
+The table itself (`radiant/src/bridge/radiant_binding.c`) stays RAM only and
+storage-free, like the rest of `radiant/`; `apps/dongle_thread` keeps one
+record per paired channel ID and puts it back with `radiant_binding_restore()`
+(`src/binding_store.h`, `CONFIG_ANT_DONGLE_BINDING_STORE`, on wherever the
+settings subsystem is, which is every image layered on `thread.conf`):
 
-> **Corrected 2026-08-15.** This sentence read "and it is persisted", and the
-> code has never done that. `radiant/include/radiant/radiant_binding.h` says so in as
-> many words — "RAM-backed for now" — and the code is the truth. The consequence
-> is concrete and it is the reason this correction is a paragraph rather than a
-> word: **every reboot loses all bindings, and re-pairing mints a new `uuid`**,
-> hence new MQTT topics and a fresh set of Home Assistant entities. A dashboard
-> accumulates orphans on every power cut. For a bench that is a nuisance; for
-> the gym deployment of `docs/treadmill-reference-design.md` §8 it is a
-> prerequisite rather than a nicety, because the whole point of the `uuid` is
-> that it survives exactly this.
+- **Record v1**, 35 bytes under the settings key `radiant/bind/<n>`: version,
+  device number, device type, transmission type, `uuid`, label, channel
+  period and a bind sequence. The sequence decides which records get the self
+  channels at boot when there are more records than channels (the newest),
+  and the order a long press walks back through after a reboot.
+- **At boot** the newest records, one per self channel, are restored and their
+  channels come up **pinned, with no button press**. Every sink is told, as
+  for a fresh bind, so MQTT topics and Matter endpoints carry on under the
+  same identity.
+- **A re-pair of a channel ID that still has a record reuses its `uuid`.**
+- **A user eviction deletes the record**: the short press that frees the
+  longest-absent channel, and the long press. This is the per-binding reset,
+  and it calls `binding_store_on_evict(uuid)` so per-`uuid` data (section
+  6.5's histogram) can be erased with it. Pairing the same sensor after an
+  eviction mints a new `uuid`.
+- **A host taking a self channel keeps the record dormant**: the binding is
+  released, and the next boot pins the sensor again.
+- **Writes happen only on a bind and an eviction**, both behind the button.
+  Nothing a sensor transmits can cause a flash write.
+
+> **History.** Until 2026-11-26 this section said the table "is specified to be
+> persisted and is not yet" (corrected 2026-08-15 from an earlier "and it is
+> persisted" that the code never matched). Every reboot lost every binding and
+> each re-pair minted a new `uuid`, hence new MQTT topics, and a restored Matter
+> endpoint stayed unreachable until someone pressed `sw0`.
 
 ```
 binding[i] = {
@@ -367,11 +387,12 @@ binding[i] = {
 
 - `i` is what the bus carries as `source`. Every topic, endpoint and rule hangs
   off it, and none of them ever see a device number.
-- `uuid` is generated at first bind and **survives a re-pair of the same
-  physical strap**, which is how a HA entity keeps its history when the user
-  replaces a CR2032 and the strap re-rolls. Matching a re-paired strap back to
-  its `uuid` is a user action, not an inference — the bridge offers the last
-  binding with the same label and lets a human confirm.
+- `uuid` is generated at first bind and **survives a reboot and a re-pair of
+  the same channel ID** (the record above). A strap whose device number
+  re-rolls (a CR2032 change on some straps) is a new channel ID; matching it
+  back to its old `uuid` is a user action, not an inference — the bridge would
+  offer the last binding with the same label and let a human confirm. No such
+  UI exists yet, so today that re-pair is a new `uuid`.
 - Table capacity sizes the Matter endpoint count, the ANT tracked-channel count
   and the coexistence budget of section 7 **together**. Eight for the household
   SKU. Raising it is a radio decision before it is a memory decision.
@@ -448,6 +469,7 @@ The two zone outputs answer "is this person working hard, or clearly resting?"
 |---|---|
 | at rest | monitor worn **and** HR below the rest threshold |
 | training, zone 2 or above | monitor worn **and** HR at or above the Z2 threshold |
+| training, zone 3 or above | monitor worn **and** HR at or above the Z3 threshold |
 
 **Both require the monitor to be worn.** A strap on a table reads no pulse, and
 a bridge that reported "at rest" for it would switch the air conditioning off in
@@ -462,14 +484,25 @@ sensitive of the two models to differences in resting heart rate:
 HRR       = HR_max - HR_rest
 rest      < HR_rest + 0.15 x HRR
 zone 2+   >= HR_rest + 0.60 x HRR
+zone 3+   >= HR_rest + 0.70 x HRR
 ```
 
 With the population prior for an adult of unknown age and fitness —
 `HR_max ~ N(180, 15^2)`, `HR_rest ~ N(65, 10^2)` — that is **HRR = 115, rest
-below 82 bpm, zone 2 and above at 134 bpm**. Those two numbers are what a
+below 82 bpm, zone 2 and above at 134 bpm, zone 3 and above at 146 bpm**
+(rest is rounded down, the zones up). Those numbers are what a
 never-personalised bridge ships with, and they are good enough to separate a
 hard workout from clear rest, which is the whole use case. Nothing here claims
 to be a training tool.
+
+**The prior is Kconfig** (`CONFIG_RADIANT_BRIDGE_HR_MAX_PRIOR`, default 180,
+and `CONFIG_RADIANT_BRIDGE_HR_REST_PRIOR`, default 65). A single-user home
+sets them to the rider's own numbers and sets
+`CONFIG_RADIANT_BRIDGE_HR_PROFILES=0`; a shared gym keeps the population prior
+and lets 6.3 personalise each strap, because one fixed pair of numbers cannot
+be right for every member. Zone 3 was added (field id 5, after the equipment
+output, because ids are stable) because "zone 2 or above" alone could not
+drive a second fan speed.
 
 `hysteresis` and `dwell_s` still apply and are not polish: a 4 Hz stream
 crossing a bare threshold produces a boolean that chatters several times a
@@ -484,6 +517,10 @@ and the failure mode a gate would prevent — a wrong threshold flipping a
 boolean — is already handled by hysteresis and dwell.
 
 ### 6.3 The optional personalisation, and why it is 76 bytes
+
+**Implemented** (`radiant/src/bridge/radiant_hr_profile.c`, 2026-11-26). The
+notes below are the design; the paragraph at the end of this section says how
+it was made concrete.
 
 A per-binding histogram of observed non-zero heart rates, from which the two
 endpoints are estimated:
@@ -530,6 +567,21 @@ semantics never change, no Matter endpoint moves when personalisation is
 enabled, cold start needs no special case, and — see below — running out of
 storage is a graceful degradation rather than an error.
 
+**As implemented.** The conjugate update is written as a sample-count blend,
+`est = (prior x N0 + obs x N) / (N0 + N)`, where `N` is the histogram total in
+1 Hz samples and `N0 = CONFIG_RADIANT_BRIDGE_HR_PRIOR_WEIGHT_S` (default 1800:
+half an hour of wear weighs as much as the population prior). That is the
+formula above with the variance ratio expressed as a count, in integer
+arithmetic. Two additions the design did not have: the blended estimates are
+clamped to HR_max 140–220 and HR_rest 35–100, which alone guarantees HRR ≥ 40,
+so a strap that misreads for days cannot invert or collapse the zones; and
+readings outside 30–219 bpm are dropped rather than clamped into an end bin.
+The histogram is fed from the zone rule only while the strap is worn and
+reading, decimated to 1 Hz. **Thresholds are recomputed only when a binding
+first reports and at session end** (worn clears, or the source goes STALE),
+never mid-session, so a boolean never moves under a running automation because
+the estimate drifted.
+
 ### 6.4 The histogram store is capped, and eviction is not a failure
 
 **A gym may see thousands of heart-rate monitors.** The binding table is capped
@@ -548,6 +600,10 @@ So the store is capped independently:
   aggregate-only builds (section 10), where the bridge is deliberately not
   modelling individuals at all.
 
+Implemented as written. "Recently active" is a monotonic session sequence
+number stamped at attach and at each session end; there is no RTC. An evicted
+slot gets one gated save on its way out.
+
 That graceful path exists only because 6.3 made prior-only the `n = 0` case. A
 design with two implementations would have had to choose between a hard cap and
 an allocation failure.
@@ -563,6 +619,17 @@ It keys on `binding_uuid` (section 5) and **never** on the ANT device number, or
 a coin-cell change discards months of convergence. Two people sharing one strap
 corrupt each other's estimate; the answer is a per-binding reset, not an
 inference.
+
+**As implemented.** The library stays storage-free:
+`radiant_hr_profile_set_store()` takes load, save and erase callbacks, and
+`apps/dongle_thread` implements them with Zephyr settings under
+`radiant/hrp/<uuid hex>` (record v1: version byte, reserved byte, 38 bins).
+Writes are gated three ways: only at session end; only after at least 5 min
+of new worn samples since the last save; and at most 16 saves per slot per
+boot, so a spoofed strap that toggles worn cannot drive flash wear. The
+per-binding reset is user eviction (the button), which erases the profile with
+the binding record. The uuid is stable because bindings are persisted and a
+re-pair of a known channel ID keeps its uuid (section 5).
 
 ### 6.6 One honest bias, recorded rather than corrected
 
@@ -585,6 +652,18 @@ change-or-heartbeat contract — `publish if (changed by more than deadband) or
 (max_interval elapsed)`, floored by `min_interval`. ~4 Hz into MQTT is 345,000
 messages a day per strap, and Matter's attribute reporting has its own
 minimum-interval negotiation that a 4 Hz writer simply violates.
+
+
+**The rule outputs announce themselves once.** Every derived boolean is posted
+as its current value (normally `false`) on the first sample that feeds it for
+a bound source, and afterwards only on change. Before 2026-11-26 they were
+posted on change only, so an idle trainer or a strap that was never worn
+produced no record, and neither Matter nor MQTT discovery ever learned the
+output existed: no endpoint until first use. A Matter attribute holds its
+value, so the one announcement is enough and no heartbeat is needed for these.
+A bind or unbind resets the source's rule and liveness state (through
+`binding_changed`, applied on the pump thread), so a sensor that reuses a slot
+announces afresh instead of inheriting its predecessor's outputs.
 
 ---
 
@@ -1278,8 +1357,12 @@ three copies, and this is a new `field_id` beside the existing four.
 
 **The dwell is asymmetric the other way from §6.1's.** There is no assert dwell
 — waiting two seconds to believe a direct report only adds latency to a fact
-already established — and there is a short (5 s) clear dwell, so that a runner
-stepping off for a drink does not flicker a gym display. `STALE` still
+already established — and there is a clear dwell,
+`CONFIG_RADIANT_BRIDGE_RULES_EQUIPMENT_CLEAR_S` (default **30 s**; it was 5 s
+until 2026-11-26), so that a runner stepping off for a drink does not flicker a
+gym display. 5 s was too short for a trainer: FE-C trainers report READY
+whenever cadence is zero, so In Use cleared at every traffic light and every
+interval rest. `STALE` still
 overrides both, immediately, which is what stops an unplugged machine reading
 "in use" forever.
 
@@ -1593,6 +1676,17 @@ enables it has opted into a known trade with a documented reason.
 Three tiers of honesty, then, and they should be presented to the user in this
 order: booleans (correct and free), MQTT (correct and one add-on), passenger
 cluster (free and mislabelled).
+
+**Implemented, off by default.** `radiant_matter.c` has no Kconfig, so the
+switch is a runtime call, `radiant_matter_set_hr_passenger(bool)`; nothing calls
+it unless an image opts in, and `apps/dongle_thread` does so only with
+`CONFIG_ANT_DONGLE_MATTER_HR_PASSENGER=y` (default `n`). On, `0x26` heart rate
+gets a row: a Flow Sensor (`0x0306`) endpoint whose Flow Measurement
+`MeasuredValue` is bpm × 10 (the cluster's unit is 0.1 m³/h, so a controller
+shows the bpm figure as m³/h), with a 2 bpm deadband and a 60 s heartbeat. Heart
+rate streams, so that heartbeat really does fire, unlike the change-only
+occupancy row's. The endpoint is one more per strap out of the 16 of §8.1.
+`radiant_matter_reset()` does not turn the switch off.
 
 ### 8.4 The dongle as a Matter client — the latency floor
 
@@ -2140,7 +2234,7 @@ before anything expensive is built on top of them.
 | 4 | **Matter: commissioning and the §8.1 type map** — the four occupancy endpoints, plus `0x10` temperature and `0x11` humidity for any `0x60` source that announces them | The flash ceiling of §11, and it delivers tier 1 — the first end-to-end demo is strap → QR scan → four HA `binary_sensor`s, no host and nothing installed |
 | 5 | MQTT-over-Thread sink + discovery generator + the WebSerial provisioning page | Tier 2. Adds the number in bpm |
 | 6 | Personalisation §6.3–6.5: histogram, conjugate update, capped store, NVM on session end | Pure addition. No endpoint moves, because prior-only was already `n = 0` of the same path |
-| 7 | Matter remainder: the MEI cluster, client binding, page `0x10` as the reverse path, and the §8.3b passenger cluster behind its default-off switch | — |
+| 7 | Matter remainder: the MEI cluster, client binding, page `0x10` as the reverse path, and the §8.3b passenger cluster behind its default-off switch (the passenger has landed; the rest is open) | — |
 | 8 | BLE sink | — |
 
 **Phases 4 and 5 used to be the other way round, and that was an ordering

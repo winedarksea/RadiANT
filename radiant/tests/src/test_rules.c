@@ -35,12 +35,25 @@
 
 #include <radiant/radiant_binding.h>
 #include <radiant/radiant_bridge.h>
+#include <radiant/radiant_hr_profile.h>
 #include <radiant/radiant_rules.h>
 
-#define CAP_MAX 32
+#define CAP_MAX 128
+
+/* The source's default, repeated: radiant/tests does not enable
+ * RADIANT_BRIDGE_RULES, so the Kconfig symbol is never defined here. */
+#ifndef CONFIG_RADIANT_BRIDGE_RULES_EQUIPMENT_CLEAR_S
+#define CONFIG_RADIANT_BRIDGE_RULES_EQUIPMENT_CLEAR_S 30
+#endif
+#define EQUIPMENT_CLEAR_S ((uint32_t)CONFIG_RADIANT_BRIDGE_RULES_EQUIPMENT_CLEAR_S)
 
 static struct radiant_sample cap_buf[CAP_MAX];
+/* cap_first[i]: cap_buf[i] was the first record of its (source, field_id)
+ * since the last rules_test_reset() - the announcement emit() makes on an
+ * output's first input. Tracked across a test's own `cap_n = 0u` resets. */
+static bool              cap_first[CAP_MAX];
 static uint32_t          cap_n;
+static uint8_t           cap_seen[RADIANT_BINDING_MAX]; /* BIT(field_id) */
 
 static bool rule_cap_want(const struct radiant_sample *s)
 {
@@ -51,7 +64,14 @@ static bool rule_cap_want(const struct radiant_sample *s)
 
 static void rule_cap_publish(const struct radiant_sample *s)
 {
+	bool first = false;
+
+	if (s->source < RADIANT_BINDING_MAX && s->field_id < 8u) {
+		first = (cap_seen[s->source] & BIT(s->field_id)) == 0u;
+		cap_seen[s->source] |= (uint8_t)BIT(s->field_id);
+	}
 	if (cap_n < CAP_MAX) {
+		cap_first[cap_n] = first;
 		cap_buf[cap_n++] = *s;
 	}
 }
@@ -64,8 +84,20 @@ static void rules_test_reset(void *unused)
 	radiant_bridge_reset();
 	radiant_binding_init();
 	radiant_rules_reset();
+	radiant_hr_profile_set_store(NULL);
+	radiant_hr_profile_reset();
 	memset(cap_buf, 0, sizeof(cap_buf));
+	memset(cap_first, 0, sizeof(cap_first));
+	memset(cap_seen, 0, sizeof(cap_seen));
 	cap_n = 0u;
+}
+
+/* The bit a test would set by binding/unbinding through the real self-channel
+ * path: announce the change to every sink, rules included. */
+static void announce_binding(uint32_t source)
+{
+	radiant_bridge_binding_changed(source, radiant_binding_get(source));
+	memset(&cap_seen[source], 0, sizeof(cap_seen[source]));
 }
 
 /* Find the LAST captured derived sample with this field_id, or NULL. Tests
@@ -82,17 +114,28 @@ static const struct radiant_sample *last_with(uint8_t field_id)
 	return NULL;
 }
 
-/* How many times this output CHANGED. The rules publish on change only, so
- * this is the chatter count: a boolean that is meant to assert once and hold
- * must produce exactly one record over a long stream, and a count above one is
- * the flapping failure, not merely a noisy log. */
+/* The latest verdict for this output is "occupied". An output that has only
+ * been announced (false) or never posted at all is not. */
+static bool is_on(uint8_t field_id)
+{
+	const struct radiant_sample *s = last_with(field_id);
+
+	return s != NULL && s->raw != 0;
+}
+
+/* How many times this output CHANGED. The rules publish on change (plus one
+ * `false` announcement on an output's first input, which is not a change and
+ * is not counted), so this is the chatter count: a boolean that is meant to
+ * assert once and hold must produce exactly one record over a long stream,
+ * and a count above one is the flapping failure, not merely a noisy log. */
 static uint32_t count_with(uint8_t field_id)
 {
 	uint32_t i;
 	uint32_t n = 0u;
 
 	for (i = 0u; i < cap_n; i++) {
-		if (cap_buf[i].field_id == field_id) {
+		if (cap_buf[i].field_id == field_id &&
+		    !(cap_first[i] && cap_buf[i].raw == 0)) {
 			n++;
 		}
 	}
@@ -219,7 +262,7 @@ ZTEST(radiant_rules, test_activity_needs_a_second_sample)
 
 	radiant_binding_bind(1u, 0x78u, 1u, NULL, &src);
 	post_beats(src, 10, 0u);
-	zassert_is_null(last_with(RADIANT_RULE_FIELD_WORN));
+	zassert_false(is_on(RADIANT_RULE_FIELD_WORN));
 }
 
 ZTEST(radiant_rules, test_activity_asserts_after_dwell_not_before)
@@ -232,7 +275,7 @@ ZTEST(radiant_rules, test_activity_asserts_after_dwell_not_before)
 	post_beats(src, 1, 1u * US_PER_S); /* advancing, but only 1 s in */
 
 	w = last_with(RADIANT_RULE_FIELD_WORN);
-	zassert_is_null(w);
+	zassert_true(w == NULL || w->raw == 0);
 
 	post_beats(src, 2, 3u * US_PER_S); /* advancing continuously past 2 s */
 	w = last_with(RADIANT_RULE_FIELD_WORN);
@@ -251,7 +294,7 @@ ZTEST(radiant_rules, test_activity_clears_after_its_own_longer_dwell)
 	post_beats(src, 0, 0u);
 	post_beats(src, 1, 1u * US_PER_S); /* raw turns true here; edge starts here */
 	post_beats(src, 2, 3u * US_PER_S); /* 2 s since the edge: asserts */
-	zassert_not_null(last_with(RADIANT_RULE_FIELD_WORN));
+	zassert_true(is_on(RADIANT_RULE_FIELD_WORN));
 
 	/*
 	 * Stops advancing (the accumulator holds at 2 - a real counter does
@@ -283,8 +326,8 @@ ZTEST(radiant_rules, test_zones_never_assert_while_not_worn)
 	post_hr(src, 60, 4u * US_PER_S);
 	post_hr(src, 60, 8u * US_PER_S);
 
-	zassert_is_null(last_with(RADIANT_RULE_FIELD_AT_REST));
-	zassert_is_null(last_with(RADIANT_RULE_FIELD_ZONE2));
+	zassert_false(is_on(RADIANT_RULE_FIELD_AT_REST));
+	zassert_false(is_on(RADIANT_RULE_FIELD_ZONE2));
 }
 
 /* Page 84 subpage 6's charge-cycles total, exactly as radiant_common_adapter.c
@@ -327,7 +370,7 @@ ZTEST(radiant_rules, test_a_common_page_counter_does_not_drive_worn)
 		}
 	}
 
-	zassert_is_null(last_with(RADIANT_RULE_FIELD_WORN));
+	zassert_false(is_on(RADIANT_RULE_FIELD_WORN));
 }
 
 /*
@@ -348,13 +391,13 @@ ZTEST(radiant_rules, test_a_zero_heart_rate_is_not_at_rest)
 	post_beats(src, 1, t);
 	t += 2u * US_PER_S;
 	post_beats(src, 2, t);
-	zassert_not_null(last_with(RADIANT_RULE_FIELD_WORN));
+	zassert_true(is_on(RADIANT_RULE_FIELD_WORN));
 
 	cap_n = 0u;
 	post_hr(src, 100, t);
 	post_hr(src, 0, t + 1u * US_PER_S);
 	post_hr(src, 0, t + 5u * US_PER_S);
-	zassert_is_null(last_with(RADIANT_RULE_FIELD_AT_REST));
+	zassert_false(is_on(RADIANT_RULE_FIELD_AT_REST));
 }
 
 /* The thresholds at their exact boundaries: 82 is not resting, 133 is not
@@ -372,23 +415,23 @@ ZTEST(radiant_rules, test_zone_boundaries_82_is_not_rest_and_133_is_not_zone2)
 	post_beats(src, 1, t);
 	t += 2u * US_PER_S;
 	post_beats(src, 2, t);
-	zassert_not_null(last_with(RADIANT_RULE_FIELD_WORN));
+	zassert_true(is_on(RADIANT_RULE_FIELD_WORN));
 
 	cap_n = 0u;
 	post_hr(src, 82, t);
 	t += 4u * US_PER_S;
 	post_hr(src, 82, t);
-	zassert_is_null(last_with(RADIANT_RULE_FIELD_AT_REST));
+	zassert_false(is_on(RADIANT_RULE_FIELD_AT_REST));
 	post_hr(src, 133, t);
 	t += 4u * US_PER_S;
 	post_hr(src, 133, t);
-	zassert_is_null(last_with(RADIANT_RULE_FIELD_ZONE2));
+	zassert_false(is_on(RADIANT_RULE_FIELD_ZONE2));
 
 	/* Exactly the zone dwell asserts (>=, not >). */
 	post_hr(src, 81, t);
 	t += 3u * US_PER_S;
 	post_hr(src, 81, t);
-	zassert_not_null(last_with(RADIANT_RULE_FIELD_AT_REST));
+	zassert_true(is_on(RADIANT_RULE_FIELD_AT_REST));
 }
 
 ZTEST(radiant_rules, test_zone_thresholds_are_82_and_134)
@@ -409,7 +452,7 @@ ZTEST(radiant_rules, test_zone_thresholds_are_82_and_134)
 	post_beats(src, 1, t);
 	t += 2u * US_PER_S;
 	post_beats(src, 2, t);
-	zassert_not_null(last_with(RADIANT_RULE_FIELD_WORN));
+	zassert_true(is_on(RADIANT_RULE_FIELD_WORN));
 
 	/* Below the rest threshold, held past the zone dwell. */
 	cap_n = 0u;
@@ -419,7 +462,7 @@ ZTEST(radiant_rules, test_zone_thresholds_are_82_and_134)
 	at_rest = last_with(RADIANT_RULE_FIELD_AT_REST);
 	zassert_not_null(at_rest);
 	zassert_equal(at_rest->raw, 1, NULL);
-	zassert_is_null(last_with(RADIANT_RULE_FIELD_ZONE2));
+	zassert_false(is_on(RADIANT_RULE_FIELD_ZONE2));
 
 	/* At the zone2 threshold, held past the zone dwell. */
 	cap_n = 0u;
@@ -463,7 +506,7 @@ ZTEST(radiant_rules, test_stale_forces_immediate_clear)
 	post_beats(src, 1, t);
 	t += 2u * US_PER_S;
 	post_beats(src, 2, t);
-	zassert_not_null(last_with(RADIANT_RULE_FIELD_WORN));
+	zassert_true(is_on(RADIANT_RULE_FIELD_WORN));
 
 	cap_n = 0u;
 	/* One instant later - nowhere near the 20 s clear dwell - but marked
@@ -510,8 +553,8 @@ ZTEST(radiant_rules, test_two_accumulators_on_one_source_are_independent)
 	post_beats(src, 1, t);
 	post_energy(src, INT64_C(200000000), t);
 
-	zassert_is_null(last_with(RADIANT_RULE_FIELD_WORN));
-	zassert_is_null(last_with(RADIANT_RULE_FIELD_ACTIVE));
+	zassert_false(is_on(RADIANT_RULE_FIELD_WORN));
+	zassert_false(is_on(RADIANT_RULE_FIELD_ACTIVE));
 
 	t += 2u * US_PER_S;
 	post_beats(src, 2, t);
@@ -544,8 +587,8 @@ ZTEST(radiant_rules, test_one_accumulator_may_clear_while_the_other_holds)
 	t += 2u * US_PER_S;
 	post_beats(src, 2, t);
 	post_energy(src, INT64_C(400000000), t);
-	zassert_not_null(last_with(RADIANT_RULE_FIELD_WORN));
-	zassert_not_null(last_with(RADIANT_RULE_FIELD_ACTIVE));
+	zassert_true(is_on(RADIANT_RULE_FIELD_WORN));
+	zassert_true(is_on(RADIANT_RULE_FIELD_ACTIVE));
 
 	/*
 	 * The rider coasts: the sensor keeps updating (event count still
@@ -567,7 +610,7 @@ ZTEST(radiant_rules, test_one_accumulator_may_clear_while_the_other_holds)
 	zassert_equal(a->raw, 0);
 
 	w = last_with(RADIANT_RULE_FIELD_WORN);
-	zassert_is_null(w);
+	zassert_true(w == NULL || w->raw == 0);
 }
 
 ZTEST(radiant_rules, test_zones_read_the_event_count_slot_specifically)
@@ -585,8 +628,8 @@ ZTEST(radiant_rules, test_zones_read_the_event_count_slot_specifically)
 	post_energy(src, INT64_C(200000000), t);
 	t += 2u * US_PER_S;
 	post_energy(src, INT64_C(400000000), t);
-	zassert_not_null(last_with(RADIANT_RULE_FIELD_ACTIVE));
-	zassert_is_null(last_with(RADIANT_RULE_FIELD_WORN));
+	zassert_true(is_on(RADIANT_RULE_FIELD_ACTIVE));
+	zassert_false(is_on(RADIANT_RULE_FIELD_WORN));
 
 	/* Resting-range heart rate, held well past the zone dwell. */
 	post_hr(src, 60, t);
@@ -595,8 +638,8 @@ ZTEST(radiant_rules, test_zones_read_the_event_count_slot_specifically)
 	t += 4u * US_PER_S;
 	post_hr(src, 60, t);
 
-	zassert_is_null(last_with(RADIANT_RULE_FIELD_AT_REST));
-	zassert_is_null(last_with(RADIANT_RULE_FIELD_ZONE2));
+	zassert_false(is_on(RADIANT_RULE_FIELD_AT_REST));
+	zassert_false(is_on(RADIANT_RULE_FIELD_ZONE2));
 }
 
 /* ---------------------------------------------------------------------------
@@ -644,7 +687,7 @@ ZTEST(radiant_rules, test_worn_asserts_on_a_4hz_stream_at_60bpm)
 		post_beats(src, (int64_t)(t / US_PER_S), t);
 
 		if (t < 3u * US_PER_S) {
-			zassert_is_null(last_with(RADIANT_RULE_FIELD_WORN));
+			zassert_false(is_on(RADIANT_RULE_FIELD_WORN));
 		}
 	}
 
@@ -706,7 +749,7 @@ ZTEST(radiant_rules, test_activity_clears_only_after_a_real_stop)
 			    (uint64_t)i * HR_MSG_US);
 	}
 	last_advance_us = 20u * HR_MSG_US; /* 4.925 s: the last message that moved it */
-	zassert_not_null(last_with(RADIANT_RULE_FIELD_ACTIVE));
+	zassert_true(is_on(RADIANT_RULE_FIELD_ACTIVE));
 
 	/*
 	 * The rider stops but the trainer keeps transmitting - 6.1's stated
@@ -749,7 +792,7 @@ ZTEST(radiant_rules, test_stale_clears_the_zones_too_on_a_real_stream)
 		t = (uint64_t)i * HR_MSG_US;
 		post_beats(src, (int64_t)(t / US_PER_S), t);
 	}
-	zassert_not_null(last_with(RADIANT_RULE_FIELD_WORN));
+	zassert_true(is_on(RADIANT_RULE_FIELD_WORN));
 
 	/* And at rest: 60 bpm is under the 82 bpm threshold, held past the
 	 * zone dwell. */
@@ -815,7 +858,7 @@ ZTEST(radiant_rules, test_in_use_asserts_immediately_with_no_dwell)
 	 * machine said IN_USE, and adding a dwell would only add latency to a
 	 * fact already established. */
 	post_fe_state(0u, FEC_STATE_READY, 1u * US_PER_S, 0u);
-	zassert_is_null(last_with(RADIANT_RULE_FIELD_EQUIPMENT_IN_USE));
+	zassert_false(is_on(RADIANT_RULE_FIELD_EQUIPMENT_IN_USE));
 
 	post_fe_state(0u, FEC_STATE_IN_USE, 1u * US_PER_S + 250000u, 0u);
 	zassert_equal(last_with(RADIANT_RULE_FIELD_EQUIPMENT_IN_USE)->raw, 1,
@@ -833,7 +876,7 @@ ZTEST(radiant_rules, test_a_walk_break_does_not_flap_the_output)
 		      NULL);
 
 	/* Two seconds of READY - somebody stepping off for a drink - inside
-	 * the 5 s clear dwell. The output must hold. */
+	 * the clear dwell. The output must hold. */
 	for (uint32_t i = 0; i < 8u; i++) {
 		t += 250000u; /* 4 Hz, the FE-C rate */
 		post_fe_state(0u, FEC_STATE_READY, t, 0u);
@@ -847,7 +890,7 @@ ZTEST(radiant_rules, test_a_walk_break_does_not_flap_the_output)
 		      NULL);
 
 	/* Now genuinely finished, and held past the dwell. */
-	for (uint32_t i = 0; i < 40u; i++) {
+	for (uint32_t i = 0; i < (EQUIPMENT_CLEAR_S + 2u) * 4u; i++) {
 		t += 250000u;
 		post_fe_state(0u, FEC_STATE_FINISHED, t, 0u);
 	}
@@ -894,14 +937,25 @@ ZTEST(radiant_rules, test_stale_drops_equipment_occupancy_immediately)
 
 ZTEST(radiant_rules, test_equipment_occupancy_is_per_source)
 {
+	uint32_t a;
+	uint32_t b;
+
+	zassert_equal(radiant_binding_bind(10u, 0x11u, 5u, NULL, &a), 0);
+	zassert_equal(radiant_binding_bind(11u, 0x11u, 5u, NULL, &b), 0);
+	zassert_equal(a, 0u);
+	zassert_equal(b, 1u);
+
 	post_fe_state(0u, FEC_STATE_IN_USE, 1u * US_PER_S, 0u);
 	post_fe_state(1u, FEC_STATE_READY, 1u * US_PER_S, 0u);
 
 	/* Two treadmills, two bindings, two answers - which is what makes N
 	 * machines N occupancy endpoints rather than one shared verdict. */
-	zassert_equal(cap_n, 1u, NULL);
+	zassert_equal(cap_n, 2u, NULL);
 	zassert_equal(cap_buf[0].source, 0u, NULL);
 	zassert_equal(cap_buf[0].raw, 1, NULL);
+	/* The idle one is announced, not silent: its endpoint must exist. */
+	zassert_equal(cap_buf[1].source, 1u, NULL);
+	zassert_equal(cap_buf[1].raw, 0, NULL);
 }
 
 ZTEST(radiant_rules, test_the_derived_output_does_not_re_enter_the_rule)
@@ -944,7 +998,7 @@ ZTEST(radiant_rules, test_the_equipment_type_is_not_an_equipment_state)
 	 *
 	 * WITHOUT THE GATE THIS FAILS AND IT IS THE FAILURE THAT MATTERS: every
 	 * type code (19 treadmill, 22 rower, 25 indoor bike) is != IN_USE, so
-	 * each one drives eval_equipment() as "not in use", the 5 s clear dwell
+	 * each one drives eval_equipment() as "not in use", the clear dwell
 	 * expires on them, and the endpoint reports the machine free while
 	 * someone is still on it. Confirmed by reverting the gate and
 	 * re-running: this case drops to 0 with a second record.
@@ -955,7 +1009,7 @@ ZTEST(radiant_rules, test_the_equipment_type_is_not_an_equipment_state)
 	 * re-asserts - so a test written that way passes either way and proves
 	 * nothing.
 	 */
-	for (uint32_t i = 0; i < 40u; i++) { /* 10 s, twice EQUIPMENT_CLEAR_US */
+	for (uint32_t i = 0; i < EQUIPMENT_CLEAR_S * 8u; i++) { /* twice the clear dwell */
 		t += 250000u;
 		post_fe_type(0u, FEC_TYPE_TREADMILL, t);
 	}
@@ -1027,6 +1081,260 @@ ZTEST(radiant_rules, test_worn_is_kept_for_an_unbound_source_and_a_bound_strap)
 	zassert_not_equal(strap, 5u);
 	zassert_equal(worn_after_steady_count(strap), 1u);
 	zassert_equal(last_with(RADIANT_RULE_FIELD_WORN)->raw, 1);
+}
+
+/*
+ * ---------------------------------------------------------------------------
+ * Reviewer follow-ups 2026-11-26: announce on first input, reset on rebind,
+ * the 30 s equipment clear, Zone 3, and per-strap thresholds.
+ * ---------------------------------------------------------------------------
+ */
+
+static void post_beats_stale(uint32_t source, int64_t raw, uint64_t t_us)
+{
+	struct radiant_sample s = {
+		.source = source,
+		.field_id = 0u,
+		.field_type = RADIANT_FIELD_EVENT_COUNT,
+		.flags = RADIANT_SAMPLE_ACCUMULATING | RADIANT_SAMPLE_STALE,
+		.exp = 0,
+		.raw = raw,
+		.t_us = t_us,
+	};
+
+	radiant_bridge_post(&s);
+	radiant_bridge_drain();
+}
+
+/* Worn asserted by t + 3 s, the three-call pattern used above. Returns the
+ * time of the last call. */
+static uint64_t make_worn(uint32_t src, int64_t *beats, uint64_t t)
+{
+	post_beats(src, (*beats)++, t);
+	t += 1u * US_PER_S;
+	post_beats(src, (*beats)++, t);
+	t += 2u * US_PER_S;
+	post_beats(src, (*beats)++, t);
+	zassert_true(is_on(RADIANT_RULE_FIELD_WORN));
+	return t;
+}
+
+ZTEST(radiant_rules, test_an_idle_trainer_announces_in_use_false)
+{
+	const struct radiant_sample *out;
+	uint32_t src;
+
+	/* THE REVIEWER'S POINT 3. A trainer nobody has ridden reports READY
+	 * forever; change-only publishing posted nothing, so the Matter plane
+	 * never created its In Use endpoint until somebody first rode it. */
+	zassert_equal(radiant_binding_bind(52233u, 0x11u, 5u, NULL, &src), 0);
+	zassert_equal(src, 0u);
+	post_fe_state(0u, FEC_STATE_READY, 1u * US_PER_S, 0u);
+
+	out = last_with(RADIANT_RULE_FIELD_EQUIPMENT_IN_USE);
+	zassert_not_null(out, "an idle machine must still post In Use");
+	zassert_equal(out->raw, 0);
+	zassert_equal(out->field_type, RADIANT_FIELD_OCCUPANCY);
+
+	/* Once only: further READY samples are not changes. */
+	for (uint32_t i = 0u; i < 20u; i++) {
+		post_fe_state(0u, FEC_STATE_READY, (2u + i) * US_PER_S, 0u);
+	}
+	zassert_equal(cap_n, 1u);
+}
+
+ZTEST(radiant_rules, test_an_unbound_source_is_not_announced)
+{
+	/* The tail of an evicted sensor (or a harness) has no endpoint to
+	 * create; only a change is posted for it. */
+	post_fe_state(3u, FEC_STATE_READY, 1u * US_PER_S, 0u);
+	zassert_equal(cap_n, 0u);
+	post_fe_state(3u, FEC_STATE_IN_USE, 2u * US_PER_S, 0u);
+	zassert_true(is_on(RADIANT_RULE_FIELD_EQUIPMENT_IN_USE));
+}
+
+ZTEST(radiant_rules, test_first_inputs_announce_every_output_they_feed)
+{
+	uint32_t src;
+
+	radiant_binding_bind(1u, 0x78u, 1u, NULL, &src);
+
+	/* One beat count: Worn exists at once, before the delta it needs. */
+	post_beats(src, 7, 0u);
+	zassert_not_null(last_with(RADIANT_RULE_FIELD_WORN));
+	zassert_false(is_on(RADIANT_RULE_FIELD_WORN));
+
+	/* One HR sample, strap not yet worn: all three zone outputs exist. */
+	post_hr(src, 150, 0u);
+	zassert_not_null(last_with(RADIANT_RULE_FIELD_AT_REST));
+	zassert_not_null(last_with(RADIANT_RULE_FIELD_ZONE2));
+	zassert_not_null(last_with(RADIANT_RULE_FIELD_ZONE3));
+	zassert_false(is_on(RADIANT_RULE_FIELD_ZONE3));
+
+	/* One energy sample: Active. */
+	post_energy(src, 0, 0u);
+	zassert_not_null(last_with(RADIANT_RULE_FIELD_ACTIVE));
+	zassert_false(is_on(RADIANT_RULE_FIELD_ACTIVE));
+
+	/* Five announcements, and nothing else: no output asserted. */
+	zassert_equal(cap_n, 5u);
+}
+
+ZTEST(radiant_rules, test_in_use_holds_for_the_configured_clear_delay)
+{
+	uint64_t t0 = 10u * US_PER_S;
+	uint64_t t = t0;
+
+	/* THE REVIEWER'S POINT 2. A trainer drops to READY the moment
+	 * cadence reaches zero; with a 5 s clear, In Use cleared at every
+	 * traffic light. */
+	post_fe_state(0u, FEC_STATE_IN_USE, t, 0u);
+	zassert_true(is_on(RADIANT_RULE_FIELD_EQUIPMENT_IN_USE));
+
+	/* READY at 4 Hz up to one second short of the delay: holds. */
+	while (t < t0 + (uint64_t)(EQUIPMENT_CLEAR_S - 1u) * US_PER_S) {
+		t += 250000u;
+		post_fe_state(0u, FEC_STATE_READY, t, 0u);
+	}
+	zassert_true(is_on(RADIANT_RULE_FIELD_EQUIPMENT_IN_USE),
+		     "In Use must hold for the whole clear delay");
+
+	/* The edge was the first READY, at t0 + 0.25 s. Past the delay: clears. */
+	while (t < t0 + 250000u + (uint64_t)EQUIPMENT_CLEAR_S * US_PER_S) {
+		t += 250000u;
+		post_fe_state(0u, FEC_STATE_READY, t, 0u);
+	}
+	zassert_false(is_on(RADIANT_RULE_FIELD_EQUIPMENT_IN_USE));
+	zassert_equal(count_with(RADIANT_RULE_FIELD_EQUIPMENT_IN_USE), 2u);
+}
+
+ZTEST(radiant_rules, test_a_rebound_slot_inherits_nothing)
+{
+	uint32_t src;
+	uint32_t src2;
+	int64_t  beats = 0;
+	uint64_t t;
+	const struct radiant_sample *out;
+
+	/* THE REVIEWER'S POINT 4. Sensor A, occupied and worn, in slot N. */
+	zassert_equal(radiant_binding_bind(100u, 0x11u, 5u, NULL, &src), 0);
+	announce_binding(src);
+	t = make_worn(src, &beats, 0u);
+	post_fe_state(src, FEC_STATE_IN_USE, t, 0u);
+	zassert_true(is_on(RADIANT_RULE_FIELD_EQUIPMENT_IN_USE));
+
+	/* Evicted, and sensor B paired into the same slot before liveness or
+	 * anything else noticed. */
+	zassert_equal(radiant_binding_unbind(src), 0);
+	announce_binding(src);
+	zassert_equal(radiant_binding_bind(200u, 0x11u, 5u, NULL, &src2), 0);
+	zassert_equal(src2, src, "the test needs the slot reused");
+	announce_binding(src2);
+
+	/* B's first report is IN_USE. Before the reset it matched A's stale
+	 * `debounced` and was swallowed as "no change". */
+	cap_n = 0u;
+	post_fe_state(src2, FEC_STATE_IN_USE, t + 1u * US_PER_S, 0u);
+	out = last_with(RADIANT_RULE_FIELD_EQUIPMENT_IN_USE);
+	zassert_not_null(out, "the new sensor's first occupancy was suppressed");
+	zassert_equal(out->raw, 1);
+
+	/* And its Worn starts from nothing: announced false on the first beat
+	 * count, not inherited true, and B's count is not differenced against
+	 * A's. */
+	post_beats(src2, 5000, t + 1u * US_PER_S);
+	out = last_with(RADIANT_RULE_FIELD_WORN);
+	zassert_not_null(out);
+	zassert_equal(out->raw, 0);
+}
+
+ZTEST(radiant_rules, test_zone3_asserts_at_146_and_not_at_145)
+{
+	uint32_t src;
+	int64_t  beats = 0;
+	uint64_t t;
+
+	radiant_binding_bind(1u, 0x78u, 1u, NULL, &src);
+	t = make_worn(src, &beats, 0u);
+
+	/* 145 held past the dwell: zone 2 yes, zone 3 no. */
+	post_hr(src, 145, t);
+	t += 4u * US_PER_S;
+	post_beats(src, beats++, t);
+	post_hr(src, 145, t);
+	zassert_true(is_on(RADIANT_RULE_FIELD_ZONE2));
+	zassert_false(is_on(RADIANT_RULE_FIELD_ZONE3));
+
+	/* 146: zone 3. HR_rest 65 + 0.70 x 115 = 145.5, rounded up. */
+	post_hr(src, 146, t);
+	t += 4u * US_PER_S;
+	post_beats(src, beats++, t);
+	post_hr(src, 146, t);
+	zassert_true(is_on(RADIANT_RULE_FIELD_ZONE3));
+	zassert_true(is_on(RADIANT_RULE_FIELD_ZONE2));
+
+	/* STALE drops zone 3 with the others, immediately. */
+	post_beats_stale(src, beats, t + 1u);
+	zassert_false(is_on(RADIANT_RULE_FIELD_ZONE3));
+	zassert_false(is_on(RADIANT_RULE_FIELD_ZONE2));
+}
+
+ZTEST(radiant_rules, test_personal_thresholds_move_only_at_session_end)
+{
+	uint32_t src;
+	int64_t  beats = 0;
+	uint64_t t;
+	uint32_t i;
+
+	/* A bound strap gets a profile slot. One hour at 142 bpm: under the
+	 * prior's zone 3 (146), and enough wear (3600 samples vs. the 1800 s
+	 * prior weight) that the blend moves HR_rest to its 100 bpm clamp and
+	 * zone 3 down to 140. */
+	zassert_equal(radiant_binding_bind(31u, 0x78u, 1u, NULL, &src), 0);
+	t = make_worn(src, &beats, 0u);
+
+	for (i = 0u; i < 3600u; i++) {
+		t += 1u * US_PER_S;
+		post_beats(src, beats++, t);
+		post_hr(src, 142, t);
+		/* Mid-session the thresholds never move. */
+		if (is_on(RADIANT_RULE_FIELD_ZONE3)) {
+			break;
+		}
+	}
+	zassert_equal(i, 3600u, "zone 3 moved mid-session (sample %u)", i);
+	zassert_not_null(radiant_hr_profile_hist(radiant_binding_get(src)->uuid));
+	zassert_equal(radiant_hr_hist_total(
+			      radiant_hr_profile_hist(radiant_binding_get(src)->uuid)),
+		      3600u, "1 Hz decimation: one sample per second of wear");
+
+	/* Session end (the strap goes off the air), then a new session. */
+	post_beats_stale(src, beats, t + 1u);
+	t += 10u * US_PER_S;
+	t = make_worn(src, &beats, t);
+	post_hr(src, 142, t);
+	t += 4u * US_PER_S;
+	post_beats(src, beats++, t);
+	post_hr(src, 142, t);
+	zassert_true(is_on(RADIANT_RULE_FIELD_ZONE3),
+		     "the personalised zone 3 (140) applies from the next session");
+}
+
+ZTEST(radiant_rules, test_an_unbound_source_uses_the_prior_and_no_slot)
+{
+	int64_t  beats = 0;
+	uint64_t t;
+
+	/* Every older case here posts to an unbound source: no uuid, so no
+	 * profile slot, and the thresholds are the prior's - the n = 0 path. */
+	t = make_worn(6u, &beats, 0u);
+	for (uint32_t i = 0u; i < 10u; i++) {
+		t += 1u * US_PER_S;
+		post_beats(6u, beats++, t);
+		post_hr(6u, 146, t);
+	}
+	zassert_true(is_on(RADIANT_RULE_FIELD_ZONE3));
+	zassert_is_null(radiant_hr_profile_hist(0u));
 }
 
 static void *rules_setup(void)

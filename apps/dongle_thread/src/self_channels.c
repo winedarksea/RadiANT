@@ -38,6 +38,13 @@
  * that window, and restarts the window; each further long press walks back
  * one bind.
  *
+ * PAIRINGS SURVIVE A REBOOT (src/binding_store.h). A bind saves a record; at
+ * boot the newest records are restored and their channels come up PINNED with
+ * no button press. A user eviction (short or long press) deletes the record;
+ * a host taking the channel only releases the binding and keeps the record,
+ * so the next boot pins the sensor again. Pairing a channel ID that still has
+ * a record reuses its uuid.
+ *
  * Every decision is a pure function in radiant/src/bridge/radiant_self_policy.c
  * (tested in radiant/tests/src/test_self_policy.c); this file keeps the radiant_ant_*
  * calls.
@@ -77,6 +84,7 @@
 #include <radiant/radiant_bridge.h>
 #include <radiant/radiant_self_policy.h>
 
+#include "binding_store.h"
 #include "bridge_app.h"
 
 LOG_MODULE_REGISTER(self_channels, LOG_LEVEL_INF);
@@ -1005,7 +1013,30 @@ static bool try_bind(uint8_t ch)
 		}
 	}
 
-	rc = radiant_binding_bind(devnum, devtype, trans, NULL, &source);
+	/*
+	 * A channel ID with a stored record was paired before and is not bound
+	 * now (a host took its channel, or it lost the boot restore to newer
+	 * pairings): it gets its old uuid back, so its MQTT topics carry on.
+	 * An eviction deleted the record, so an evicted sensor is new here.
+	 * The period is the channel's, read below, not the record's.
+	 */
+	rc = -ENOENT;
+	if (existing == RADIANT_BINDING_NONE) {
+		struct binding_record kept;
+
+		if (binding_store_lookup(devnum, devtype, trans, &kept)) {
+			rc = radiant_binding_restore(devnum, devtype, trans,
+						     kept.uuid, kept.label, 0u,
+						     &source);
+			if (rc == 0) {
+				LOG_INF("device %u was paired before: keeping "
+					"its identity", devnum);
+			}
+		}
+	}
+	if (rc != 0) {
+		rc = radiant_binding_bind(devnum, devtype, trans, NULL, &source);
+	}
 	if (rc != 0) {
 		LOG_ERR("binding table full: device %u not bound (%d)", devnum,
 			rc);
@@ -1043,6 +1074,11 @@ static bool try_bind(uint8_t ch)
 	LOG_INF("bound device %u (type 0x%02x, trans %u) on channel %u as "
 		"source %u, period %u", devnum, devtype, trans, ch, source,
 		period);
+
+	/* The one write a bind makes, and binds happen only inside a
+	 * button-opened window. Last, so a slow flash write delays nothing
+	 * above. A failure is logged there; the binding works regardless. */
+	(void)binding_store_save(radiant_binding_get(source));
 	/* -Werror=return-type on this file (CMakeLists.txt): this return was
 	 * once missing and the built code returned a stale register, rotating
 	 * a just-bound channel away. */
@@ -1209,6 +1245,42 @@ static void act(uint8_t i, enum radiant_self_action a, bool booting)
 	}
 }
 
+/*
+ * The bindings bridge_pump.c restored from flash get a channel each, with no
+ * button press: the same map entry and sink notice try_bind() gives a fresh
+ * bind, in the same order. The channels are not touched here. The first poll
+ * finds them UNASSIGNED and re-establishes them, and the next finds them
+ * assigned, owned and bound and opens them pinned (radiant_self_decide()), the
+ * path a channel takes after a host reset.
+ *
+ * bridge_pump.c restores at most SELF_N, oldest pairing first, so bind_seq
+ * keeps the pairing order and a long press still walks back from the newest.
+ */
+static void restore_pinned(void)
+{
+	uint32_t sources[SELF_N];
+	uint32_t now = k_uptime_get_32();
+	size_t n = binding_store_boot_sources(sources, SELF_N, 10000u);
+
+	for (size_t k = 0u; k < n; k++) {
+		uint8_t ch = self_channel_index((uint8_t)k);
+		const struct radiant_binding *b = radiant_binding_get(sources[k]);
+
+		if (b == NULL) {
+			continue;
+		}
+		radiant_bridge_binding_changed(sources[k], b);
+		(void)ant_bridge_channel_bind(ch, sources[k]);
+		self[k].bind_seq = ++bind_counter;
+		/* Absence is counted from boot, for the short press's pick. */
+		self[k].last_tracking_ms = now;
+		LOG_INF("self channel %u: re-pinning device %u (type 0x%02x, "
+			"trans %u) from the binding store, source %u", ch,
+			b->devnum, b->devtype, b->trans_type,
+			(unsigned int)sources[k]);
+	}
+}
+
 static void self_thread_fn(void *a, void *b, void *c)
 {
 	struct radiant_self_evict_in evict[SELF_N];
@@ -1261,6 +1333,8 @@ static void self_thread_fn(void *a, void *b, void *c)
 	for (i = 0u; i < SELF_N; i++) {
 		self[i].row = (uint8_t)(i % SELF_PROFILE_N);
 	}
+
+	restore_pinned();
 
 	/* Boot is the first generation: the key is applied here unless a host
 	 * already set one in the delay before this thread started. The
@@ -1406,6 +1480,8 @@ static void self_thread_fn(void *a, void *b, void *c)
 
 				if (fb != NULL) {
 					evicted_remember(fb);
+					/* A user eviction: forget it for good. */
+					binding_store_evict(fb);
 				}
 				LOG_INF("long press: evicting device %u (type 0x%02x) "
 					"from self channel %u, the newest pairing; it "
@@ -1444,6 +1520,8 @@ static void self_thread_fn(void *a, void *b, void *c)
 				"%u s) to make room for a new pairing",
 				eb != NULL ? eb->devnum : 0u, self_channel_index(pick),
 				(now - self[pick].last_tracking_ms) / 1000u);
+			/* Also a user eviction (the press asked for room). */
+			binding_store_evict(eb);
 			release_binding(pick);
 			close_one(pick);
 		}
@@ -1481,7 +1559,13 @@ static void self_thread_fn(void *a, void *b, void *c)
 	}
 }
 
+/* 1536 measured with 1176 B unused before the binding store; a bind and an
+ * eviction now also make a settings write (ZMS) on this thread. */
+#if defined(CONFIG_ANT_DONGLE_BINDING_STORE)
+#define SELF_STACK_SIZE 2048
+#else
 #define SELF_STACK_SIZE 1536
+#endif
 
 /*
  * Priority below the ANT host thread for the same reason bridge_pump.c's is:

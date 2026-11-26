@@ -7,7 +7,10 @@
  * Covers: bind is idempotent by key; -ENOSPC only for a new key on a full
  * table, an existing key still resolves; uuid is nonzero and differs per
  * binding; unbind-then-rebind of the same key is a new identity (re-pair is
- * a user action, not automatic reconciliation).
+ * a user action, not automatic reconciliation); radiant_binding_restore()
+ * puts back a stored uuid/label/period, is idempotent for the same identity,
+ * refuses a conflicting one, and is what lets an application keep a uuid
+ * across an unbind and a reboot.
  */
 
 #include <errno.h>
@@ -124,6 +127,98 @@ ZTEST(radiant_binding, test_the_key_is_all_three_fields)
 	zassert_equal(-ENOENT, radiant_binding_set_period(RADIANT_BINDING_MAX, 8192u));
 	zassert_equal(0, radiant_binding_unbind(hr));
 	zassert_equal(-ENOENT, radiant_binding_set_period(hr, 8192u));
+}
+
+/* A reboot: the table is empty and the application hands back what it
+ * stored. Everything it stored comes back, and lookups find it. */
+ZTEST(radiant_binding, test_restore_puts_back_the_stored_identity)
+{
+	const struct radiant_binding *b;
+	uint32_t source = RADIANT_BINDING_NONE;
+
+	zassert_equal(radiant_binding_restore(11625u, 0x78u, 0x01u,
+					      0x0123456789ABCDEFull, "strap",
+					      8070u, &source), 0);
+	b = radiant_binding_get(source);
+	zassert_not_null(b);
+	zassert_equal(b->devnum, 11625u);
+	zassert_equal(b->devtype, 0x78u);
+	zassert_equal(b->trans_type, 0x01u);
+	zassert_equal(b->uuid, 0x0123456789ABCDEFull);
+	zassert_mem_equal(b->label, "strap", sizeof("strap"));
+	zassert_equal(b->period, 8070u);
+	zassert_equal(radiant_binding_find(11625u, 0x78u, 0x01u), source);
+
+	/* bind() of the restored key resolves to it and does not re-mint. */
+	{
+		uint32_t again;
+
+		zassert_equal(radiant_binding_bind(11625u, 0x78u, 0x01u, NULL,
+						   &again), 0);
+		zassert_equal(again, source);
+		zassert_equal(radiant_binding_get(again)->uuid,
+			      0x0123456789ABCDEFull);
+	}
+}
+
+ZTEST(radiant_binding, test_restore_is_idempotent_and_refuses_conflicts)
+{
+	uint32_t s1, s2, s3 = RADIANT_BINDING_NONE;
+
+	zassert_equal(radiant_binding_restore(1u, 0x78u, 1u, 0xAAull, NULL, 0u,
+					      &s1), 0);
+	/* The same identity twice: same source, no second row. */
+	zassert_equal(radiant_binding_restore(1u, 0x78u, 1u, 0xAAull, NULL, 0u,
+					      &s2), 0);
+	zassert_equal(s1, s2);
+	/* The same channel ID under another uuid: refused, and told where. */
+	zassert_equal(radiant_binding_restore(1u, 0x78u, 1u, 0xBBull, NULL, 0u,
+					      &s3), -EEXIST);
+	zassert_equal(s3, s1);
+	zassert_equal(radiant_binding_get(s1)->uuid, 0xAAull);
+	/* The same uuid on another channel ID: refused, nothing bound. */
+	zassert_equal(radiant_binding_restore(2u, 0x78u, 1u, 0xAAull, NULL, 0u,
+					      NULL), -EEXIST);
+	zassert_equal(radiant_binding_find(2u, 0x78u, 1u), RADIANT_BINDING_NONE);
+	/* uuid 0 is "no identity". */
+	zassert_equal(radiant_binding_restore(3u, 0x78u, 1u, 0u, NULL, 0u,
+					      NULL), -EINVAL);
+	zassert_equal(radiant_binding_find(3u, 0x78u, 1u), RADIANT_BINDING_NONE);
+}
+
+ZTEST(radiant_binding, test_restore_full_table_is_enospc)
+{
+	uint32_t i;
+
+	for (i = 0u; i < RADIANT_BINDING_MAX; i++) {
+		zassert_equal(radiant_binding_restore((uint16_t)(100u + i), 0x78u,
+						      1u, 0x1000ull + i, NULL,
+						      0u, NULL), 0, "slot %u", i);
+	}
+	zassert_equal(radiant_binding_restore(9999u, 0x78u, 1u, 0x9999ull, NULL,
+					      0u, NULL), -ENOSPC);
+}
+
+/* The app-level re-pair: unbind (a host took the channel), then the same
+ * channel ID pairs again and the application restores the uuid it kept. A
+ * fresh bind beside it never mints that uuid. */
+ZTEST(radiant_binding, test_restore_after_unbind_keeps_the_uuid)
+{
+	uint32_t source, other, back;
+	uint64_t kept;
+
+	zassert_equal(radiant_binding_bind(42u, 0x0Bu, 5u, NULL, &source), 0);
+	kept = radiant_binding_get(source)->uuid;
+	zassert_equal(radiant_binding_unbind(source), 0);
+
+	zassert_equal(radiant_binding_restore(42u, 0x0Bu, 5u, kept, NULL, 0u,
+					      &back), 0);
+	zassert_equal(radiant_binding_get(back)->uuid, kept);
+	zassert_equal(radiant_binding_get(back)->period, 0u);
+
+	zassert_equal(radiant_binding_bind(43u, 0x0Bu, 5u, NULL, &other), 0);
+	zassert_not_equal(radiant_binding_get(other)->uuid, kept);
+	zassert_not_equal(radiant_binding_get(other)->uuid, 0u);
 }
 
 static void *binding_setup(void)

@@ -20,6 +20,7 @@
 #include <zephyr/toolchain.h>
 #include <zephyr/ztest.h>
 
+#include <radiant/radiant_binding.h>
 #include <radiant/radiant_bridge.h>
 #include <radiant/radiant_hr_adapter.h>
 #include <radiant/radiant_matter.h>
@@ -89,6 +90,9 @@ static void test_reset(void *unused)
 	 */
 	radiant_rules_reset();
 	radiant_matter_reset();
+	/* And the binding table: the rules announce outputs for a BOUND source,
+	 * so a binding another suite left on source 1 adds derived records. */
+	radiant_binding_init();
 
 	memset(cap_buf, 0, sizeof(cap_buf));
 	cap_n = 0u;

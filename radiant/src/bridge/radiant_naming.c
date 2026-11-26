@@ -160,12 +160,13 @@ struct suffix_row {
  * headline reading, so it has an explicit row and that row wins.
  */
 static const struct suffix_row suffix_names[] = {
-	/* The derived booleans (radiant_rules.c). All five are
+	/* The derived booleans (radiant_rules.c). All six are
 	 * RADIANT_FIELD_OCCUPANCY, which is why they needed this first. */
 	{ RADIANT_FIELD_OCCUPANCY, RADIANT_RULE_FIELD_WORN, "Worn" },
 	{ RADIANT_FIELD_OCCUPANCY, RADIANT_RULE_FIELD_ACTIVE, "Active" },
 	{ RADIANT_FIELD_OCCUPANCY, RADIANT_RULE_FIELD_AT_REST, "At Rest" },
 	{ RADIANT_FIELD_OCCUPANCY, RADIANT_RULE_FIELD_ZONE2, "Zone 2" },
+	{ RADIANT_FIELD_OCCUPANCY, RADIANT_RULE_FIELD_ZONE3, "Zone 3" },
 	{ RADIANT_FIELD_OCCUPANCY, RADIANT_RULE_FIELD_EQUIPMENT_IN_USE, "In Use" },
 
 	/* The profile block, ids 0x00-0x1F (radiant_bridge.h). Shared across

@@ -96,3 +96,25 @@ config BRIDGE_MIGRATE_VERSION_1
 endmenu
 
 endmenu
+
+# Not upstream's: RadiANT's own Matter option, kept here (inside `if CHIP`, see
+# apps/dongle_thread/Kconfig) so a non-Matter arm gains no symbol for it.
+config ANT_DONGLE_MATTER_HR_PASSENGER
+	bool "Publish raw heart rate as a Flow Sensor (mislabelled, off by default)"
+	depends on ANT_DONGLE_MATTER
+	default n
+	help
+	  docs/radiant-bridge.md section 8.3b. Calls
+	  radiant_matter_set_hr_passenger(true) at init, so every heart-rate
+	  binding gains one more endpoint: a Flow Sensor (0x0306) whose Flow
+	  Measurement MeasuredValue is bpm x 10. Home Assistant then shows the
+	  bpm figure with the unit m^3/h. Deadband 2 bpm, 60 s heartbeat.
+
+	  OFF BY DEFAULT ON PURPOSE. The unit is wrong by construction, and a
+	  user who never enables this is never shown a wrong unit. The
+	  occupancy booleans (worn, at rest, zones) need nothing enabled; the
+	  correctly-labelled number is on MQTT. Enable this only for a
+	  controller that has neither and where a renamed entity is acceptable.
+
+	  Costs one endpoint per strap out of the 16 that
+	  BRIDGE_MAX_DYNAMIC_ENDPOINTS_NUMBER allows.

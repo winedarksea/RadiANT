@@ -6,9 +6,20 @@
 #include <stdbool.h>
 #include <string.h>
 
+#include <zephyr/toolchain.h>
+#include <zephyr/sys/atomic.h>
+#include <zephyr/sys/util.h>
+
 #include <radiant/radiant_binding.h>
 #include <radiant/radiant_bridge.h>
+#include <radiant/radiant_hr_profile.h>
 #include <radiant/radiant_rules.h>
+
+/* Kconfig, with the documented default for builds that compile this file
+ * without RADIANT_BRIDGE_RULES (radiant/tests compiles sources directly). */
+#ifndef CONFIG_RADIANT_BRIDGE_RULES_EQUIPMENT_CLEAR_S
+#define CONFIG_RADIANT_BRIDGE_RULES_EQUIPMENT_CLEAR_S 30
+#endif
 
 /* Section 6.1's numbers, stated in the section by name. */
 #define ACTIVITY_ASSERT_US ((uint64_t)2 * 1000000u)
@@ -19,12 +30,14 @@
  * unlike 6.1's 2s/20s, this number isn't measured or specified. */
 #define ZONE_DWELL_US ((uint64_t)3 * 1000000u)
 
-/* Section 6.2's worked example: HR_max~N(180,15^2), HR_rest~N(65,10^2) =>
- * HRR=115, rest < 82.25, zone2 >= 134. Hardcoded rather than recomputed via
- * the Karvonen formula, since personalisation (6.3) is out of scope and
- * the inputs don't change until it lands. */
-#define REST_THRESHOLD_BPM  82u
-#define ZONE2_THRESHOLD_BPM 134u
+/* Section 6.3's "~1 Hz decimated sampling" for the personalisation
+ * histogram: one reading per second of wear, whatever the strap's rate. */
+#define HR_FEED_INTERVAL_US ((uint64_t)1000000u)
+
+/* The zone thresholds are no longer constants here. Section 6.2's worked
+ * example (HR_max 180, HR_rest 65 => rest < 82, zone2 >= 134, zone3 >= 146)
+ * is now the Kconfig prior, run through the same Karvonen arithmetic that a
+ * personalised histogram feeds: radiant_hr_profile.c. */
 
 /*
  * ---------------------------------------------------------------------------
@@ -138,6 +151,23 @@ struct zone_state {
 	bool     zone2_raw;
 	uint64_t zone2_edge_us;
 	bool     zone2_debounced;
+
+	bool     zone3_raw;
+	uint64_t zone3_edge_us;
+	bool     zone3_debounced;
+
+	/*
+	 * The thresholds in force. Loaded on the first HR sample after a
+	 * (re)bind and recomputed only at session end - never mid-session, so
+	 * a boolean cannot move under a running automation because the
+	 * estimate drifted (radiant_hr_profile.h).
+	 */
+	bool                         th_valid;
+	struct radiant_hr_thresholds th;
+	bool                         profiled; /* bound: `uuid` is meaningful */
+	uint64_t                     uuid;
+	bool                         fed;      /* last_feed_us is meaningful */
+	uint64_t                     last_feed_us;
 };
 
 /*
@@ -156,7 +186,18 @@ struct zone_state {
  * the air is not occupied, immediately and without the clear dwell, which is
  * what stops an unplugged treadmill reading "in use" forever on a dashboard.
  */
-#define EQUIPMENT_CLEAR_US ((uint64_t)5 * 1000000u)
+#define EQUIPMENT_CLEAR_US \
+	((uint64_t)CONFIG_RADIANT_BRIDGE_RULES_EQUIPMENT_CLEAR_S * 1000000u)
+
+/*
+ * WHY 30 s AND NOT THE 5 s THIS USED TO BE. A trainer is not a treadmill: FE-C
+ * trainers (apps/trainer's model among them) report READY whenever cadence is
+ * zero, so "in use" cleared five seconds after the rider stopped pedalling -
+ * at every traffic light in a Zwift ride and every interval rest. The rule is
+ * meant to drive lights and fans, where a lag of half a minute is harmless and
+ * a flicker is not. Kconfig, because a gym that wants a machine freed promptly
+ * and a home that wants the fan to ride out a rest are both legitimate.
+ */
 
 struct equipment_state {
 	bool     tracked;
@@ -169,13 +210,61 @@ struct rule_state {
 	struct activity_state  activity[ACTIVITY_SLOTS];
 	struct zone_state      zone;
 	struct equipment_state equipment;
+
+	/* BIT(RADIANT_RULE_FIELD_*): this output has been posted at least once
+	 * since the last reset. See emit(). */
+	uint8_t announced;
 };
 
+BUILD_ASSERT(RADIANT_RULE_FIELD_ZONE3 < 8u, "announced is a uint8_t bitmap");
+BUILD_ASSERT(RADIANT_BINDING_MAX <= 32u, "reset_pending is one atomic_t");
+
 static struct rule_state states[RADIANT_BINDING_MAX];
+
+/*
+ * BIT(source): a bind or unbind landed for this source and its state must be
+ * wiped before the next sample is evaluated.
+ *
+ * Why a deferred bit and not a memset in the callback: binding_changed runs on
+ * the self-channel thread while the pump drains on its own, so a memset there
+ * would race eval_*() mid-update. Same shape as radiant_matter.c's
+ * forget_pending / apply_forgets(). try_bind() announces the bind before the
+ * tap attributes any sample to the new binding, so the bit is always set
+ * before the new sensor's first sample is drained.
+ *
+ * Without this, a sensor that reused a slot inherited the previous sensor's
+ * prev_raw and debounced outputs: its first real report was suppressed as "no
+ * change", and the Matter endpoint never learned the new sensor's state.
+ */
+static atomic_t reset_pending;
 
 void radiant_rules_reset(void)
 {
 	memset(states, 0, sizeof(states));
+	(void)atomic_clear(&reset_pending);
+}
+
+static void rules_binding_changed(uint32_t source, const struct radiant_binding *b)
+{
+	ARG_UNUSED(b);
+	if (source < RADIANT_BINDING_MAX) {
+		(void)atomic_or(&reset_pending, (atomic_val_t)BIT(source));
+	}
+}
+
+static void apply_resets(void)
+{
+	atomic_val_t pending = atomic_clear(&reset_pending);
+	uint32_t     src;
+
+	if (pending == 0) {
+		return;
+	}
+	for (src = 0u; src < RADIANT_BINDING_MAX; src++) {
+		if ((pending & BIT(src)) != 0) {
+			memset(&states[src], 0, sizeof(states[src]));
+		}
+	}
 }
 
 static void post_occupancy(uint32_t source, uint8_t field_id, bool occupied,
@@ -192,6 +281,38 @@ static void post_occupancy(uint32_t source, uint8_t field_id, bool occupied,
 	};
 
 	radiant_bridge_post(&s);
+}
+
+/*
+ * Post `value` if it changed, OR if this output has never been posted since
+ * the last reset.
+ *
+ * THE SECOND HALF IS THE FIX FOR "AN IDLE MACHINE HAS NO ENDPOINT". These
+ * outputs used to be posted on change only, and every one of them starts
+ * false - so a trainer nobody had ridden yet never posted anything, and the
+ * Matter plane (which creates an endpoint on a row's first sample) and MQTT
+ * discovery never learned the output existed. Announcing the current value on
+ * the first sample that feeds the rule makes the endpoint exist at once, and
+ * also makes a restored endpoint reachable as soon as its sensor is heard. The
+ * attribute then holds its value, so nothing needs re-posting afterwards.
+ *
+ * ONLY FOR A BOUND SOURCE. The announcement exists to give a binding its
+ * endpoints. A source with no binding is either a test harness posting raw
+ * samples or the tail of a sensor that was just evicted, whose queued samples
+ * must not re-announce the outputs the eviction removed. Changes are still
+ * posted for an unbound source, as they always were.
+ */
+static void emit(uint32_t source, uint8_t field_id, bool value, bool changed,
+		 uint64_t t_us)
+{
+	uint8_t bit = (uint8_t)BIT(field_id);
+
+	if (changed ||
+	    ((states[source].announced & bit) == 0u &&
+	     radiant_binding_get(source) != NULL)) {
+		states[source].announced |= bit;
+		post_occupancy(source, field_id, value, t_us);
+	}
 }
 
 /*
@@ -258,6 +379,43 @@ static bool worn_excluded(uint32_t source)
 	return b != NULL && (b->devtype & DEVTYPE_ID_MASK) == ENV_DEVICE_TYPE;
 }
 
+/*
+ * Load the zone thresholds for whatever is bound to `source` now: its
+ * personalisation slot if it gets one, the Kconfig prior otherwise (an
+ * unbound source, a zero-slot build). Called on the first HR sample after a
+ * reset, which is "at bind or load".
+ */
+static void zone_load(uint32_t source, struct zone_state *z)
+{
+	const struct radiant_binding *b = radiant_binding_get(source);
+
+	z->profiled = false;
+	if (b != NULL) {
+		z->uuid = b->uuid;
+		z->profiled = radiant_hr_profile_attach(b->uuid);
+	}
+	if (z->profiled) {
+		radiant_hr_profile_thresholds(z->uuid, &z->th);
+	} else {
+		radiant_hr_thresholds_default(NULL, &z->th);
+	}
+	z->th_valid = true;
+}
+
+/* A session ended (worn cleared, or STALE): offer the histogram a save and
+ * adopt the thresholds it now gives. The only mid-life recompute. */
+static void zone_session_end(uint32_t source)
+{
+	struct zone_state *z = &states[source].zone;
+
+	z->fed = false;
+	if (!z->th_valid || !z->profiled) {
+		return;
+	}
+	(void)radiant_hr_profile_session_end(z->uuid);
+	radiant_hr_profile_thresholds(z->uuid, &z->th);
+}
+
 static void eval_activity(uint32_t source, const struct radiant_sample *s)
 {
 	/* The slot, not a member of the slot: see the block comment on
@@ -278,6 +436,9 @@ static void eval_activity(uint32_t source, const struct radiant_sample *s)
 	}
 
 	a->tracked = true;
+
+	/* The first sample per slot announces the output (false) - see emit(). */
+	emit(source, field_id, a->debounced, false, t);
 
 	if (!stale) {
 		int64_t delta;
@@ -326,7 +487,11 @@ static void eval_activity(uint32_t source, const struct radiant_sample *s)
 
 	if (desired != a->debounced) {
 		a->debounced = desired;
-		post_occupancy(source, field_id, a->debounced, t);
+		emit(source, field_id, a->debounced, true, t);
+		if (slot == ACTIVITY_SLOT_WORN && !desired) {
+			/* Worn cleared: the session is over (section 6.5). */
+			zone_session_end(source);
+		}
 	}
 
 	if (stale) {
@@ -347,6 +512,14 @@ static void eval_activity(uint32_t source, const struct radiant_sample *s)
 			post_occupancy(source, RADIANT_RULE_FIELD_ZONE2, false,
 				       s->t_us);
 		}
+		if (z->zone3_debounced) {
+			z->zone3_debounced = false;
+			post_occupancy(source, RADIANT_RULE_FIELD_ZONE3, false,
+				       s->t_us);
+		}
+		/* Off the air is a session end too. Repeats are harmless: the
+		 * save is gated on new samples. */
+		zone_session_end(source);
 	}
 }
 
@@ -374,21 +547,34 @@ static void eval_zone(uint32_t source, const struct radiant_sample *s)
 	 * could overwrite between the two calls. */
 	worn = a->tracked && a->debounced;
 
-	changed = dwell_update(worn && reading && z->hr_bpm < REST_THRESHOLD_BPM,
-			       &z->rest_edge_us, &z->rest_raw, &z->rest_debounced,
-			       s->t_us, ZONE_DWELL_US, ZONE_DWELL_US, !worn);
-	if (changed) {
-		post_occupancy(source, RADIANT_RULE_FIELD_AT_REST, z->rest_debounced,
-			       s->t_us);
+	if (!z->th_valid) {
+		zone_load(source, z);
 	}
 
-	changed = dwell_update(worn && reading && z->hr_bpm >= ZONE2_THRESHOLD_BPM,
+	/* Personalisation input (section 6.3): non-zero readings from a worn
+	 * strap only, decimated to ~1 Hz. The histogram's own range check
+	 * drops artifacts outside 30-219 bpm. */
+	if (worn && reading && z->profiled &&
+	    (!z->fed || (s->t_us - z->last_feed_us) >= HR_FEED_INTERVAL_US)) {
+		z->fed = true;
+		z->last_feed_us = s->t_us;
+		radiant_hr_profile_add(z->uuid, z->hr_bpm);
+	}
+
+	changed = dwell_update(worn && reading && z->hr_bpm < z->th.rest_below,
+			       &z->rest_edge_us, &z->rest_raw, &z->rest_debounced,
+			       s->t_us, ZONE_DWELL_US, ZONE_DWELL_US, !worn);
+	emit(source, RADIANT_RULE_FIELD_AT_REST, z->rest_debounced, changed, s->t_us);
+
+	changed = dwell_update(worn && reading && z->hr_bpm >= z->th.zone2_at,
 			       &z->zone2_edge_us, &z->zone2_raw, &z->zone2_debounced,
 			       s->t_us, ZONE_DWELL_US, ZONE_DWELL_US, !worn);
-	if (changed) {
-		post_occupancy(source, RADIANT_RULE_FIELD_ZONE2, z->zone2_debounced,
-			       s->t_us);
-	}
+	emit(source, RADIANT_RULE_FIELD_ZONE2, z->zone2_debounced, changed, s->t_us);
+
+	changed = dwell_update(worn && reading && z->hr_bpm >= z->th.zone3_at,
+			       &z->zone3_edge_us, &z->zone3_raw, &z->zone3_debounced,
+			       s->t_us, ZONE_DWELL_US, ZONE_DWELL_US, !worn);
+	emit(source, RADIANT_RULE_FIELD_ZONE3, z->zone3_debounced, changed, s->t_us);
 }
 
 /*
@@ -457,11 +643,11 @@ static void eval_equipment(uint32_t source, const struct radiant_sample *s)
 			  ((t - e->raw_edge_us) < EQUIPMENT_CLEAR_US);
 	}
 
-	if (desired != e->debounced) {
-		e->debounced = desired;
-		post_occupancy(source, RADIANT_RULE_FIELD_EQUIPMENT_IN_USE,
-			       e->debounced, t);
-	}
+	/* The first FE state sample announces In Use, whatever it says - an
+	 * idle trainer then shows `false` instead of no endpoint at all. */
+	emit(source, RADIANT_RULE_FIELD_EQUIPMENT_IN_USE, desired,
+	     desired != e->debounced, t);
+	e->debounced = desired;
 }
 
 /* Page-84 accumulators (radiant_common_adapter.c) live in the common field_id
@@ -507,6 +693,14 @@ static bool rules_want(const struct radiant_sample *s)
 
 static void rules_publish(const struct radiant_sample *s)
 {
+	apply_resets();
+
+	if (s->source >= RADIANT_BINDING_MAX) {
+		/* rules_want() refuses these; this module's tests post past
+		 * it, so the index is checked here too. */
+		return;
+	}
+
 	if ((s->flags & RADIANT_SAMPLE_ACCUMULATING) != 0u) {
 		/* Repeated here for the reason the FE-state id test below is:
 		 * this module's own tests post without consulting want(). */
@@ -526,4 +720,5 @@ static void rules_publish(const struct radiant_sample *s)
 	}
 }
 
-RADIANT_SINK_DEFINE(radiant_rules_sink, rules_want, rules_publish, NULL);
+RADIANT_SINK_DEFINE(radiant_rules_sink, rules_want, rules_publish,
+		    rules_binding_changed);

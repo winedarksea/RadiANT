@@ -191,6 +191,7 @@ if(CONFIG_RADIANT_BRIDGE)
     src/bridge/radiant_binding.c
     # Pure helpers with no sink, here so radiant/tests can drive them.
     src/bridge/radiant_naming.c
+    src/bridge/radiant_hr_profile.c
     src/bridge/radiant_owed.c
     src/bridge/radiant_self_policy.c
   )

@@ -598,6 +598,11 @@ different and more informative answer than `n`.
 | `CONFIG_CHIP_ENABLE_READ_CLIENT` | y | — | — | ABSENT |
 | `CONFIG_CHIP_FACTORY_DATA_NONE` | y | — | — | ABSENT |
 | `CONFIG_DK_LIBRARY` | **ABSENT** | — | — | ABSENT |
+| `CONFIG_ANT_DONGLE_MATTER_HR_PASSENGER` | **not set** (default `n`; `docs/radiant-bridge.md` §8.3b) | — | — | ABSENT (inside `if CHIP`) |
+| `CONFIG_RADIANT_BRIDGE_RULES_EQUIPMENT_CLEAR_S` | **30** (In Use clear delay; was a fixed 5 s) | — | — | same in the MQTT bridge arm |
+| `CONFIG_RADIANT_BRIDGE_HR_MAX_PRIOR` / `_HR_REST_PRIOR` | **180 / 65** (zone prior, `docs/radiant-bridge.md` §6.2) | — | — | same in the MQTT bridge arm |
+| `CONFIG_RADIANT_BRIDGE_HR_PROFILES` / `_HR_PRIOR_WEIGHT_S` | **8 / 1800** (§6.3–6.5; 0 slots = prior only) | — | — | same in the MQTT bridge arm |
+| `CONFIG_ANT_DONGLE_BINDING_STORE` | y (bindings persisted under `radiant/bind/<n>`) | — | — | y |
 | `CONFIG_CHIP_OTA_REQUESTOR` / `_FACTORY_DATA` / `BOOTLOADER_MCUBOOT` | not set | not set | not set | — |
 | `CONFIG_FLASH_LOAD_OFFSET` / `_SIZE` | — | 0 / 0 (app owns the whole 1 MB) | — | — |
 | settings backend | `SETTINGS_ZMS=y` (RRAM) | | `SETTINGS_NVS=y` | |
@@ -972,6 +977,33 @@ observe it). The Matter arm therefore links four and `bridge_pump.c` logs
 `assert_sink_names` diffs them as an **exact set**, not a subset, so an
 out-of-date list fails the build; the row lists four.
 
+**Reboot and recovery.** Paired sensors survive a reboot
+(`CONFIG_ANT_DONGLE_BINDING_STORE`, default y here because `thread.conf`
+enables settings; `docs/radiant-bridge.md` section 5). At boot `bridge_pump.c`
+restores the newest stored bindings, one per self channel (two on this arm),
+with their old `uuid`s, and `self_channels.c` gives each its channel pinned,
+**with no button press and no pairing window**. The glue is told through the
+same `binding_changed` a fresh bind uses, so the source is bound again before
+its first sample and the endpoints persisted against its stable key are
+adopted rather than re-created. A long or short press that evicts a sensor
+deletes its record, so the next boot does not bring it back; a host that takes
+a self channel only releases the binding, and the next boot re-pins it. The
+records are written on a bind and an eviction only, through the same
+settings/ZMS store as the Matter fabric data (key prefix `radiant/bind/`,
+separate from the glue's `br/`). `CONFIG_ANT_DONGLE_PAIRING_WINDOW_AT_BOOT` is
+therefore needed once, to pair, and not on every boot of a bench image.
+
+Once a restored sensor is heard, every occupancy output it feeds posts its
+current value straight away (normally `false`: the rules announce each output
+on its first input), so a restored endpoint becomes Reachable on the sensor's
+first sample rather than at its next state change. Before 2026-11-26 an idle
+trainer had no In Use endpoint at all until it was first ridden, and a restored
+one stayed unreachable until then. An eviction also erases the strap's
+heart-rate profile (`radiant/hrp/<uuid>`, `docs/radiant-bridge.md` §6.5), and a
+bind or unbind resets the slot's rule and liveness state, so a different
+sensor paired into the slot reports its first occupancy rather than inheriting
+the previous sensor's.
+
 **Deadbands.** `radiant_matter.h` carries `deadband` and `heartbeat_s` per row,
 with sentinels `RADIANT_MATTER_DEADBAND_EVERY` (−1) and `_ON_CHANGE` (0), so a
 zeroed row gets on-change suppression — the one suppression that can never lose
@@ -987,7 +1019,19 @@ comparing before conversion would make it depend on whichever exponent a decoder
 happened to pick. The heartbeat is not optional: without one a sensor whose
 reading never changes stops writing forever, and "unchanged" becomes
 indistinguishable from "gone" to anything reading timestamps rather than
-`Reachable`.
+`Reachable`. The heartbeat is checked only when a sample arrives, so it fires
+on streaming rows; the occupancy row is change-only and needs none, because the
+CHIP attribute holds its last value.
+
+**`CONFIG_ANT_DONGLE_MATTER_HR_PASSENGER`** (default `n`, defined in
+`src/matter/Kconfig` inside `if CHIP`) makes `src/main.c` call
+`radiant_matter_set_hr_passenger(true)` before the Matter task starts. Each
+heart-rate binding then gains a Flow Sensor (`0x0306`) endpoint carrying bpm × 10
+in Flow Measurement `MeasuredValue` (deadband 2 bpm, heartbeat 60 s), served by
+`MeasurementSensorDevice`'s fourth device type. The Flow Measurement cluster has
+a ZAP server count of 0, as Occupancy Sensing and Pressure Measurement do; the
+endpoint's cluster list is dynamic. Deliberately mislabelled, which is why it is
+off: see `docs/radiant-bridge.md` §8.3b.
 
 **Tests.** `radiant_matter` is 28 cases; the full `radiant/tests` application is
 **723 passing, 0 failing**, run on real hardware (nRF5340 DK) via

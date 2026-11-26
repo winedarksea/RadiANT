@@ -1289,6 +1289,56 @@ config RADIANT_BRIDGE_RULES
 	  the bus and posts them back as RADIANT_SAMPLE_DERIVED records.
 	  Registers radiant_rules_sink.
 
+if RADIANT_BRIDGE_RULES
+
+config RADIANT_BRIDGE_RULES_EQUIPMENT_CLEAR_S
+	int "seconds a machine stays In Use after it stops reporting IN_USE"
+	range 1 600
+	default 30
+	help
+	  FE-C trainers report READY whenever cadence is zero, so a short
+	  delay clears In Use at every traffic light or interval rest. The
+	  rule drives lights and fans, where lag is harmless and flicker is
+	  not. STALE (the machine off the air) still clears immediately.
+
+config RADIANT_BRIDGE_HR_MAX_PRIOR
+	int "heart-rate maximum prior (bpm)"
+	range 140 220
+	default 180
+	help
+	  The population prior for HR_max (docs/radiant-bridge.md 6.2).
+	  A single-user home can set this and RADIANT_BRIDGE_HR_REST_PRIOR
+	  to the rider's own numbers and set RADIANT_BRIDGE_HR_PROFILES to
+	  0. Zones: rest < rest + 0.15 HRR, zone 2 >= rest + 0.60 HRR,
+	  zone 3 >= rest + 0.70 HRR.
+
+config RADIANT_BRIDGE_HR_REST_PRIOR
+	int "resting heart-rate prior (bpm)"
+	range 35 100
+	default 65
+	help
+	  The population prior for HR_rest (docs/radiant-bridge.md 6.2).
+
+config RADIANT_BRIDGE_HR_PROFILES
+	int "per-strap heart-rate personalisation slots"
+	range 0 32
+	default 8
+	help
+	  docs/radiant-bridge.md 6.3-6.5: a 76-byte histogram per slot,
+	  least-recently-active eviction, keyed on the binding uuid. A
+	  binding with no slot uses the prior. 0 = prior only. Persistence
+	  is the application's (radiant_hr_profile_set_store()).
+
+config RADIANT_BRIDGE_HR_PRIOR_WEIGHT_S
+	int "weight of the prior, in seconds of observed wear"
+	range 1 86400
+	default 1800
+	help
+	  The estimate is (prior * N0 + observed * N) / (N0 + N), where N
+	  is the strap's histogram total in 1 Hz samples and N0 is this.
+
+endif # RADIANT_BRIDGE_RULES
+
 config RADIANT_BRIDGE_LIVENESS
 	bool "the liveness sink (radiant_liveness.c)"
 	help
