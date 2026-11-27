@@ -1050,7 +1050,10 @@ There are three levels, from coarsest to finest:
 | One output, at build time | `CONFIG_RADIANT_BRIDGE_RULES_OUT_{WORN,ACTIVE,AT_REST,ZONE2,ZONE3,IN_USE}`, all default `y` | The next image you flash |
 
 A Kconfig output set to `n` is never derived, so it disappears from Matter
-**and** from MQTT discovery. `ACTIVE` is "bike in use" (energy advancing);
+**and** is never announced over MQTT. On a broker that already holds its
+retained discovery message (`homeassistant/sensor/<uuid>_<key>/config`) the
+dongle does not clear it: delete the entity in Home Assistant, or publish an
+empty retained message to that topic. `ACTIVE` is "bike in use" (energy advancing);
 `IN_USE` is FE-C equipment in use. Turning one output off does not change the
 others: Zone 2 and the heart-rate profile keep working with Zone 3 off.
 

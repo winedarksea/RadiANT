@@ -538,6 +538,30 @@ void PersistIndexes()
 }
 
 /*
+ * PersistIndexes() plus `extra`: stored indexes BridgeManager does not hold
+ * because this boot's restore skipped them (RestoreBridgedDevices()). They are
+ * disjoint from BridgeManager's list, so no de-duplication is needed. CHIP
+ * thread.
+ */
+void PersistIndexesKeeping(const uint8_t *extra, uint8_t extraCount)
+{
+	uint8_t indexes[Nrf::BridgeManager::kMaxBridgedDevices];
+	uint8_t count = 0;
+
+	if (Nrf::BridgeManager::Instance().GetDevicesIndexes(indexes, sizeof(indexes), count) != CHIP_NO_ERROR) {
+		LOG_ERR("matter: cannot read bridged device indexes; storage left stale");
+		return;
+	}
+	for (uint8_t k = 0; k < extraCount && count < ARRAY_SIZE(indexes); k++) {
+		indexes[count++] = extra[k];
+	}
+	if (!Nrf::BridgeStorageManager::Instance().StoreBridgedDevicesIndexes(indexes, count) ||
+	    !Nrf::BridgeStorageManager::Instance().StoreBridgedDevicesCount(count)) {
+		LOG_ERR("matter: cannot persist bridged device list");
+	}
+}
+
+/*
  * Removes a restored, unclaimed endpoint and its stored record: the removal
  * sequence RemoveEndpointForRow() uses. BridgeManager frees the device and its
  * provider with the pair, so the entry's provider pointer goes too. CHIP
@@ -898,9 +922,12 @@ void RemoveEndpointForRow(Row &row)
  * entry whose UniqueID parses to that key. A claimed entry belongs to a row,
  * which the unbind already marked.
  *
- * An entry a current row would adopt is spared (RowWouldAdopt()): the sensor
- * was bound again after this pass took the keys. A re-bind before that
- * cancels the key outright (binding_changed). A retire that fails leaves the
+ * A re-bind before this pass takes the keys cancels the key outright
+ * (binding_changed). A re-bind after it is covered only once the sensor has
+ * a row (RowWouldAdopt() spares that entry); rows appear on the first
+ * sample, so a sensor that comes back while this loop is blocked in a flash
+ * write can still lose its remaining restored entries and get new endpoint
+ * ids - the same outcome an unbind/re-bind already gives live rows. A retire that fails leaves the
  * entry to orphan collection, like an overflowed key. CHIP thread; takes the
  * shadow lock itself (the caller must not hold it).
  */
@@ -1279,10 +1306,16 @@ CHIP_ERROR RestoreBridgedDevices()
 		return CHIP_NO_ERROR;
 	}
 
+	/* Indexes this restore leaves out of BridgeManager; see the boot
+	 * retirement below. A `continue` in the loop records the index first. */
+	uint8_t skipped[Nrf::BridgeManager::kMaxBridgedDevices];
+	uint8_t skippedCount = 0;
+
 	for (size_t i = 0; i < indexesCount && i < ARRAY_SIZE(sRestored); i++) {
 		Nrf::BridgeStorageManager::BridgedDevice stored;
 
 		if (!Nrf::BridgeStorageManager::Instance().LoadBridgedDevice(stored, indexes[i])) {
+			skipped[skippedCount++] = indexes[i];
 			/* One unreadable entry is not a reason to abandon the
 			 * rest, and it is certainly not a reason to fail
 			 * BridgeManager::Init() - which is what returning an
@@ -1296,6 +1329,7 @@ CHIP_ERROR RestoreBridgedDevices()
 			Nrf::BridgeManager::HandleUpdate, Nrf::BridgeManager::HandleCommand);
 		if (provider == nullptr) {
 			LOG_ERR("matter: out of CHIP heap restoring endpoint %u", stored.mEndpointId);
+			skipped[skippedCount++] = indexes[i];
 			continue;
 		}
 
@@ -1304,6 +1338,7 @@ CHIP_ERROR RestoreBridgedDevices()
 		if (device == nullptr) {
 			chip::Platform::Delete(provider);
 			LOG_WRN("matter: stored device type 0x%04x is not one this build serves", stored.mDeviceType);
+			skipped[skippedCount++] = indexes[i];
 			continue;
 		}
 
@@ -1320,6 +1355,7 @@ CHIP_ERROR RestoreBridgedDevices()
 		if (Nrf::BridgeManager::Instance().AddBridgedDevices(devices, provider, 1, pairIndexes, endpointIds) !=
 		    CHIP_NO_ERROR) {
 			LOG_ERR("matter: could not restore endpoint %u", stored.mEndpointId);
+			skipped[skippedCount++] = indexes[i];
 			continue;
 		}
 
@@ -1357,12 +1393,22 @@ CHIP_ERROR RestoreBridgedDevices()
 	{
 		size_t from = 0;
 		int i;
+		bool retired = false;
 
 		while ((i = RadiantMatter::Orphans::RestoredToRetireAtBoot(sRestored, ARRAY_SIZE(sRestored), from,
 									      radiant_rules_output_enabled)) !=
 		       RadiantMatter::Orphans::kNone) {
 			from = static_cast<size_t>(i) + 1;
-			(void)RetireRestored(sRestored[i], "rule output disabled in this build");
+			retired |= RetireRestored(sRestored[i], "rule output disabled in this build");
+		}
+
+		/* RetireRestored() stored BridgeManager's list, which lacks every
+		 * record this boot SKIPPED (unreadable, out of heap, type not
+		 * served, add failed). A boot that retires nothing writes nothing
+		 * and keeps them; one that retires must keep them too, or a
+		 * transient failure on that boot loses a record for good. */
+		if (retired && skippedCount > 0) {
+			PersistIndexesKeeping(skipped, skippedCount);
 		}
 	}
 

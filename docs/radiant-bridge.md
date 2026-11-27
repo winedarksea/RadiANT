@@ -428,7 +428,8 @@ no sink needs to know a rule engine exists. All six outputs below are type
 Each output can be left out at build time with
 `CONFIG_RADIANT_BRIDGE_RULES_OUT_{WORN,ACTIVE,AT_REST,ZONE2,ZONE3,IN_USE}`
 (default `y`); an output set to `n` is never derived, so it reaches neither
-Matter nor MQTT (`docs/matter-bringup.md` §7.1).
+Matter nor MQTT (`docs/matter-bringup.md` §7.1). A retained MQTT discovery
+message published before the change stays on the broker until cleared.
 
 ### 6.1 Activity: is an accumulator advancing?
 
