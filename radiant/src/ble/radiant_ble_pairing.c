@@ -34,6 +34,23 @@ BUILD_ASSERT(CONFIG_RADIANT_BLE_PAIRING_WINDOW_AT_BOOT_S <=
 #define LRU_N   CONFIG_BT_MAX_PAIRED
 #define LRU_KEY "rble/lru"
 
+/*
+ * THE SPARE SLOT. One key slot is always kept free, so the bonds a user can
+ * hold are CONFIG_BT_MAX_PAIRED - 1. Without BT_KEYS_OVERWRITE_OLDEST a
+ * Pairing Request that finds no free key slot is dropped inside
+ * smp_pairing_req() before SMP_FLAG_PAIRING is set - no pairing_failed, no
+ * security_changed, nothing this layer could react to - so the room has to
+ * exist before the request arrives. Outside the window pairing_accept refuses
+ * after SMP_FLAG_PAIRING is set, and smp_pairing_complete() releases the
+ * stranger's half-made keys, so the spare comes back and no bond is lost.
+ * Inside the window the new bond takes the spare; pairing_complete then
+ * evicts the least recently used bond to restore it.
+ */
+#define BOND_CAPACITY (CONFIG_BT_MAX_PAIRED - 1)
+BUILD_ASSERT(CONFIG_BT_MAX_PAIRED >= 2,
+	     "CONFIG_RADIANT_BLE_PAIRING_WINDOW keeps one key slot spare: "
+	     "CONFIG_BT_MAX_PAIRED must be at least 2 (capacity MAX_PAIRED - 1)");
+
 static struct k_spinlock lock;
 static uint64_t win_opened_ms;
 static uint32_t win_len_ms; /* 0 = closed */
@@ -41,6 +58,8 @@ static uint32_t win_len_ms; /* 0 = closed */
 /* Guarded by `lock`; written to settings from lru_work. */
 static struct radiant_ble_lru_entry lru[LRU_N];
 static uint32_t lru_next;
+/* The peer whose bond just completed: never the eviction victim. */
+static uint8_t just_paired[RADIANT_BLE_ADDR_BYTES];
 
 static void room_work_fn(struct k_work *w);
 static K_WORK_DEFINE(room_work, room_work_fn);
@@ -151,58 +170,66 @@ static bool is_bonded(const bt_addr_le_t *addr)
 	return false;
 }
 
+/* Runs only after a bond completed (on_pairing_complete). Deletes least
+ * recently used bonds - never the one just made, never a connected peer's -
+ * until the store is back at BOND_CAPACITY, which frees the spare slot. */
 static void room_work_fn(struct k_work *w)
 {
-	struct bond_list bonds = { .n = 0u };
-	bool connected[LRU_N];
-	int victim;
-
 	ARG_UNUSED(w);
 
-	if (!window_allows_now() || !bt_is_ready()) {
-		return;
-	}
-	bt_foreach_bond(BT_ID_DEFAULT, collect_bond, &bonds);
-	if (bonds.n < LRU_N) {
-		return; /* there is room */
-	}
-	bonds.n = LRU_N;
+	/* Bounded: one deletion per pass, and never more passes than slots. */
+	for (int pass = 0; pass < LRU_N; pass++) {
+		struct bond_list bonds = { .n = 0u };
+		bool connected[LRU_N];
+		uint8_t keep[RADIANT_BLE_ADDR_BYTES];
+		int victim;
 
-	for (size_t i = 0; i < bonds.n; i++) {
-		struct bt_conn *c = bt_conn_lookup_addr_le(
-			BT_ID_DEFAULT, (const bt_addr_le_t *)bonds.addr[i]);
-
-		connected[i] = c != NULL;
-		if (c != NULL) {
-			bt_conn_unref(c);
+		bt_foreach_bond(BT_ID_DEFAULT, collect_bond, &bonds);
+		if (bonds.n > LRU_N) {
+			bonds.n = LRU_N;
 		}
+		for (size_t i = 0; i < bonds.n; i++) {
+			struct bt_conn *c = bt_conn_lookup_addr_le(
+				BT_ID_DEFAULT, (const bt_addr_le_t *)bonds.addr[i]);
+
+			connected[i] = c != NULL;
+			if (c != NULL) {
+				bt_conn_unref(c);
+			}
+		}
+
+		k_spinlock_key_t key = k_spin_lock(&lock);
+
+		memcpy(keep, just_paired, sizeof(keep));
+		victim = radiant_ble_lru_over_capacity_victim(
+			lru, LRU_N, (const uint8_t (*)[RADIANT_BLE_ADDR_BYTES])bonds.addr,
+			connected, bonds.n, BOND_CAPACITY, keep);
+		if (victim >= 0) {
+			radiant_ble_lru_forget(lru, LRU_N, bonds.addr[victim]);
+		}
+		k_spin_unlock(&lock, key);
+
+		if (victim == -1) {
+			return; /* at or under capacity: the spare slot is free */
+		}
+		if (victim < 0) {
+			LOG_WRN("bond store over capacity but every other bonded peer is "
+				"connected: the spare slot stays used until one leaves");
+			return;
+		}
+
+		int err = bt_unpair(BT_ID_DEFAULT,
+				    (const bt_addr_le_t *)bonds.addr[victim]);
+
+		if (err != 0) {
+			LOG_ERR("evicting the least recently used bond: bt_unpair %d",
+				err);
+			return;
+		}
+		LOG_INF("new bond made inside the pairing window: least recently "
+			"used bond deleted to keep a key slot spare");
+		(void)k_work_submit(&lru_work);
 	}
-
-	k_spinlock_key_t key = k_spin_lock(&lock);
-
-	victim = radiant_ble_lru_pick_victim(lru, LRU_N,
-					     (const uint8_t (*)[RADIANT_BLE_ADDR_BYTES])bonds.addr,
-					     connected, bonds.n);
-	if (victim >= 0) {
-		radiant_ble_lru_forget(lru, LRU_N, bonds.addr[victim]);
-	}
-	k_spin_unlock(&lock, key);
-
-	if (victim < 0) {
-		LOG_WRN("bond store full and every bonded peer is connected: "
-			"no room for a new pairing");
-		return;
-	}
-
-	int err = bt_unpair(BT_ID_DEFAULT, (const bt_addr_le_t *)bonds.addr[victim]);
-
-	if (err != 0) {
-		LOG_ERR("evicting the least recently used bond: bt_unpair %d", err);
-		return;
-	}
-	LOG_INF("bond store full: least recently used bond deleted to make room "
-		"for a pairing inside the window");
-	(void)k_work_submit(&lru_work);
 }
 
 /* ── Keeping the LRU order ────────────────────────────────────────────────── */
@@ -258,31 +285,23 @@ BT_CONN_CB_DEFINE(radiant_ble_pairing_conn_cb) = {
 };
 
 /* After key distribution and identity resolution: dst is the identity. Only
- * a bond gets an entry - a non-bonded pairing leaves nothing to evict. */
+ * a bond gets an entry - a non-bonded pairing leaves nothing to evict. The
+ * new bond is recorded first (most recent, so never the victim), then the
+ * spare slot it took is restored by evicting the least recently used. */
 static void on_pairing_complete(struct bt_conn *conn, bool bonded)
 {
-	if (bonded) {
-		lru_touch(bt_conn_get_dst(conn));
-	}
-}
+	const bt_addr_le_t *dst = bt_conn_get_dst(conn);
 
-/*
- * A pairing that failed inside an open window, with the key pool full, most
- * likely failed for want of a slot (without BT_KEYS_OVERWRITE_OLDEST, SMP
- * refuses a Pairing Request it has no key slot for, before pairing_accept).
- * Free one now so the phone's retry succeeds. This is the boot window's only
- * eviction path: a stranger who merely connects, or a client that reads the
- * unencrypted data characteristics, never costs a bond. room_work_fn checks
- * the window and the full store again on the work queue.
- */
-static void on_pairing_failed(struct bt_conn *conn, enum bt_security_err reason)
-{
-	ARG_UNUSED(conn);
-	ARG_UNUSED(reason);
-
-	if (window_allows_now()) {
-		(void)k_work_submit(&room_work);
+	if (!bonded) {
+		return;
 	}
+
+	k_spinlock_key_t key = k_spin_lock(&lock);
+
+	memcpy(just_paired, dst, sizeof(just_paired));
+	k_spin_unlock(&lock, key);
+	lru_touch(dst);
+	(void)k_work_submit(&room_work);
 }
 
 static void on_bond_deleted(uint8_t id, const bt_addr_le_t *peer)
@@ -300,7 +319,6 @@ static void on_bond_deleted(uint8_t id, const bt_addr_le_t *peer)
 
 static struct bt_conn_auth_info_cb auth_info_cb = {
 	.pairing_complete = on_pairing_complete,
-	.pairing_failed = on_pairing_failed,
 	.bond_deleted = on_bond_deleted,
 };
 
@@ -336,8 +354,7 @@ static int pairing_sys_init(void)
 		LOG_ERR("bt_conn_auth_cb_register: %d - the pairing window is "
 			"NOT enforced", err);
 	}
-	/* The bond LRU's events (pairing_complete, pairing_failed,
-	 * bond_deleted). A list in Zephyr, so it cannot collide with an
+	/* The bond LRU's events (pairing_complete, bond_deleted). A list in Zephyr, so it cannot collide with an
 	 * application's own. */
 	int ierr = bt_conn_auth_info_cb_register(&auth_info_cb);
 
@@ -349,9 +366,9 @@ static int pairing_sys_init(void)
 		}
 	}
 #if CONFIG_RADIANT_BLE_PAIRING_WINDOW_AT_BOOT_S > 0
-	/* No eviction at open: nobody chose to replace a bond by powering
-	 * on. A full store frees a slot only after a pairing in this window
-	 * fails (on_pairing_failed), so the phone's retry succeeds. */
+	/* Opening evicts nothing: the spare key slot is what lets a pairing
+	 * in this window succeed, and a bond is evicted only after the new
+	 * one is made (on_pairing_complete). */
 	win_opened_ms = (uint64_t)k_uptime_get();
 	win_len_ms = CONFIG_RADIANT_BLE_PAIRING_WINDOW_AT_BOOT_S * 1000u;
 #endif
@@ -374,9 +391,6 @@ int radiant_ble_pairing_window_open(uint32_t seconds)
 	win_len_ms = seconds * 1000u;
 	k_spin_unlock(&lock, key);
 	LOG_INF("pairing window open for %u s", seconds);
-	/* The owner's deliberate console action: free a slot now if the
-	 * store is full, so the first pairing attempt succeeds. */
-	(void)k_work_submit(&room_work);
 	return 0;
 }
 

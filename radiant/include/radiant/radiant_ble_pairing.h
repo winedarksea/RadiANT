@@ -14,24 +14,21 @@
  *   - Outside the window, a pairing request is refused with "pairing not
  *     allowed" (BT_SMP_APP_PAIRING_ACCEPT); bonded peers still connect and
  *     encrypt with their stored keys, which involves no pairing.
- *   - BOND STORAGE FULL (CONFIG_BT_MAX_PAIRED). Zephyr's own answer,
- *     BT_KEYS_OVERWRITE_OLDEST, is NOT used and must not be: it evicts the
- *     oldest bond inside smp_pairing_req() BEFORE pairing_accept is asked,
- *     so with the window closed every refused stranger would still erase one
- *     bond. Instead this layer keeps its own least-recently-used order (a
- *     settings record, "rble/lru": an entry per BOND, keyed by its identity
- *     address, written when a pairing completes bonded and touched each time
- *     a bonded peer re-encrypts) and frees ONE slot itself, only while a
- *     window is open, and never a connected peer's:
- *       - radiant_ble_pairing_window_open(), the owner's deliberate console
- *         action, frees a slot at once if the store is full, so the first
- *         attempt succeeds;
- *       - the boot window (AT_BOOT_S) does not evict on open - powering on is
- *         not a decision to replace a bond. With a full store the FIRST
- *         pairing attempt in it fails (SMP has no key slot), that failure
- *         frees a slot, and the phone's RETRY succeeds.
+ *   - CAPACITY IS CONFIG_BT_MAX_PAIRED - 1. One key slot is always kept
+ *     spare. Without it a Pairing Request finding the pool full is dropped
+ *     inside SMP before pairing_accept runs, with no event at all, and
+ *     Zephyr's own answer, BT_KEYS_OVERWRITE_OLDEST, must not be used: it
+ *     evicts the oldest bond in that same handler, before pairing_accept
+ *     can refuse, so every refused stranger would erase a bond. With the
+ *     spare: outside the window the refusal releases the stranger's slot
+ *     and no bond is touched; inside it the new bond takes the spare, and
+ *     ONLY AFTER that bond succeeds is the least recently used bond deleted
+ *     (never the new one, never a connected peer's) to restore the spare.
  *     A peer that merely connects - a guest's app reading the unencrypted
- *     data characteristics - never costs a bond.
+ *     data characteristics - never costs a bond. The order is this layer's
+ *     own (settings record "rble/lru": one entry per bond, keyed by its
+ *     identity address, written when a pairing completes bonded and touched
+ *     each time a bonded peer re-encrypts).
  *   - radiant_ble_bonds_forget_all() for service.
  *
  * The layer registers the auth callbacks itself at boot (SYS_INIT); an
@@ -108,6 +105,20 @@ int radiant_ble_lru_pick_victim(const struct radiant_ble_lru_entry *t, size_t n,
 				const uint8_t (*bonds)[RADIANT_BLE_ADDR_BYTES],
 				const bool *connected, size_t nb);
 
+/*
+ * After a bond completed: which bond to delete to get back to `capacity`
+ * (CONFIG_BT_MAX_PAIRED - 1, the spare slot free). -1 when nb <= capacity
+ * (nothing to do); otherwise the least recently used bond that is neither
+ * connected nor `keep` (the peer that just paired), or -2 when every bond is
+ * shielded. At most 64 bonds.
+ */
+int radiant_ble_lru_over_capacity_victim(const struct radiant_ble_lru_entry *t,
+					 size_t n,
+					 const uint8_t (*bonds)[RADIANT_BLE_ADDR_BYTES],
+					 const bool *connected, size_t nb,
+					 size_t capacity,
+					 const uint8_t keep[RADIANT_BLE_ADDR_BYTES]);
+
 /* The record codec. encode returns the bytes written (1 + 11 * used
  * entries) or -1 if `cap` is too small; decode fills `t` (zeroing the rest)
  * and returns the entry count, or -1 for a malformed record. */
@@ -120,7 +131,7 @@ int radiant_ble_lru_decode(const uint8_t *in, size_t len,
 /* ── Zephyr glue ──────────────────────────────────────────────────────────── */
 
 /* Open (or re-open, restarting the clock) a window of 1..600 s. Returns 0 or
- * -EINVAL. Frees one bond slot if the store is full (see above). */
+ * -EINVAL. Opening evicts nothing. */
 int radiant_ble_pairing_window_open(uint32_t seconds);
 
 void radiant_ble_pairing_window_close(void);

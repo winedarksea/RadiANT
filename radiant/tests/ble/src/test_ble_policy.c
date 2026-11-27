@@ -569,3 +569,62 @@ ZTEST(ble_lru, test_rekey_moves_an_rpa_entry_to_the_identity)
 	}
 	zassert_equal(2, live);
 }
+
+/* The spare-slot rule: after a bond completes, nothing happens until the
+ * store is over capacity (CONFIG_BT_MAX_PAIRED - 1); then the least recently
+ * used bond goes - never the peer that just paired, never a connected one. */
+ZTEST(ble_lru, test_over_capacity_evicts_the_lru_but_never_the_new_bond)
+{
+	struct radiant_ble_lru_entry t[4] = { 0 };
+	uint32_t next = 0u;
+	uint8_t bonds[4][RADIANT_BLE_ADDR_BYTES];
+	bool connected[4] = { false, false, false, false };
+
+	memcpy(bonds[0], A, sizeof(A));
+	memcpy(bonds[1], B, sizeof(B));
+	memcpy(bonds[2], C, sizeof(C));
+	memcpy(bonds[3], D, sizeof(D));
+	radiant_ble_lru_touch(t, 4, A, &next);
+	radiant_ble_lru_touch(t, 4, B, &next);
+	radiant_ble_lru_touch(t, 4, C, &next);
+
+	/* Capacity 3 (MAX_PAIRED 4): three bonds is not over capacity. */
+	zassert_equal(-1, radiant_ble_lru_over_capacity_victim(t, 4, bonds, connected,
+								3, 3, NULL));
+
+	/* D just paired into the spare: four bonds, A is least recent. */
+	radiant_ble_lru_touch(t, 4, D, &next);
+	zassert_equal(0, radiant_ble_lru_over_capacity_victim(t, 4, bonds, connected,
+							       4, 3, D));
+
+	/* A connected: B goes instead. */
+	connected[0] = true;
+	zassert_equal(1, radiant_ble_lru_over_capacity_victim(t, 4, bonds, connected,
+							       4, 3, D));
+}
+
+/* The just-paired peer is shielded even if the LRU never saw it (a record
+ * lost or a touch not yet saved): an unrecorded bond would otherwise sort
+ * first. */
+ZTEST(ble_lru, test_the_just_paired_peer_is_shielded_even_unrecorded)
+{
+	struct radiant_ble_lru_entry t[3] = { 0 };
+	uint32_t next = 0u;
+	uint8_t bonds[3][RADIANT_BLE_ADDR_BYTES];
+	bool connected[3] = { false, false, false };
+
+	memcpy(bonds[0], C, sizeof(C)); /* just paired, no entry */
+	memcpy(bonds[1], A, sizeof(A));
+	memcpy(bonds[2], B, sizeof(B));
+	radiant_ble_lru_touch(t, 3, A, &next);
+	radiant_ble_lru_touch(t, 3, B, &next);
+
+	zassert_equal(1, radiant_ble_lru_over_capacity_victim(t, 3, bonds, connected,
+							       3, 2, C));
+
+	/* Everything else connected: nothing may go. */
+	connected[1] = true;
+	connected[2] = true;
+	zassert_equal(-2, radiant_ble_lru_over_capacity_victim(t, 3, bonds, connected,
+								3, 2, C));
+}

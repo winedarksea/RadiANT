@@ -298,6 +298,31 @@ int radiant_ble_lru_pick_victim(const struct radiant_ble_lru_entry *t, size_t n,
 	return victim;
 }
 
+int radiant_ble_lru_over_capacity_victim(const struct radiant_ble_lru_entry *t,
+					 size_t n,
+					 const uint8_t (*bonds)[RADIANT_BLE_ADDR_BYTES],
+					 const bool *connected, size_t nb,
+					 size_t capacity,
+					 const uint8_t keep[RADIANT_BLE_ADDR_BYTES])
+{
+	bool shielded[64];
+	int  v;
+
+	if (nb <= capacity) {
+		return -1;
+	}
+	if (bonds == NULL || connected == NULL || nb > sizeof(shielded)) {
+		return -2;
+	}
+	for (size_t b = 0; b < nb; b++) {
+		shielded[b] = connected[b] ||
+			      (keep != NULL &&
+			       memcmp(bonds[b], keep, RADIANT_BLE_ADDR_BYTES) == 0);
+	}
+	v = radiant_ble_lru_pick_victim(t, n, bonds, shielded, nb);
+	return v < 0 ? -2 : v;
+}
+
 int radiant_ble_lru_encode(const struct radiant_ble_lru_entry *t, size_t n,
 			   uint8_t *out, size_t cap)
 {
