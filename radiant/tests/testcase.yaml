@@ -154,3 +154,25 @@ tests:
       - CONFIG_RADIANT_POWER_DIAG=y
       - CONFIG_TRACING=y
       - CONFIG_TRACING_USER=y
+
+  # The same suites with two of the rules sink's six derived outputs COMPILED
+  # OUT (CONFIG_RADIANT_BRIDGE_RULES_OUT_*, radiant/Kconfig). The mask is applied
+  # in radiant_rules.c's post_occupancy(), which every derived post goes
+  # through - announce, change, and the STALE zone drop that bypasses emit().
+  # test_rules.c's per-output cases assert here that Zone 3 and At Rest are
+  # never posted on any of those paths while Worn, Zone 2, In Use and the
+  # strap's personalisation behave exactly as in radiant.unit; the cases that
+  # assert Zone 3 or At Rest themselves skip. One case
+  # (test_the_outputs_off_scenario_drops_zone3_and_at_rest_only) exists only
+  # here, so this scenario cannot silently fall back to all six on.
+  radiant.unit.rules_outputs_off:
+    timeout: 300
+    tags:
+      - radiant
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
+    extra_configs:
+      - CONFIG_RADIANT_BRIDGE_RULES_OUT_ZONE3=n
+      - CONFIG_RADIANT_BRIDGE_RULES_OUT_AT_REST=n

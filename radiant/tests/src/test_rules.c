@@ -142,6 +142,20 @@ static uint32_t count_with(uint8_t field_id)
 	return n;
 }
 
+/*
+ * A case that asserts an output's value needs that output compiled in. The
+ * radiant.unit.rules_outputs_off scenario (testcase.yaml) builds with Zone 3
+ * and At Rest off, and there the cases that assert them skip rather than
+ * fail; the per-output cases at the bottom of this file run in their place.
+ * In the default scenario every output is on and nothing skips.
+ */
+static void require_output(uint8_t field_id)
+{
+	if (!radiant_rules_output_enabled(field_id)) {
+		ztest_test_skip();
+	}
+}
+
 static void post_beats(uint32_t source, int64_t raw, uint64_t t_us)
 {
 	struct radiant_sample s = {
@@ -409,6 +423,8 @@ ZTEST(radiant_rules, test_zone_boundaries_82_is_not_rest_and_133_is_not_zone2)
 	uint32_t src;
 	uint64_t t = 0u;
 
+	require_output(RADIANT_RULE_FIELD_AT_REST);
+
 	radiant_binding_bind(1u, 0x78u, 1u, NULL, &src);
 	post_beats(src, 0, t);
 	t += 1u * US_PER_S;
@@ -440,6 +456,8 @@ ZTEST(radiant_rules, test_zone_thresholds_are_82_and_134)
 	uint64_t t = 0u;
 	const struct radiant_sample *at_rest;
 	const struct radiant_sample *zone2;
+
+	require_output(RADIANT_RULE_FIELD_AT_REST);
 
 	radiant_binding_bind(1u, 0x78u, 1u, NULL, &src);
 
@@ -784,6 +802,8 @@ ZTEST(radiant_rules, test_stale_clears_the_zones_too_on_a_real_stream)
 	struct radiant_sample s;
 	const struct radiant_sample *w;
 	const struct radiant_sample *at_rest;
+
+	require_output(RADIANT_RULE_FIELD_AT_REST);
 
 	radiant_binding_bind(1u, 0x78u, 1u, NULL, &src);
 
@@ -1157,6 +1177,12 @@ ZTEST(radiant_rules, test_first_inputs_announce_every_output_they_feed)
 {
 	uint32_t src;
 
+	require_output(RADIANT_RULE_FIELD_WORN);
+	require_output(RADIANT_RULE_FIELD_AT_REST);
+	require_output(RADIANT_RULE_FIELD_ZONE2);
+	require_output(RADIANT_RULE_FIELD_ZONE3);
+	require_output(RADIANT_RULE_FIELD_ACTIVE);
+
 	radiant_binding_bind(1u, 0x78u, 1u, NULL, &src);
 
 	/* One beat count: Worn exists at once, before the delta it needs. */
@@ -1254,6 +1280,8 @@ ZTEST(radiant_rules, test_zone3_asserts_at_146_and_not_at_145)
 	int64_t  beats = 0;
 	uint64_t t;
 
+	require_output(RADIANT_RULE_FIELD_ZONE3);
+
 	radiant_binding_bind(1u, 0x78u, 1u, NULL, &src);
 	t = make_worn(src, &beats, 0u);
 
@@ -1285,6 +1313,8 @@ ZTEST(radiant_rules, test_personal_thresholds_move_only_at_session_end)
 	int64_t  beats = 0;
 	uint64_t t;
 	uint32_t i;
+
+	require_output(RADIANT_RULE_FIELD_ZONE3);
 
 	/* A bound strap gets a profile slot. One hour at 142 bpm: under the
 	 * prior's zone 3 (146), and enough wear (3600 samples vs. the 1800 s
@@ -1325,6 +1355,8 @@ ZTEST(radiant_rules, test_an_unbound_source_uses_the_prior_and_no_slot)
 	int64_t  beats = 0;
 	uint64_t t;
 
+	require_output(RADIANT_RULE_FIELD_ZONE3);
+
 	/* Every older case here posts to an unbound source: no uuid, so no
 	 * profile slot, and the thresholds are the prior's - the n = 0 path. */
 	t = make_worn(6u, &beats, 0u);
@@ -1335,6 +1367,230 @@ ZTEST(radiant_rules, test_an_unbound_source_uses_the_prior_and_no_slot)
 	}
 	zassert_true(is_on(RADIANT_RULE_FIELD_ZONE3));
 	zassert_is_null(radiant_hr_profile_hist(0u));
+}
+
+/*
+ * ---------------------------------------------------------------------------
+ * Per-output Kconfig (CONFIG_RADIANT_BRIDGE_RULES_OUT_*). Every case below runs
+ * in both scenarios: radiant.unit (all six on) and
+ * radiant.unit.rules_outputs_off (Zone 3 and At Rest off). Each states its
+ * expectation per output from radiant_rules_output_enabled(), so the default
+ * scenario checks the "on" half of every claim and the other the "off" half.
+ * ---------------------------------------------------------------------------
+ */
+
+#define RULE_FIELD_COUNT (RADIANT_RULE_FIELD_ZONE3 + 1u)
+
+/* No capture record carries an output this build has turned off. */
+static void assert_no_disabled_output_posted(void)
+{
+	uint32_t i;
+
+	for (i = 0u; i < cap_n; i++) {
+		zassert_true(radiant_rules_output_enabled(cap_buf[i].field_id),
+			     "disabled output %u posted (record %u)",
+			     (unsigned int)cap_buf[i].field_id, (unsigned int)i);
+	}
+}
+
+ZTEST(radiant_rules, test_output_enabled_matches_the_kconfig)
+{
+	zassert_equal(radiant_rules_output_enabled(RADIANT_RULE_FIELD_WORN),
+		      IS_ENABLED(CONFIG_RADIANT_BRIDGE_RULES_OUT_WORN));
+	zassert_equal(radiant_rules_output_enabled(RADIANT_RULE_FIELD_ACTIVE),
+		      IS_ENABLED(CONFIG_RADIANT_BRIDGE_RULES_OUT_ACTIVE));
+	zassert_equal(radiant_rules_output_enabled(RADIANT_RULE_FIELD_AT_REST),
+		      IS_ENABLED(CONFIG_RADIANT_BRIDGE_RULES_OUT_AT_REST));
+	zassert_equal(radiant_rules_output_enabled(RADIANT_RULE_FIELD_ZONE2),
+		      IS_ENABLED(CONFIG_RADIANT_BRIDGE_RULES_OUT_ZONE2));
+	zassert_equal(radiant_rules_output_enabled(RADIANT_RULE_FIELD_ZONE3),
+		      IS_ENABLED(CONFIG_RADIANT_BRIDGE_RULES_OUT_ZONE3));
+	zassert_equal(radiant_rules_output_enabled(RADIANT_RULE_FIELD_EQUIPMENT_IN_USE),
+		      IS_ENABLED(CONFIG_RADIANT_BRIDGE_RULES_OUT_IN_USE));
+
+	/* Past the last id: no output, whatever the mask's spare bits hold. */
+	zassert_false(radiant_rules_output_enabled(RULE_FIELD_COUNT));
+	zassert_false(radiant_rules_output_enabled(7u));
+	zassert_false(radiant_rules_output_enabled(8u));
+	zassert_false(radiant_rules_output_enabled(UINT8_MAX));
+}
+
+#if !defined(CONFIG_RADIANT_BRIDGE_RULES_OUT_ZONE3) && \
+	!defined(CONFIG_RADIANT_BRIDGE_RULES_OUT_AT_REST)
+/*
+ * Only in radiant.unit.rules_outputs_off: the scenario really did turn those
+ * two off and nothing else. Without this, a scenario whose extra_configs
+ * stopped applying would run every case above with all six on and pass.
+ */
+ZTEST(radiant_rules, test_the_outputs_off_scenario_drops_zone3_and_at_rest_only)
+{
+	zassert_false(radiant_rules_output_enabled(RADIANT_RULE_FIELD_ZONE3));
+	zassert_false(radiant_rules_output_enabled(RADIANT_RULE_FIELD_AT_REST));
+	zassert_true(radiant_rules_output_enabled(RADIANT_RULE_FIELD_WORN));
+	zassert_true(radiant_rules_output_enabled(RADIANT_RULE_FIELD_ACTIVE));
+	zassert_true(radiant_rules_output_enabled(RADIANT_RULE_FIELD_ZONE2));
+	zassert_true(radiant_rules_output_enabled(RADIANT_RULE_FIELD_EQUIPMENT_IN_USE));
+}
+#endif
+
+ZTEST(radiant_rules, test_a_disabled_output_is_never_announced)
+{
+	uint32_t src;
+	uint32_t id;
+	uint32_t expected = 0u;
+
+	/* One bound source fed every input: beat count (Worn), heart rate
+	 * (At Rest, Zone 2, Zone 3), energy (Active), FE state (In Use). Each
+	 * input's first sample announces the outputs it feeds, as `false`. */
+	zassert_equal(radiant_binding_bind(77u, 0x11u, 5u, NULL, &src), 0);
+	post_beats(src, 7, 0u);
+	post_hr(src, 150, 0u);
+	post_energy(src, 0, 0u);
+	post_fe_state(src, FEC_STATE_READY, 0u, 0u);
+
+	for (id = 0u; id < RULE_FIELD_COUNT; id++) {
+		const struct radiant_sample *s = last_with((uint8_t)id);
+
+		if (radiant_rules_output_enabled((uint8_t)id)) {
+			expected++;
+			zassert_not_null(s, "output %u not announced", (unsigned int)id);
+			zassert_equal(s->raw, 0);
+			zassert_equal(s->source, src);
+		} else {
+			zassert_is_null(s, "disabled output %u announced", (unsigned int)id);
+		}
+	}
+	zassert_equal(cap_n, expected, "%u records, expected %u",
+		      (unsigned int)cap_n, (unsigned int)expected);
+}
+
+ZTEST(radiant_rules, test_a_disabled_output_is_not_posted_on_the_stale_drop)
+{
+	uint32_t src;
+	int64_t  beats = 0;
+	uint64_t t;
+	const struct radiant_sample *s;
+
+	/* eval_activity()'s STALE branch posts the zone drops directly rather
+	 * than through emit(), so it is the path most likely to escape the
+	 * mask. Session 1: zones 2 and 3 held true, then off the air. */
+	zassert_equal(radiant_binding_bind(78u, 0x78u, 1u, NULL, &src), 0);
+	t = make_worn(src, &beats, 0u);
+	post_hr(src, 150, t);
+	t += 4u * US_PER_S;
+	post_beats(src, beats++, t);
+	post_hr(src, 150, t);
+	zassert_true(is_on(RADIANT_RULE_FIELD_ZONE2));
+	assert_no_disabled_output_posted();
+
+	cap_n = 0u;
+	post_beats_stale(src, beats, t + 1u);
+	s = last_with(RADIANT_RULE_FIELD_WORN);
+	zassert_not_null(s);
+	zassert_equal(s->raw, 0);
+	s = last_with(RADIANT_RULE_FIELD_ZONE2);
+	zassert_not_null(s, "the STALE drop must still clear Zone 2");
+	zassert_equal(s->raw, 0);
+	s = last_with(RADIANT_RULE_FIELD_ZONE3);
+	if (radiant_rules_output_enabled(RADIANT_RULE_FIELD_ZONE3)) {
+		zassert_not_null(s);
+		zassert_equal(s->raw, 0);
+	} else {
+		zassert_is_null(s, "Zone 3 is off but its STALE drop was posted");
+	}
+	assert_no_disabled_output_posted();
+
+	/* Session 2: at rest held true (internally, if the output is off),
+	 * then off the air again. */
+	t += 10u * US_PER_S;
+	t = make_worn(src, &beats, t);
+	post_hr(src, 60, t);
+	t += 4u * US_PER_S;
+	post_beats(src, beats++, t);
+	post_hr(src, 60, t);
+	assert_no_disabled_output_posted();
+
+	cap_n = 0u;
+	post_beats_stale(src, beats, t + 1u);
+	s = last_with(RADIANT_RULE_FIELD_AT_REST);
+	if (radiant_rules_output_enabled(RADIANT_RULE_FIELD_AT_REST)) {
+		zassert_not_null(s);
+		zassert_equal(s->raw, 0);
+	} else {
+		zassert_is_null(s, "At Rest is off but its STALE drop was posted");
+	}
+	zassert_not_null(last_with(RADIANT_RULE_FIELD_WORN));
+	assert_no_disabled_output_posted();
+}
+
+ZTEST(radiant_rules, test_the_enabled_outputs_do_not_depend_on_the_mask)
+{
+	uint32_t src;
+	const struct radiant_sample *s;
+	const struct radiant_hr_hist *h;
+
+	/*
+	 * Exact timestamps, asserted identically in both scenarios: Worn,
+	 * Zone 2 and In Use must assert and clear at the same instants with
+	 * Zone 3 and At Rest compiled out, and the strap's histogram must be
+	 * fed the same samples. Only the post is masked; the zone dwell and
+	 * personalisation run regardless.
+	 */
+	zassert_equal(radiant_binding_bind(79u, 0x78u, 1u, NULL, &src), 0);
+
+	post_beats(src, 0, 0u);
+	post_beats(src, 1, 1u * US_PER_S);
+	post_beats(src, 2, 3u * US_PER_S);
+	s = last_with(RADIANT_RULE_FIELD_WORN);
+	zassert_not_null(s);
+	zassert_equal(s->raw, 1);
+	zassert_equal(s->t_us, 3u * US_PER_S);
+	zassert_equal(count_with(RADIANT_RULE_FIELD_WORN), 1u);
+
+	/* 150 bpm from 3 s: Zone 2 (and Zone 3, if on) after the 3 s dwell. */
+	post_hr(src, 150, 3u * US_PER_S);
+	post_beats(src, 3, 5u * US_PER_S);
+	post_hr(src, 150, 5u * US_PER_S);
+	zassert_false(is_on(RADIANT_RULE_FIELD_ZONE2));
+	post_beats(src, 4, 6u * US_PER_S);
+	post_hr(src, 150, 6u * US_PER_S);
+	s = last_with(RADIANT_RULE_FIELD_ZONE2);
+	zassert_not_null(s);
+	zassert_equal(s->raw, 1);
+	zassert_equal(s->t_us, 6u * US_PER_S);
+
+	/* 100 bpm from 7 s: Zone 2 clears at 10 s. */
+	post_beats(src, 5, 7u * US_PER_S);
+	post_hr(src, 100, 7u * US_PER_S);
+	post_beats(src, 6, 10u * US_PER_S);
+	post_hr(src, 100, 10u * US_PER_S);
+	s = last_with(RADIANT_RULE_FIELD_ZONE2);
+	zassert_not_null(s);
+	zassert_equal(s->raw, 0);
+	zassert_equal(s->t_us, 10u * US_PER_S);
+	zassert_equal(count_with(RADIANT_RULE_FIELD_ZONE2), 2u);
+	zassert_equal(count_with(RADIANT_RULE_FIELD_WORN), 1u);
+
+	/* The disabled outputs, on or off: Zone 3 assert + clear, or nothing;
+	 * At Rest never changed (announced only, or nothing). */
+	zassert_equal(count_with(RADIANT_RULE_FIELD_ZONE3),
+		      radiant_rules_output_enabled(RADIANT_RULE_FIELD_ZONE3) ? 2u : 0u);
+	zassert_equal(count_with(RADIANT_RULE_FIELD_AT_REST), 0u);
+
+	/* Personalisation fed at 1 Hz while worn: 3, 5, 6, 7 and 10 s. */
+	h = radiant_hr_profile_hist(radiant_binding_get(src)->uuid);
+	zassert_not_null(h);
+	zassert_equal(radiant_hr_hist_total(h), 5u);
+
+	/* In Use on the same source: asserts at once, as ever. */
+	post_fe_state(src, FEC_STATE_IN_USE, 11u * US_PER_S, 0u);
+	s = last_with(RADIANT_RULE_FIELD_EQUIPMENT_IN_USE);
+	zassert_not_null(s);
+	zassert_equal(s->raw, 1);
+	zassert_equal(s->t_us, 11u * US_PER_S);
+	zassert_equal(count_with(RADIANT_RULE_FIELD_EQUIPMENT_IN_USE), 1u);
+
+	assert_no_disabled_output_posted();
 }
 
 static void *rules_setup(void)

@@ -1337,6 +1337,70 @@ config RADIANT_BRIDGE_HR_PRIOR_WEIGHT_S
 	  The estimate is (prior * N0 + observed * N) / (N0 + N), where N
 	  is the strap's histogram total in 1 Hz samples and N0 is this.
 
+# The per-output switches. One symbol per RADIANT_RULE_FIELD_* id; the rules
+# sink (radiant_rules.c) builds a compile-time mask from them and drops a
+# disabled output in post_occupancy(), the one function every derived post
+# goes through. radiant/tests/Kconfig repeats these six (that image compiles
+# radiant_rules.c directly, with RADIANT_BRIDGE_RULES off): keep the two in step.
+
+config RADIANT_BRIDGE_RULES_OUT_WORN
+	bool "derive Worn (heart-rate strap beat count advancing)"
+	default y
+	help
+	  Off: the output is never derived, so it gets no Matter endpoint and
+	  no MQTT discovery entity, and nothing downstream sees it. The rule
+	  state behind it keeps running, because Zone 2, Zone 3 and At Rest are
+	  gated on Worn and personalisation is fed while worn.
+	  To hide an output without a rebuild, disable the entity in the
+	  controller (Home Assistant) instead.
+
+config RADIANT_BRIDGE_RULES_OUT_ACTIVE
+	bool "derive Active (energy accumulator advancing, 'bike in use')"
+	default y
+	help
+	  Off: the output is never derived, so it gets no Matter endpoint and
+	  no MQTT discovery entity. To hide an output without a rebuild,
+	  disable the entity in the controller (Home Assistant) instead.
+
+config RADIANT_BRIDGE_RULES_OUT_AT_REST
+	bool "derive At Rest (heart rate below rest + 0.15 HRR)"
+	default y
+	help
+	  Off: the output is never derived, so it gets no Matter endpoint and
+	  no MQTT discovery entity. The zone state machine and heart-rate
+	  personalisation still run, so the other zone outputs are unchanged.
+	  To hide an output without a rebuild, disable the entity in the
+	  controller (Home Assistant) instead.
+
+config RADIANT_BRIDGE_RULES_OUT_ZONE2
+	bool "derive Zone 2 (heart rate at or above rest + 0.60 HRR)"
+	default y
+	help
+	  Off: the output is never derived, so it gets no Matter endpoint and
+	  no MQTT discovery entity. The zone state machine and heart-rate
+	  personalisation still run, so the other zone outputs are unchanged.
+	  To hide an output without a rebuild, disable the entity in the
+	  controller (Home Assistant) instead.
+
+config RADIANT_BRIDGE_RULES_OUT_ZONE3
+	bool "derive Zone 3 (heart rate at or above rest + 0.70 HRR)"
+	default y
+	help
+	  Off: the output is never derived, so it gets no Matter endpoint and
+	  no MQTT discovery entity. The zone state machine and heart-rate
+	  personalisation still run, so Zone 2 and the strap's profile are
+	  exactly as with Zone 3 on.
+	  To hide an output without a rebuild, disable the entity in the
+	  controller (Home Assistant) instead.
+
+config RADIANT_BRIDGE_RULES_OUT_IN_USE
+	bool "derive In Use (FE-C equipment state IN_USE)"
+	default y
+	help
+	  Off: the output is never derived, so it gets no Matter endpoint and
+	  no MQTT discovery entity. To hide an output without a rebuild,
+	  disable the entity in the controller (Home Assistant) instead.
+
 endif # RADIANT_BRIDGE_RULES
 
 config RADIANT_BRIDGE_LIVENESS
