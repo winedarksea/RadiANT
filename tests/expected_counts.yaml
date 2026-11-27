@@ -310,7 +310,8 @@ min_scenarios: 32
 # 2026-11-27: +9 (Phase 1 review fixes: bond LRU choice/codec 6, the 64-bit
 # pairing-window wrap, template and BLE-name strict checks, privacy serial).
 # Cassandra twister mp1c2: 11558.
-min_testcases: 11558
+# 2026-11-27: +1 (bond LRU re-key from RPA to identity). mp1d: 11559.
+min_testcases: 11559
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -594,4 +595,5 @@ min_cases.radiant.unit.rules_outputs_off: 1356
 # window, pages 80/81 and the DIS strings from radiant_product, the strict
 # checks and the identity-fallback decision.
 # 2026-11-27: 48 after the review fixes (+9, see min_testcases).
-min_cases.radiant.ble: 48
+# 2026-11-27: 49 (+1, the LRU re-key case).
+min_cases.radiant.ble: 49
