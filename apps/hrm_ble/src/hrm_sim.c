@@ -24,7 +24,7 @@
  * a timed pattern (CONFIG_HRM_SENSOR_SIM_CONTACT_TOGGLE_S). Without contact it
  * does what a strap off the chest does: no beats, no rate, and
  * hrm_sensor_report_contact(false). With contact back it re-anchors the beat
- * schedule and reports the rate at once.
+ * schedule and, from the next 100 ms tick, beats and reports the rate again.
  */
 
 #include <zephyr/kernel.h>
@@ -138,12 +138,15 @@ static void sim_work_fn(struct k_work *w)
 		return;
 	}
 	if (!had_contact) {
-		/* Back on: a fresh schedule (its first tick beats, anchoring
-		 * it) and the rate straight away, as a strap does once it has
-		 * a reading again. */
+		/* Back on: a fresh schedule, whose first tick beats (anchoring
+		 * it) and reports the rate. From the next tick, not this one:
+		 * the regain and the first beat then reach the node's worker
+		 * in separate passes, so the first beat is never mistaken for
+		 * one that landed among a loss. */
 		had_contact = true;
 		sched = (struct hrm_sim_sched){ 0 };
-		hrm_sensor_report_rate((uint8_t)bpm);
+		k_work_schedule(&sim_work, K_MSEC(SIM_TICK_MS));
+		return;
 	}
 
 	if (hrm_sim_sched_tick(&sched, SIM_TICK_MS,

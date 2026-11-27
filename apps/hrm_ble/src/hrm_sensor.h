@@ -207,8 +207,10 @@ uint16_t hrm_sensor_now_1024(void);
 
 /*
  * Implemented by the application (src/main.c), called ONLY from the sensor
- * work handler on the system workqueue, in this order within one pass: the
- * latest rate (if any report arrived), every beat record, then contact.
+ * work handler on the system workqueue, in this order within one pass: a
+ * contact regain whose loss an earlier pass delivered, the latest rate (if any
+ * report arrived), every beat record, then any loss in this pass and the
+ * current contact level.
  *
  *   deliver_rate     one call per pass in which report_rate() was called,
  *                    with the newest value - repeats included, since each
@@ -216,10 +218,11 @@ uint16_t hrm_sensor_now_1024(void);
  *   deliver_beat     one call per ring record, oldest first, plus the newest
  *                    beat when the ring overflowed (its seq jump says how
  *                    many beats it stands for);
- *   deliver_contact  false for every loss since the last pass, then true if
- *                    contact is back.
+ *   deliver_contact  true first for a regain alone (so the rate and beats
+ *                    reported with it count); false last for a loss in this
+ *                    pass, then true if contact is already back.
  *
- * Contact last is deliberate: a loss that landed among the pass's beats then
+ * A loss last is deliberate: one that landed among the pass's beats then
  * clears their intervals rather than letting them through - the conservative
  * order, since a missing interval is legal and a wrong one is not.
  */

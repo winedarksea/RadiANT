@@ -1537,6 +1537,11 @@ jobs:
               # Dual transmission is the default: ANT+ stays on air through a
               # BLE connection, so this row is also the one that stresses the
               # arbiter.
+              # radiant_ble_hrs in place of Zephyr's BT_HRS, and the
+              # appearance, both from HRM_BLE_HRS rather than ble.conf.
+              CONFIG_RADIANT_BLE_HRS=y
+              # CONFIG_BT_HRS is not set
+              CONFIG_BT_DEVICE_APPEARANCE=833
               # CONFIG_HRM_SUPPRESS_ANT_WHEN_CONNECTED is not set
           - name: "hrm_ble: BLE HRS, ANT suppressed while connected"
             # The opt-in policy, and the only build of the suppression code in
@@ -1589,6 +1594,18 @@ jobs:
               CONFIG_RADIANT_BLE=y
               CONFIG_BT_DIS=y
               CONFIG_RADIANT_PRODUCT_MANUFACTURER_ID=65534
+              # The Heart Rate Profile sensor beside the ANT+ HRM: radiant's
+              # own Heart Rate Service and not Zephyr's (which always claims
+              # contact and exposes a Control Point with no Energy Expended),
+              # the ANT+ heart-rate node, DIS (HRP requires it), strict
+              # identity, and the Heart Rate Belt appearance. Mirrors
+              # scripts/build_all.ps1's $hrmDualAsserts.
+              CONFIG_RADIANT_BLE_HRS=y
+              CONFIG_HRM=y
+              # CONFIG_BT_HRS is not set
+              CONFIG_BT_DEVICE_APPEARANCE=833
+              # The bench control for M1's contact-bit check.
+              CONFIG_HRM_SENSOR_SIM_CONTACT_BUTTON=y
           - name: "hrm_ble: dual preset, test identity (nRF52840)"
             board: nrf52840dk/nrf52840
             image_conf: "dual.conf;../../tests/product_test.conf"
@@ -1598,6 +1615,16 @@ jobs:
               CONFIG_RADIANT_PRODUCT_STRICT=y
               CONFIG_RADIANT_BLE=y
               CONFIG_BT_DIS=y
+              # The Heart Rate Profile sensor beside the ANT+ HRM: radiant's
+              # own Heart Rate Service and not Zephyr's (which always claims
+              # contact and exposes a Control Point with no Energy Expended),
+              # the ANT+ heart-rate node, DIS (HRP requires it), strict
+              # identity, and the Heart Rate Belt appearance. Mirrors
+              # scripts/build_all.ps1's $hrmDualAsserts.
+              CONFIG_RADIANT_BLE_HRS=y
+              CONFIG_HRM=y
+              # CONFIG_BT_HRS is not set
+              CONFIG_BT_DEVICE_APPEARANCE=833
           - name: "hrm_ble: dual preset without an identity is refused"
             board: nrf54l15dk/nrf54l15/cpuapp
             image_conf: dual.conf

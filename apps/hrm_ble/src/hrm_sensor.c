@@ -198,11 +198,19 @@ static void sensor_work_fn(struct k_work *w)
 	static atomic_val_t consumed_losses;
 	static bool applied_contact = true;
 
+	atomic_val_t losses = atomic_get(&contact_losses);
+	bool level = atomic_get(&contact_level) != 0;
+	bool lost = (losses != consumed_losses);
 	uint32_t rate = (uint32_t)atomic_get(&rate_word);
-	atomic_val_t losses;
-	bool level;
 
 	ARG_UNUSED(w);
+
+	/* 0. A regain whose loss an earlier pass already delivered goes
+	 * FIRST, so the rate and beats a driver reports with it count. */
+	if (!lost && level && !applied_contact) {
+		applied_contact = true;
+		hrm_node_deliver_contact(true);
+	}
 
 	/* 1. The newest rate, once per pass in which any report arrived. */
 	if ((rate >> 8) != consumed_rate_seq) {
@@ -213,9 +221,10 @@ static void sensor_work_fn(struct k_work *w)
 	/* 2. Every beat, oldest first (hrm_beat_ring_drain()). */
 	(void)hrm_beat_ring_drain(&beat_ring, deliver_beat_rec, NULL);
 
-	/* 3. Contact: every loss since the last pass, then the level. */
-	losses = atomic_get(&contact_losses);
-	if (losses != consumed_losses) {
+	/* 3. A loss in this pass goes LAST, so it clears the intervals of
+	 * the beats it landed among rather than letting them through; then
+	 * the level as it is now. */
+	if (lost) {
 		consumed_losses = losses;
 		applied_contact = false;
 		hrm_node_deliver_contact(false);
