@@ -292,21 +292,14 @@ if(CONFIG_RADIANT_PRODUCT)
       radiant_strict_error(
         "CONFIG_RADIANT_PRODUCT_MANUFACTURER_ID is 255, the ANT+ development id")
     endif()
-    set(radiant_name_checks
-      "MANUFACTURER_NAME|${CONFIG_RADIANT_PRODUCT_MANUFACTURER_NAME}|RadiANT development"
-      "MODEL_NAME|${CONFIG_RADIANT_PRODUCT_MODEL_NAME}|RadiANT reference")
-    foreach(check ${radiant_name_checks})
-      string(REPLACE "|" ";" parts "${check}")
-      list(GET parts 0 sym)
-      list(LENGTH parts nparts)
-      set(val "")
-      if(nparts EQUAL 3)
-        list(GET parts 1 val)
-        list(GET parts 2 dflt)
-      else()
-        list(GET parts 1 dflt)
-      endif()
-      if("${val}" STREQUAL "" OR "${val}" STREQUAL "${dflt}" OR "${val}" MATCHES "^Your ")
+    # Each string variable is read directly, never through a ;-joined list,
+    # so a name containing ';' is checked whole.
+    set(radiant_dflt_MANUFACTURER_NAME "RadiANT development")
+    set(radiant_dflt_MODEL_NAME "RadiANT reference")
+    foreach(sym MANUFACTURER_NAME MODEL_NAME)
+      set(val "${CONFIG_RADIANT_PRODUCT_${sym}}")
+      if("${val}" STREQUAL "" OR "${val}" STREQUAL "${radiant_dflt_${sym}}" OR
+         "${val}" MATCHES "^Your ")
         radiant_strict_error(
           "CONFIG_RADIANT_PRODUCT_${sym} is empty, the placeholder or a "
           "product.conf.example value (\"${val}\")")

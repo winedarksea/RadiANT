@@ -19,12 +19,19 @@
  *     oldest bond inside smp_pairing_req() BEFORE pairing_accept is asked,
  *     so with the window closed every refused stranger would still erase one
  *     bond. Instead this layer keeps its own least-recently-used order (a
- *     settings record, "rble/lru", touched each time a peer reaches an
- *     encrypted link) and frees ONE slot itself, only while the window is
- *     open: when the window opens and the store is full, and again when a
- *     new (non-bonded) peer connects inside an open window. A connected peer
- *     is never evicted. Without a free slot SMP refuses the pairing before
- *     pairing_accept runs, which is why the room is made first.
+ *     settings record, "rble/lru": an entry per BOND, keyed by its identity
+ *     address, written when a pairing completes bonded and touched each time
+ *     a bonded peer re-encrypts) and frees ONE slot itself, only while a
+ *     window is open, and never a connected peer's:
+ *       - radiant_ble_pairing_window_open(), the owner's deliberate console
+ *         action, frees a slot at once if the store is full, so the first
+ *         attempt succeeds;
+ *       - the boot window (AT_BOOT_S) does not evict on open - powering on is
+ *         not a decision to replace a bond. With a full store the FIRST
+ *         pairing attempt in it fails (SMP has no key slot), that failure
+ *         frees a slot, and the phone's RETRY succeeds.
+ *     A peer that merely connects - a guest's app reading the unencrypted
+ *     data characteristics - never costs a bond.
  *   - radiant_ble_bonds_forget_all() for service.
  *
  * The layer registers the auth callbacks itself at boot (SYS_INIT); an
@@ -81,6 +88,15 @@ void radiant_ble_lru_touch(struct radiant_ble_lru_entry *t, size_t n,
 /* Forget `addr` (its bond was deleted). */
 void radiant_ble_lru_forget(struct radiant_ble_lru_entry *t, size_t n,
 			    const uint8_t addr[RADIANT_BLE_ADDR_BYTES]);
+
+/*
+ * Move `from`'s entry to `to` (an RPA resolved to its identity address). If
+ * `to` already has an entry the two merge, keeping the more recent seq.
+ * Returns true if anything changed.
+ */
+bool radiant_ble_lru_rekey(struct radiant_ble_lru_entry *t, size_t n,
+			   const uint8_t from[RADIANT_BLE_ADDR_BYTES],
+			   const uint8_t to[RADIANT_BLE_ADDR_BYTES]);
 
 /*
  * Which bond to evict to make room: among `bonds[0..nb)` whose `connected`

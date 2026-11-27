@@ -526,3 +526,46 @@ ZTEST(ble_lru, test_record_round_trips)
 	/* A record from a larger bond store keeps what fits. */
 	zassert_equal(1, radiant_ble_lru_decode(buf, (size_t)len, back, 1, &hi));
 }
+
+/* The review finding: on a first pairing the entry must end up under the
+ * identity address. An entry made under the RPA moves to the identity, and
+ * merges with an existing identity entry keeping the more recent use. */
+ZTEST(ble_lru, test_rekey_moves_an_rpa_entry_to_the_identity)
+{
+	static const uint8_t RPA[RADIANT_BLE_ADDR_BYTES] = { 1, 0x4A, 9, 9, 9, 9, 9 };
+	struct radiant_ble_lru_entry t[3] = { 0 };
+	uint32_t next = 0u;
+	uint8_t bonds[2][RADIANT_BLE_ADDR_BYTES];
+	bool connected[2] = { false, false };
+
+	radiant_ble_lru_touch(t, 3, A, &next);  /* old bond */
+	radiant_ble_lru_touch(t, 3, RPA, &next); /* new phone, before resolution */
+
+	zassert_true(radiant_ble_lru_rekey(t, 3, RPA, D));
+	memcpy(bonds[0], A, sizeof(A));
+	memcpy(bonds[1], D, sizeof(D));
+	/* The new phone's bond is the most recent; the old one goes. */
+	zassert_equal(0, radiant_ble_lru_pick_victim(t, 3, bonds, connected, 2));
+
+	/* Nothing to move, or moving onto itself: no change. */
+	zassert_false(radiant_ble_lru_rekey(t, 3, RPA, D));
+	zassert_false(radiant_ble_lru_rekey(t, 3, D, D));
+
+	/* Merge: both present, the more recent seq survives under `to`. */
+	radiant_ble_lru_touch(t, 3, RPA, &next);
+	uint32_t newest = next;
+
+	zassert_true(radiant_ble_lru_rekey(t, 3, RPA, A));
+	int live = 0;
+
+	for (int i = 0; i < 3; i++) {
+		if (t[i].seq != 0u) {
+			live++;
+			zassert_true(memcmp(t[i].addr, RPA, sizeof(RPA)) != 0);
+			if (memcmp(t[i].addr, A, sizeof(A)) == 0) {
+				zassert_equal(newest, t[i].seq);
+			}
+		}
+	}
+	zassert_equal(2, live);
+}

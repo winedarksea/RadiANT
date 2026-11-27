@@ -243,6 +243,34 @@ void radiant_ble_lru_forget(struct radiant_ble_lru_entry *t, size_t n,
 	}
 }
 
+bool radiant_ble_lru_rekey(struct radiant_ble_lru_entry *t, size_t n,
+			   const uint8_t from[RADIANT_BLE_ADDR_BYTES],
+			   const uint8_t to[RADIANT_BLE_ADDR_BYTES])
+{
+	int f;
+	int d;
+
+	if (t == NULL || from == NULL || to == NULL ||
+	    memcmp(from, to, RADIANT_BLE_ADDR_BYTES) == 0) {
+		return false;
+	}
+	f = lru_find(t, n, from);
+	if (f < 0) {
+		return false;
+	}
+	d = lru_find(t, n, to);
+	if (d >= 0) {
+		/* Both exist: one peer, keep its most recent use. */
+		if (t[f].seq > t[d].seq) {
+			t[d].seq = t[f].seq;
+		}
+		memset(&t[f], 0, sizeof(t[f]));
+	} else {
+		memcpy(t[f].addr, to, RADIANT_BLE_ADDR_BYTES);
+	}
+	return true;
+}
+
 int radiant_ble_lru_pick_victim(const struct radiant_ble_lru_entry *t, size_t n,
 				const uint8_t (*bonds)[RADIANT_BLE_ADDR_BYTES],
 				const bool *connected, size_t nb)

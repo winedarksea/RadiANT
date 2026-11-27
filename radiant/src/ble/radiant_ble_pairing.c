@@ -115,21 +115,6 @@ static int lru_set(const char *name, size_t len, settings_read_cb read_cb,
 SETTINGS_STATIC_HANDLER_DEFINE(radiant_ble_lru, "rble", NULL, lru_set, NULL, NULL);
 #endif
 
-static void on_security_changed(struct bt_conn *conn, bt_security_t level,
-				enum bt_security_err err)
-{
-	if (err != BT_SECURITY_ERR_SUCCESS || level < BT_SECURITY_L2) {
-		return;
-	}
-
-	k_spinlock_key_t key = k_spin_lock(&lock);
-
-	radiant_ble_lru_touch(lru, LRU_N, (const uint8_t *)bt_conn_get_dst(conn),
-			      &lru_next);
-	k_spin_unlock(&lock, key);
-	(void)k_work_submit(&lru_work);
-}
-
 /* ── Making room, only inside an open window ──────────────────────────────── */
 
 struct bond_list {
@@ -145,6 +130,25 @@ static void collect_bond(const struct bt_bond_info *info, void *user)
 		memcpy(b->addr[b->n], &info->addr, RADIANT_BLE_ADDR_BYTES);
 	}
 	b->n++;
+}
+
+/*
+ * BT_ID_DEFAULT only. With CONFIG_BT_ID_MAX > 1 a bond on another identity
+ * shares the key pool but is not counted here, so a full pool can look
+ * not-full and no slot is freed - which fails closed (the pairing is refused,
+ * no bond is lost). Every application here has one identity.
+ */
+static bool is_bonded(const bt_addr_le_t *addr)
+{
+	struct bond_list bonds = { .n = 0u };
+
+	bt_foreach_bond(BT_ID_DEFAULT, collect_bond, &bonds);
+	for (size_t i = 0; i < MIN(bonds.n, (size_t)LRU_N); i++) {
+		if (memcmp(bonds.addr[i], addr, RADIANT_BLE_ADDR_BYTES) == 0) {
+			return true;
+		}
+	}
+	return false;
 }
 
 static void room_work_fn(struct k_work *w)
@@ -197,36 +201,107 @@ static void room_work_fn(struct k_work *w)
 		return;
 	}
 	LOG_INF("bond store full: least recently used bond deleted to make room "
-		"for the pairing window");
+		"for a pairing inside the window");
 	(void)k_work_submit(&lru_work);
 }
 
-static bool is_bonded(const bt_addr_le_t *addr)
-{
-	struct bond_list bonds = { .n = 0u };
+/* ── Keeping the LRU order ────────────────────────────────────────────────── */
 
-	bt_foreach_bond(BT_ID_DEFAULT, collect_bond, &bonds);
-	for (size_t i = 0; i < MIN(bonds.n, (size_t)LRU_N); i++) {
-		if (memcmp(bonds.addr[i], addr, RADIANT_BLE_ADDR_BYTES) == 0) {
-			return true;
-		}
-	}
-	return false;
+static void lru_touch(const bt_addr_le_t *addr)
+{
+	k_spinlock_key_t key = k_spin_lock(&lock);
+
+	radiant_ble_lru_touch(lru, LRU_N, (const uint8_t *)addr, &lru_next);
+	k_spin_unlock(&lock, key);
+	(void)k_work_submit(&lru_work);
 }
 
-static void on_connected(struct bt_conn *conn, uint8_t err)
+/*
+ * A BONDED peer reconnecting and encrypting: the host resolved its RPA from
+ * the stored IRK at connect, so dst is already the identity address and is
+ * in the bond list. On a FIRST pairing this event comes from the HCI
+ * Encryption Change, before key distribution - dst is still the RPA and the
+ * peer is not yet bonded - so it is skipped here and pairing_complete()
+ * records it under the identity instead.
+ */
+static void on_security_changed(struct bt_conn *conn, bt_security_t level,
+				enum bt_security_err err)
 {
-	/* A stranger connecting inside an open window is about to pair: make
-	 * room now, before its Pairing Request arrives. A bonded peer needs
-	 * none and must not cost another bond its slot. */
-	if (err == 0u && window_allows_now() && !is_bonded(bt_conn_get_dst(conn))) {
-		(void)k_work_submit(&room_work);
+	const bt_addr_le_t *dst = bt_conn_get_dst(conn);
+
+	if (err != BT_SECURITY_ERR_SUCCESS || level < BT_SECURITY_L2 ||
+	    !is_bonded(dst)) {
+		return;
+	}
+	lru_touch(dst);
+}
+
+/* Belt and braces: anything recorded under an RPA moves to the identity. */
+static void on_identity_resolved(struct bt_conn *conn, const bt_addr_le_t *rpa,
+				 const bt_addr_le_t *identity)
+{
+	ARG_UNUSED(conn);
+
+	k_spinlock_key_t key = k_spin_lock(&lock);
+	bool moved = radiant_ble_lru_rekey(lru, LRU_N, (const uint8_t *)rpa,
+					   (const uint8_t *)identity);
+
+	k_spin_unlock(&lock, key);
+	if (moved) {
+		(void)k_work_submit(&lru_work);
 	}
 }
 
 BT_CONN_CB_DEFINE(radiant_ble_pairing_conn_cb) = {
-	.connected = on_connected,
 	.security_changed = on_security_changed,
+	.identity_resolved = on_identity_resolved,
+};
+
+/* After key distribution and identity resolution: dst is the identity. Only
+ * a bond gets an entry - a non-bonded pairing leaves nothing to evict. */
+static void on_pairing_complete(struct bt_conn *conn, bool bonded)
+{
+	if (bonded) {
+		lru_touch(bt_conn_get_dst(conn));
+	}
+}
+
+/*
+ * A pairing that failed inside an open window, with the key pool full, most
+ * likely failed for want of a slot (without BT_KEYS_OVERWRITE_OLDEST, SMP
+ * refuses a Pairing Request it has no key slot for, before pairing_accept).
+ * Free one now so the phone's retry succeeds. This is the boot window's only
+ * eviction path: a stranger who merely connects, or a client that reads the
+ * unencrypted data characteristics, never costs a bond. room_work_fn checks
+ * the window and the full store again on the work queue.
+ */
+static void on_pairing_failed(struct bt_conn *conn, enum bt_security_err reason)
+{
+	ARG_UNUSED(conn);
+	ARG_UNUSED(reason);
+
+	if (window_allows_now()) {
+		(void)k_work_submit(&room_work);
+	}
+}
+
+static void on_bond_deleted(uint8_t id, const bt_addr_le_t *peer)
+{
+	if (id != BT_ID_DEFAULT) {
+		return;
+	}
+
+	k_spinlock_key_t key = k_spin_lock(&lock);
+
+	radiant_ble_lru_forget(lru, LRU_N, (const uint8_t *)peer);
+	k_spin_unlock(&lock, key);
+	(void)k_work_submit(&lru_work);
+}
+
+static struct bt_conn_auth_info_cb auth_info_cb = {
+	.pairing_complete = on_pairing_complete,
+	.pairing_failed = on_pairing_failed,
+	.bond_deleted = on_bond_deleted,
 };
 
 /* ── Pairing acceptance ───────────────────────────────────────────────────── */
@@ -261,7 +336,22 @@ static int pairing_sys_init(void)
 		LOG_ERR("bt_conn_auth_cb_register: %d - the pairing window is "
 			"NOT enforced", err);
 	}
+	/* The bond LRU's events (pairing_complete, pairing_failed,
+	 * bond_deleted). A list in Zephyr, so it cannot collide with an
+	 * application's own. */
+	int ierr = bt_conn_auth_info_cb_register(&auth_info_cb);
+
+	if (ierr != 0) {
+		LOG_ERR("bt_conn_auth_info_cb_register: %d - bond LRU order "
+			"is not kept", ierr);
+		if (err == 0) {
+			err = ierr;
+		}
+	}
 #if CONFIG_RADIANT_BLE_PAIRING_WINDOW_AT_BOOT_S > 0
+	/* No eviction at open: nobody chose to replace a bond by powering
+	 * on. A full store frees a slot only after a pairing in this window
+	 * fails (on_pairing_failed), so the phone's retry succeeds. */
 	win_opened_ms = (uint64_t)k_uptime_get();
 	win_len_ms = CONFIG_RADIANT_BLE_PAIRING_WINDOW_AT_BOOT_S * 1000u;
 #endif
@@ -284,6 +374,8 @@ int radiant_ble_pairing_window_open(uint32_t seconds)
 	win_len_ms = seconds * 1000u;
 	k_spin_unlock(&lock, key);
 	LOG_INF("pairing window open for %u s", seconds);
+	/* The owner's deliberate console action: free a slot now if the
+	 * store is full, so the first pairing attempt succeeds. */
 	(void)k_work_submit(&room_work);
 	return 0;
 }
