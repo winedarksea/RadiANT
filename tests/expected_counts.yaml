@@ -307,7 +307,10 @@ min_scenarios: 32
 # 2026-11-27: +74 (wip/mixed-p1): the radiant.ble scenario's 39 and five
 # node_ident serial32 cases in each of the seven unit scenarios. Cassandra
 # twister mp1a: 11549.
-min_testcases: 11549
+# 2026-11-27: +9 (Phase 1 review fixes: bond LRU choice/codec 6, the 64-bit
+# pairing-window wrap, template and BLE-name strict checks, privacy serial).
+# Cassandra twister mp1c2: 11558.
+min_testcases: 11558
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -590,4 +593,5 @@ min_cases.radiant.unit.rules_outputs_off: 1356
 # and watchdog, the connection-parameter rule, the per-unit name, the pairing
 # window, pages 80/81 and the DIS strings from radiant_product, the strict
 # checks and the identity-fallback decision.
-min_cases.radiant.ble: 39
+# 2026-11-27: 48 after the review fixes (+9, see min_testcases).
+min_cases.radiant.ble: 48
