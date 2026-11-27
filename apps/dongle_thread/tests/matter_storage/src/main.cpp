@@ -1536,6 +1536,252 @@ ZTEST(matter_storage, test_duplicates_with_no_adopter_and_edges)
 	zassert_equal(Orphans::NextDuplicate(r, ARRAY_SIZE(r), nullptr, 0), Orphans::kNone);
 }
 
+/* ---- restored endpoints that can never be claimed (2026-11-26) ---------- */
+
+ZTEST(matter_storage, test_unique_id_parse_round_trips_both_forms)
+{
+	static const uint64_t keys[] = { kKey, 0, UINT64_MAX, 0x00000001ffffffffULL, 0xabcdef0000000000ULL };
+	static const uint8_t ids[] = { 0, 1, 5, 0x26, 0xff };
+	static const uint8_t types[] = { 0, kTypeOccupancy, kTypeTemperature, 0xff };
+	char s[kUniqueIDSize + 1];
+
+	for (size_t k = 0; k < ARRAY_SIZE(keys); k++) {
+		for (size_t i = 0; i < ARRAY_SIZE(ids); i++) {
+			for (size_t t = 0; t < ARRAY_SIZE(types); t++) {
+				for (int d = 0; d < 2; d++) {
+					uint64_t key = ~keys[k];
+					uint8_t fieldId = static_cast<uint8_t>(~ids[i]);
+					bool derived = d == 0;
+
+					zassert_true(UniqueId::Format(s, sizeof(s), keys[k], ids[i], types[t], d != 0) > 0);
+					zassert_true(UniqueId::Parse(s, &key, &fieldId, &derived), "%s", s);
+					zassert_equal(key, keys[k], "%s", s);
+					zassert_equal(fieldId, ids[i], "%s", s);
+					zassert_equal(derived, d != 0, "%s", s);
+				}
+			}
+		}
+	}
+}
+
+ZTEST(matter_storage, test_unique_id_parse_rejects_bad_strings)
+{
+	static const char *const bad[] = {
+		"",
+		"3f2a91c40e77b2120",       /* 17: one short of derived */
+		"3f2a91c40e77b212050",     /* 19 */
+		"3f2a91c40e77b21205t1",    /* 20: one short of measured */
+		"3f2a91c40e77b21205t100",  /* 22 */
+		"3F2A91C40E77B21205",      /* uppercase: Format never writes it */
+		"3f2a91c40e77b2120g",      /* non-hex field id */
+		"3f2a91c4 e77b21205",      /* non-hex key */
+		"-f2a91c40e77b21205",
+		"3f2a91c40e77b21205x10",   /* measured without its 't' */
+		"3f2a91c40e77b21205T10",
+		"3f2a91c40e77b21205tg0",   /* non-hex field type */
+		"3f2a91c40e77b2120t510",   /* 't' misplaced */
+		"3f2a91c40e77b212051t0",
+		"t3f2a91c40e77b21205a",
+		"3f2a91c40e77b21205t10 ",
+	};
+	uint64_t key = 0x1234;
+	uint8_t fieldId = 0x56;
+	bool derived = true;
+
+	for (size_t i = 0; i < ARRAY_SIZE(bad); i++) {
+		zassert_false(UniqueId::Parse(bad[i], &key, &fieldId, &derived), "accepted \"%s\"", bad[i]);
+	}
+	/* Nothing written on a refusal. */
+	zassert_equal(key, 0x1234u);
+	zassert_equal(fieldId, 0x56);
+	zassert_true(derived);
+
+	/* A measured id is not derived, nor a derived one measured: the form is
+	 * the whole string, never a prefix. */
+	zassert_true(UniqueId::Parse("3f2a91c40e77b21205t10", &key, &fieldId, &derived));
+	zassert_false(derived, "measured id read as derived");
+	zassert_true(UniqueId::Parse("3f2a91c40e77b21205", &key, &fieldId, &derived));
+	zassert_true(derived, "derived id read as measured");
+
+	/* Nulls. */
+	zassert_false(UniqueId::Parse(nullptr, &key, &fieldId, &derived));
+	zassert_false(UniqueId::Parse("3f2a91c40e77b21205", nullptr, &fieldId, &derived));
+	zassert_false(UniqueId::Parse("3f2a91c40e77b21205", &key, nullptr, &derived));
+	zassert_false(UniqueId::Parse("3f2a91c40e77b21205", &key, &fieldId, nullptr));
+
+	/* A string far longer than either form, unterminated within 22 bytes. */
+	char longer[40];
+
+	memset(longer, 'a', sizeof(longer) - 1);
+	longer[sizeof(longer) - 1] = '\0';
+	zassert_false(UniqueId::Parse(longer, &key, &fieldId, &derived));
+}
+
+namespace
+{
+/* radiant_rules_output_enabled() for a build with some outputs off: bit N set
+ * means field id N is derived. */
+struct OutputsOn {
+	uint32_t mask;
+
+	bool operator()(uint8_t fieldId) const
+	{
+		return fieldId < 32 && (mask & (1u << fieldId)) != 0;
+	}
+};
+
+/* The field ids radiant_rules.h assigns (RADIANT_RULE_FIELD_*). */
+constexpr uint8_t kFieldWorn = 0;
+constexpr uint8_t kFieldAtRest = 2;
+constexpr uint8_t kFieldZone2 = 3;
+constexpr uint8_t kFieldZone3 = 5;
+constexpr uint32_t kAllButZone3 = 0x1fu; /* 0..4 */
+
+ModelRestored EntryFor(bool claimed, uint64_t key, uint8_t fieldId, uint8_t fieldType, bool derived)
+{
+	char id[kUniqueIDSize + 1];
+
+	(void)UniqueId::Format(id, sizeof(id), key, fieldId, fieldType, derived);
+	return Entry(true, claimed, id);
+}
+} /* namespace */
+
+ZTEST(matter_storage, test_restored_retire_at_boot_picks_only_disabled_derived)
+{
+	constexpr uint64_t kOther = 0x00000000000000aaULL;
+	/* 0 Zone 2 (on), 1 Zone 3 (off), 2 a temperature on field 5 (measured:
+	 * not a rule output whatever its id), 3 unused, 4 another sensor's Zone
+	 * 3, 5 an unparseable id, 6 At Rest (on). */
+	ModelRestored r[] = { EntryFor(false, kKey, kFieldZone2, kTypeOccupancy, true),
+			      EntryFor(false, kKey, kFieldZone3, kTypeOccupancy, true),
+			      EntryFor(false, kKey, kFieldZone3, kTypeTemperature, false),
+			      Entry(false, false, ""),
+			      EntryFor(false, kOther, kFieldZone3, kTypeOccupancy, true),
+			      Entry(true, false, "not a unique id"),
+			      EntryFor(false, kKey, kFieldAtRest, kTypeOccupancy, true) };
+	const OutputsOn noZone3{ kAllButZone3 };
+
+	zassert_equal(Orphans::RestoredToRetireAtBoot(r, ARRAY_SIZE(r), 0, noZone3), 1);
+	/* The caller asks again from the next index, retired or not. */
+	zassert_equal(Orphans::RestoredToRetireAtBoot(r, ARRAY_SIZE(r), 2, noZone3), 4);
+	zassert_equal(Orphans::RestoredToRetireAtBoot(r, ARRAY_SIZE(r), 5, noZone3), Orphans::kNone);
+
+	/* Every output on: nothing goes. */
+	zassert_equal(Orphans::RestoredToRetireAtBoot(r, ARRAY_SIZE(r), 0, OutputsOn{ 0xffffffffu }), Orphans::kNone);
+
+	/* The rules sink not built (every output off): every derived entry, still
+	 * no measured, unused or unparseable one. */
+	const OutputsOn none{ 0 };
+	int got[ARRAY_SIZE(r)];
+	size_t n = 0;
+
+	for (int i = Orphans::RestoredToRetireAtBoot(r, ARRAY_SIZE(r), 0, none); i != Orphans::kNone;
+	     i = Orphans::RestoredToRetireAtBoot(r, ARRAY_SIZE(r), static_cast<size_t>(i) + 1, none)) {
+		got[n++] = i;
+	}
+	zassert_equal(n, 4u);
+	zassert_equal(got[0], 0);
+	zassert_equal(got[1], 1);
+	zassert_equal(got[2], 4);
+	zassert_equal(got[3], 6);
+
+	/* At Rest off alone picks only At Rest; Worn off picks nothing here. */
+	zassert_equal(Orphans::RestoredToRetireAtBoot(r, ARRAY_SIZE(r), 0, OutputsOn{ ~(1u << kFieldAtRest) }), 6);
+	zassert_equal(Orphans::RestoredToRetireAtBoot(r, ARRAY_SIZE(r), 0, OutputsOn{ ~(1u << kFieldWorn) }),
+		      Orphans::kNone);
+
+	/* Edges. */
+	zassert_equal(Orphans::RestoredToRetireAtBoot(static_cast<const ModelRestored *>(nullptr), 4, 0, none),
+		      Orphans::kNone);
+	zassert_equal(Orphans::RestoredToRetireAtBoot(r, ARRAY_SIZE(r), ARRAY_SIZE(r), none), Orphans::kNone);
+}
+
+ZTEST(matter_storage, test_restored_purge_picks_only_unclaimed_with_the_key)
+{
+	constexpr uint64_t kOther = 0x00000000000000aaULL;
+	/* The evicted sensor kKey: 0 Worn unclaimed, 1 Zone 2 claimed (a live
+	 * row's, the unbind removes it), 2 a measured temperature unclaimed.
+	 * 3 another sensor, 4 unused but kKey's, 5 kKey's Zone 3 unclaimed, 6 a
+	 * key that differs only in its low bit. */
+	ModelRestored r[] = { EntryFor(false, kKey, kFieldWorn, kTypeOccupancy, true),
+			      EntryFor(true, kKey, kFieldZone2, kTypeOccupancy, true),
+			      EntryFor(false, kKey, 0, kTypeTemperature, false),
+			      EntryFor(false, kOther, kFieldWorn, kTypeOccupancy, true),
+			      EntryFor(false, kKey, kFieldAtRest, kTypeOccupancy, true),
+			      EntryFor(false, kKey, kFieldZone3, kTypeOccupancy, true),
+			      EntryFor(false, kKey ^ 1u, kFieldWorn, kTypeOccupancy, true) };
+
+	r[4].used = false;
+
+	int got[ARRAY_SIZE(r)];
+	size_t n = 0;
+
+	for (int i = Orphans::RestoredToPurgeForKey(r, ARRAY_SIZE(r), 0, kKey); i != Orphans::kNone;
+	     i = Orphans::RestoredToPurgeForKey(r, ARRAY_SIZE(r), static_cast<size_t>(i) + 1, kKey)) {
+		got[n++] = i;
+		r[i].used = false; /* retired */
+	}
+	zassert_equal(n, 3u);
+	zassert_equal(got[0], 0);
+	zassert_equal(got[1], 2);
+	zassert_equal(got[2], 5);
+	zassert_true(r[1].used && r[1].claimed, "a claimed entry was purged");
+	zassert_true(r[3].used, "another sensor's entry was purged");
+	zassert_true(r[6].used, "a neighbouring key's entry was purged");
+
+	/* The other sensor's turn takes only its own. */
+	zassert_equal(Orphans::RestoredToPurgeForKey(r, ARRAY_SIZE(r), 0, kOther), 3);
+	zassert_equal(Orphans::RestoredToPurgeForKey(r, ARRAY_SIZE(r), 4, kOther), Orphans::kNone);
+
+	/* An unparseable id never matches, not even key 0. */
+	ModelRestored junk[] = { Entry(true, false, ""), Entry(true, false, "zz") };
+
+	zassert_equal(Orphans::RestoredToPurgeForKey(junk, ARRAY_SIZE(junk), 0, 0), Orphans::kNone);
+	zassert_equal(Orphans::RestoredToPurgeForKey(static_cast<const ModelRestored *>(nullptr), 4, 0, kKey),
+		      Orphans::kNone);
+}
+
+ZTEST(matter_storage, test_purge_keys_dedup_cancel_and_overflow)
+{
+	Orphans::PurgeKeys<3> set = {};
+
+	zassert_false(set.Pending());
+	zassert_true(set.Add(1));
+	zassert_true(set.Add(1), "a held key is not dropped");
+	zassert_equal(set.count, 1);
+	zassert_true(set.Pending());
+
+	/* A re-bind before the flush cancels; a key not held is a no-op. */
+	zassert_true(set.Add(2));
+	set.Cancel(1);
+	set.Cancel(99);
+	zassert_equal(set.count, 1);
+	zassert_equal(set.keys[0], 2u);
+
+	/* Full: the next new key is dropped and counted, a held one still fits. */
+	zassert_true(set.Add(3));
+	zassert_true(set.Add(4));
+	zassert_false(set.Add(5));
+	zassert_true(set.Add(4));
+	zassert_equal(set.count, 3);
+	zassert_equal(set.dropped, 1);
+
+	/* A drop alone keeps the flush coming, so it is logged. */
+	set.count = 0;
+	zassert_true(set.Pending());
+	set.dropped = 0;
+	zassert_false(set.Pending());
+
+	/* The drop count saturates. */
+	Orphans::PurgeKeys<1> one = {};
+
+	zassert_true(one.Add(7));
+	for (int i = 0; i < 300; i++) {
+		(void)one.Add(static_cast<uint64_t>(100 + i));
+	}
+	zassert_equal(one.dropped, UINT8_MAX);
+}
+
 /* ---- lengths near SIZE_MAX: `counter + length` wraps ------------------- */
 
 ZTEST(matter_storage, test_wrap_unique_id_length_rejected)
