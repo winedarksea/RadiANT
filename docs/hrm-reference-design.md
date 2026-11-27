@@ -296,7 +296,13 @@ what you still check.
    placeholders; the software revision defaults to the repository `VERSION`.
    A head unit's device-information screen displays them, and placeholders
    look exactly like real values from the outside.
-   `CONFIG_RADIANT_PRODUCT_STRICT` refuses to configure until they are set.
+   `CONFIG_RADIANT_PRODUCT_STRICT` (on in `dual.conf`) refuses to configure
+   while the manufacturer id is 255, the manufacturer or model name is empty,
+   a RadiANT placeholder or still a `product.conf.example` value (anything
+   starting `Your `), or the BLE name is a default (`Zephyr`, the app's
+   development name) or a template value. It does **not** check the model
+   number or hardware revision: their placeholder `1` cannot be told from a
+   real 1, so check those yourself.
 3. **Device number from the identity record, not from Kconfig.** The boot log
    must say `device number N from the identity record`.
    `CONFIG_HRM_DEVICE_NUMBER` is used only when identity boot fails, and the

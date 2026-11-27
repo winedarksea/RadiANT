@@ -361,10 +361,168 @@ ZTEST(ble_pairing, test_window_is_half_open_and_expires)
 	zassert_false(radiant_ble_pairing_window_allows(1000u, 60000u, 999u));
 }
 
-ZTEST(ble_pairing, test_window_survives_the_millisecond_wrap)
+/* The review finding: on a 32-bit millisecond clock an expired window opened
+ * just before 2^32 ms (49.7 days) reads as open again 2^32 ms later. With
+ * 64-bit uptime it stays shut. */
+ZTEST(ble_pairing, test_window_does_not_reopen_after_49_7_days)
 {
-	uint32_t opened = 0xFFFFFFFFu - 10000u;
+	const uint64_t opened = 0xFFFFFFFFull - 10000u;
 
-	zassert_true(radiant_ble_pairing_window_allows(opened, 60000u, 5000u));
-	zassert_false(radiant_ble_pairing_window_allows(opened, 60000u, 50001u));
+	zassert_true(radiant_ble_pairing_window_allows(opened, 60000u, opened + 15000u),
+		     "spanning the 32-bit wrap, still inside");
+	zassert_false(radiant_ble_pairing_window_allows(opened, 60000u, opened + 60000u));
+	zassert_false(radiant_ble_pairing_window_allows(1000u, 60000u,
+							1000u + 0x100000000ull),
+		      "2^32 ms later the window must not be open again");
+	zassert_false(radiant_ble_pairing_window_allows(1000u, 60000u,
+							2000u + 0x100000000ull));
+}
+
+/* ── Bond LRU ────────────────────────────────────────────────────────────── */
+
+ZTEST_SUITE(ble_lru, NULL, NULL, NULL, NULL, NULL);
+
+static const uint8_t A[RADIANT_BLE_ADDR_BYTES] = { 0, 1, 1, 1, 1, 1, 1 };
+static const uint8_t B[RADIANT_BLE_ADDR_BYTES] = { 0, 2, 2, 2, 2, 2, 2 };
+static const uint8_t C[RADIANT_BLE_ADDR_BYTES] = { 1, 3, 3, 3, 3, 3, 3 };
+static const uint8_t D[RADIANT_BLE_ADDR_BYTES] = { 1, 4, 4, 4, 4, 4, 4 };
+
+ZTEST(ble_lru, test_the_least_recently_used_unconnected_bond_is_evicted)
+{
+	struct radiant_ble_lru_entry t[3] = { 0 };
+	uint32_t next = 0u;
+	uint8_t bonds[3][RADIANT_BLE_ADDR_BYTES];
+	bool connected[3] = { false, false, false };
+
+	memcpy(bonds[0], A, sizeof(A));
+	memcpy(bonds[1], B, sizeof(B));
+	memcpy(bonds[2], C, sizeof(C));
+
+	radiant_ble_lru_touch(t, 3, A, &next);
+	radiant_ble_lru_touch(t, 3, B, &next);
+	radiant_ble_lru_touch(t, 3, C, &next);
+	zassert_equal(0, radiant_ble_lru_pick_victim(t, 3, bonds, connected, 3));
+
+	/* A used again: B is now the least recent. */
+	radiant_ble_lru_touch(t, 3, A, &next);
+	zassert_equal(1, radiant_ble_lru_pick_victim(t, 3, bonds, connected, 3));
+}
+
+/* A connected peer is never evicted, even when it is the least recent. */
+ZTEST(ble_lru, test_a_connected_peer_is_never_evicted)
+{
+	struct radiant_ble_lru_entry t[3] = { 0 };
+	uint32_t next = 0u;
+	uint8_t bonds[3][RADIANT_BLE_ADDR_BYTES];
+	bool connected[3] = { true, false, false };
+
+	memcpy(bonds[0], A, sizeof(A));
+	memcpy(bonds[1], B, sizeof(B));
+	memcpy(bonds[2], C, sizeof(C));
+	radiant_ble_lru_touch(t, 3, A, &next);
+	radiant_ble_lru_touch(t, 3, B, &next);
+	radiant_ble_lru_touch(t, 3, C, &next);
+
+	zassert_equal(1, radiant_ble_lru_pick_victim(t, 3, bonds, connected, 3));
+
+	bool all[3] = { true, true, true };
+
+	zassert_equal(-1, radiant_ble_lru_pick_victim(t, 3, bonds, all, 3));
+	zassert_equal(-1, radiant_ble_lru_pick_victim(t, 3, bonds, connected, 0));
+}
+
+/* A bond the LRU has never seen (bonded before this record existed, or the
+ * record was lost) counts as least recent of all. */
+ZTEST(ble_lru, test_an_unrecorded_bond_goes_first)
+{
+	struct radiant_ble_lru_entry t[3] = { 0 };
+	uint32_t next = 0u;
+	uint8_t bonds[3][RADIANT_BLE_ADDR_BYTES];
+	bool connected[3] = { false, false, false };
+
+	memcpy(bonds[0], A, sizeof(A));
+	memcpy(bonds[1], B, sizeof(B));
+	memcpy(bonds[2], C, sizeof(C));
+	radiant_ble_lru_touch(t, 3, A, &next);
+	radiant_ble_lru_touch(t, 3, C, &next);
+
+	zassert_equal(1, radiant_ble_lru_pick_victim(t, 3, bonds, connected, 3));
+	zassert_equal(0, radiant_ble_lru_pick_victim(NULL, 0, bonds, connected, 3),
+		      "no record at all: the first bond");
+}
+
+/* A full table replaces its least recent entry; forget frees a slot. */
+ZTEST(ble_lru, test_touch_replaces_the_oldest_and_forget_frees)
+{
+	struct radiant_ble_lru_entry t[2] = { 0 };
+	uint32_t next = 0u;
+
+	radiant_ble_lru_touch(t, 2, A, &next);
+	radiant_ble_lru_touch(t, 2, B, &next);
+	radiant_ble_lru_touch(t, 2, C, &next); /* replaces A */
+	zassert_mem_equal(C, t[0].addr, sizeof(C));
+	zassert_mem_equal(B, t[1].addr, sizeof(B));
+
+	radiant_ble_lru_forget(t, 2, B);
+	zassert_equal(0u, t[1].seq);
+	radiant_ble_lru_touch(t, 2, D, &next);
+	zassert_mem_equal(D, t[1].addr, sizeof(D));
+	zassert_true(t[1].seq > t[0].seq);
+}
+
+/* The counter saturating halves the table rather than wrapping: order kept. */
+ZTEST(ble_lru, test_counter_exhaustion_keeps_the_order)
+{
+	struct radiant_ble_lru_entry t[3] = { 0 };
+	uint32_t next = 0xFFFFFFFFu;
+	uint8_t bonds[3][RADIANT_BLE_ADDR_BYTES];
+	bool connected[3] = { false, false, false };
+
+	memcpy(t[0].addr, A, sizeof(A));
+	t[0].seq = 0xFFFFFFF0u;
+	memcpy(t[1].addr, B, sizeof(B));
+	t[1].seq = 0xFFFFFFFFu;
+	memcpy(bonds[0], A, sizeof(A));
+	memcpy(bonds[1], B, sizeof(B));
+	memcpy(bonds[2], C, sizeof(C));
+
+	radiant_ble_lru_touch(t, 3, C, &next);
+	zassert_true(next < 0x90000000u);
+	zassert_true(t[0].seq <= t[1].seq);
+	zassert_true(t[1].seq < t[2].seq, "C is the newest");
+	zassert_equal(0, radiant_ble_lru_pick_victim(t, 3, bonds, connected, 3));
+}
+
+ZTEST(ble_lru, test_record_round_trips)
+{
+	struct radiant_ble_lru_entry t[4] = { 0 };
+	struct radiant_ble_lru_entry back[4];
+	uint32_t next = 0u;
+	uint32_t hi = 0u;
+	uint8_t buf[1 + 4 * RADIANT_BLE_LRU_ENTRY_BYTES];
+	int len;
+
+	radiant_ble_lru_touch(t, 4, A, &next);
+	radiant_ble_lru_touch(t, 4, B, &next);
+	radiant_ble_lru_touch(t, 4, A, &next);
+
+	len = radiant_ble_lru_encode(t, 4, buf, sizeof(buf));
+	zassert_equal(1 + 2 * (int)RADIANT_BLE_LRU_ENTRY_BYTES, len);
+	zassert_equal(RADIANT_BLE_LRU_FORMAT_V1, buf[0]);
+
+	zassert_equal(2, radiant_ble_lru_decode(buf, (size_t)len, back, 4, &hi));
+	zassert_equal(3u, hi);
+	zassert_mem_equal(A, back[0].addr, sizeof(A));
+	zassert_equal(3u, back[0].seq);
+	zassert_equal(2u, back[1].seq);
+	zassert_equal(0u, back[2].seq);
+
+	/* Too small an output, a wrong format byte, a torn length. */
+	zassert_equal(-1, radiant_ble_lru_encode(t, 4, buf, 5u));
+	buf[0] = 2u;
+	zassert_equal(-1, radiant_ble_lru_decode(buf, (size_t)len, back, 4, &hi));
+	buf[0] = RADIANT_BLE_LRU_FORMAT_V1;
+	zassert_equal(-1, radiant_ble_lru_decode(buf, (size_t)len - 1u, back, 4, &hi));
+	/* A record from a larger bond store keeps what fits. */
+	zassert_equal(1, radiant_ble_lru_decode(buf, (size_t)len, back, 1, &hi));
 }

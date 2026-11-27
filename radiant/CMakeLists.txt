@@ -242,6 +242,21 @@ if(CONFIG_RADIANT_PRODUCT)
       message(FATAL_ERROR "radiant: ${radiant_version_file} lacks VERSION_MAJOR, "
                           "VERSION_MINOR or PATCHLEVEL")
     endif()
+    # Page 81 carries main = MAJOR * 10 + MINOR in one byte and PATCHLEVEL as
+    # the supplemental byte (0..99, 0xFF = unused). A version that does not
+    # fit would go out as 0xFF in silence, so it is refused here instead.
+    if(CONFIG_RADIANT_PRODUCT_SW_REV_FROM_VERSION)
+      math(EXPR radiant_version_main "${radiant_version_MAJOR} * 10 + ${radiant_version_MINOR}")
+      if(radiant_version_MINOR GREATER 9 OR radiant_version_main GREATER 255 OR
+         radiant_version_PATCH GREATER 99)
+        message(FATAL_ERROR
+          "radiant: VERSION ${radiant_version_MAJOR}.${radiant_version_MINOR}."
+          "${radiant_version_PATCH} does not fit ANT+ page 81's software "
+          "revision (MINOR <= 9, MAJOR * 10 + MINOR <= 255, PATCHLEVEL <= 99). "
+          "Set CONFIG_RADIANT_PRODUCT_SW_REV_FROM_VERSION=n and state "
+          "CONFIG_RADIANT_PRODUCT_SW_REV_MAIN/_SUPP by hand.")
+      endif()
+    endif()
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${radiant_version_file}")
     zephyr_library_compile_definitions(
       RADIANT_BUILD_VERSION_MAJOR=${radiant_version_MAJOR}
@@ -250,30 +265,68 @@ if(CONFIG_RADIANT_PRODUCT)
     )
   endif()
 
-  # Strict identity, refused at configure time. radiant_product_check() makes
-  # the same three checks in C (tested on native_sim) and logs them at boot
-  # in a development build; the strings are the Kconfig defaults, and
-  # <radiant/radiant_product.h> names them for both.
+  # A node that can go private must not put its serial on the air
+  # (docs/radiant-security.md section 5.4): the posture is required, not left
+  # to memory.
+  if((CONFIG_RADIANT_PRIVATE_POLICY_PHYSICAL OR CONFIG_RADIANT_PRIVATE_POLICY_COMMAND OR
+      CONFIG_RADIANT_PRIVATE_POLICY_ALWAYS) AND NOT CONFIG_RADIANT_PRODUCT_PRIVACY)
+    message(FATAL_ERROR
+      "radiant: a private_policy other than `never` is a privacy posture, and "
+      "docs/radiant-security.md section 5.4 requires page 81's serial to be "
+      "0xFFFFFFFF for it. Set CONFIG_RADIANT_PRODUCT_PRIVACY=y.")
+  endif()
+
+  # Strict identity, refused at configure time. radiant_product_check() and
+  # radiant_product_check_ble_name() make the same name checks in C (tested
+  # on native_sim) and log them at boot in a development build;
+  # <radiant/radiant_product.h> names the placeholder strings for both.
   if(CONFIG_RADIANT_PRODUCT_STRICT)
     set(radiant_strict_errors "")
     if(CONFIG_RADIANT_PRODUCT_MANUFACTURER_ID EQUAL 255)
       list(APPEND radiant_strict_errors
         "CONFIG_RADIANT_PRODUCT_MANUFACTURER_ID is 255, the ANT+ development id")
     endif()
-    if("${CONFIG_RADIANT_PRODUCT_MANUFACTURER_NAME}" STREQUAL "" OR
-       "${CONFIG_RADIANT_PRODUCT_MANUFACTURER_NAME}" STREQUAL "RadiANT development")
-      list(APPEND radiant_strict_errors
-        "CONFIG_RADIANT_PRODUCT_MANUFACTURER_NAME is empty or the placeholder")
-    endif()
-    if("${CONFIG_RADIANT_PRODUCT_MODEL_NAME}" STREQUAL "" OR
-       "${CONFIG_RADIANT_PRODUCT_MODEL_NAME}" STREQUAL "RadiANT reference")
-      list(APPEND radiant_strict_errors
-        "CONFIG_RADIANT_PRODUCT_MODEL_NAME is empty or the placeholder")
+    set(radiant_name_checks
+      "MANUFACTURER_NAME|${CONFIG_RADIANT_PRODUCT_MANUFACTURER_NAME}|RadiANT development"
+      "MODEL_NAME|${CONFIG_RADIANT_PRODUCT_MODEL_NAME}|RadiANT reference")
+    foreach(check ${radiant_name_checks})
+      string(REPLACE "|" ";" parts "${check}")
+      list(GET parts 0 sym)
+      list(LENGTH parts nparts)
+      set(val "")
+      if(nparts EQUAL 3)
+        list(GET parts 1 val)
+        list(GET parts 2 dflt)
+      else()
+        list(GET parts 1 dflt)
+      endif()
+      if("${val}" STREQUAL "" OR "${val}" STREQUAL "${dflt}" OR "${val}" MATCHES "^Your ")
+        list(APPEND radiant_strict_errors
+          "CONFIG_RADIANT_PRODUCT_${sym} is empty, the placeholder or a "
+          "product.conf.example value (\"${val}\")")
+      endif()
+    endforeach()
+    if(CONFIG_RADIANT_BLE)
+      if("${CONFIG_BT_DEVICE_NAME}" STREQUAL "" OR
+         "${CONFIG_BT_DEVICE_NAME}" STREQUAL "Zephyr" OR
+         "${CONFIG_BT_DEVICE_NAME}" STREQUAL "RadiANT HR" OR
+         "${CONFIG_BT_DEVICE_NAME}" STREQUAL "RadiANT Treadmill" OR
+         "${CONFIG_BT_DEVICE_NAME}" MATCHES "^Your ")
+        list(APPEND radiant_strict_errors
+          "CONFIG_BT_DEVICE_NAME is a default or product.conf.example name "
+          "(\"${CONFIG_BT_DEVICE_NAME}\")")
+      endif()
     endif()
     if(NOT CONFIG_RADIANT_NODE_IDENT)
       list(APPEND radiant_strict_errors
         "CONFIG_RADIANT_NODE_IDENT is off, so the shared Kconfig device number "
         "is the only one this image can transmit on")
+    endif()
+    if(NOT CONFIG_RADIANT_PRODUCT_APP_UNIT_BOOT)
+      list(APPEND radiant_strict_errors
+        "this application does not take its device number from "
+        "radiant_product_unit_boot() (RADIANT_PRODUCT_APP_UNIT_BOOT), so it "
+        "transmits on a fixed number - apps/trainer is a fixture and is one")
     endif()
     if(radiant_strict_errors)
       string(REPLACE ";" "\n  - " radiant_strict_text "${radiant_strict_errors}")
@@ -285,6 +338,15 @@ if(CONFIG_RADIANT_PRODUCT)
         "strict identity for development.")
     endif()
   endif()
+endif()
+
+if(CONFIG_RADIANT_BLE_PAIRING_WINDOW AND CONFIG_BT_KEYS_OVERWRITE_OLDEST)
+  message(FATAL_ERROR
+    "radiant: CONFIG_BT_KEYS_OVERWRITE_OLDEST defeats CONFIG_RADIANT_BLE_PAIRING_WINDOW. "
+    "Zephyr evicts the oldest bond inside the Pairing Request handler, before "
+    "pairing_accept can refuse, so every refused stranger would delete a bond. "
+    "The pairing window does its own least-recently-used eviction, and only "
+    "while the window is open; turn BT_KEYS_OVERWRITE_OLDEST off.")
 endif()
 
 if(CONFIG_RADIANT_BLE)

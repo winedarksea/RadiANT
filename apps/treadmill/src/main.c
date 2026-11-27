@@ -1027,6 +1027,9 @@ int main(void)
 	 */
 	err = treadmill_ble_start(devnum, unit.serial);
 	if (err != 0) {
+		/* Only fatal steps get here (controller or RSC init): a
+		 * failed first advertising start is retried by radiant_ble_adv
+		 * and returns 0. */
 		LOG_ERR("BLE did not start: %d. The ANT+ masters above are "
 			"unaffected and this node is now ANT+ only - no FTMS, "
 			"no RSC, and nothing to find in a BLE scan.", err);

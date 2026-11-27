@@ -37,6 +37,9 @@ struct radiant_profile_common_id;
  * Kconfig, so the C check and the CMake check name the same strings. */
 #define RADIANT_PRODUCT_PLACEHOLDER_MANUFACTURER_NAME "RadiANT development"
 #define RADIANT_PRODUCT_PLACEHOLDER_MODEL_NAME        "RadiANT reference"
+/* product.conf.example's values all start with this, and strict refuses any
+ * string that still does. */
+#define RADIANT_PRODUCT_TEMPLATE_PREFIX               "Your "
 
 /* Longest string the helpers produce, terminator included. DIS strings are
  * further bounded by CONFIG_BT_DIS_STR_MAX where they are applied. */
@@ -74,6 +77,7 @@ struct radiant_product_dis {
 #define RADIANT_PRODUCT_BAD_MANUFACTURER_ID   0x01u /* 255, the development id */
 #define RADIANT_PRODUCT_BAD_MANUFACTURER_NAME 0x02u /* empty or the placeholder */
 #define RADIANT_PRODUCT_BAD_MODEL_NAME        0x04u /* empty or the placeholder */
+#define RADIANT_PRODUCT_BAD_BLE_NAME          0x08u /* a default or template BLE name */
 #define RADIANT_PRODUCT_BAD_NULL              0x80u /* no record */
 
 /* ── Kernel-free ──────────────────────────────────────────────────────────── */
@@ -97,11 +101,29 @@ int radiant_product_dis_strings(const struct radiant_product *p, uint32_t serial
 				struct radiant_product_dis *out);
 
 /*
- * 0 when the record is shippable, else RADIANT_PRODUCT_BAD_* bits. Strict
- * builds refuse a non-zero answer at configure time (radiant/CMakeLists.txt
- * repeats these checks); development builds log it at boot.
+ * 0 when the record is shippable, else RADIANT_PRODUCT_BAD_* bits. A name is
+ * refused when empty, a RadiANT placeholder, or still a product.conf.example
+ * value (starts with RADIANT_PRODUCT_TEMPLATE_PREFIX). Strict builds refuse a
+ * non-zero answer at configure time (radiant/CMakeLists.txt repeats these
+ * checks); development builds log it at boot. The model number and hardware
+ * revision are not checked: their placeholder 1 is also a legitimate value.
  */
 uint32_t radiant_product_check(const struct radiant_product *p);
+
+/*
+ * RADIANT_PRODUCT_BAD_BLE_NAME when the advertised BLE name is empty,
+ * Zephyr's default "Zephyr", one of this repository's development names
+ * ("RadiANT HR", "RadiANT Treadmill"), or starts with the template prefix;
+ * else 0.
+ */
+uint32_t radiant_product_check_ble_name(const char *name);
+
+/*
+ * The serial a node puts on the air: `serial`, or 0xFFFFFFFF ("not
+ * supplied", page 81's sentinel) for a node with a privacy posture
+ * (docs/radiant-security.md section 5.4, CONFIG_RADIANT_PRODUCT_PRIVACY).
+ */
+uint32_t radiant_product_public_serial(bool privacy, uint32_t serial);
 
 /*
  * The development-fallback decision, separated from the kernel so it can be
@@ -124,8 +146,10 @@ int radiant_product_unit_resolve(bool strict, int boot_rc, uint16_t ident_devnum
 
 /*
  * The strict-mode retry delay after `attempt` failed boots (1-based):
- * 1 s doubling to 60 s.
+ * 1 s doubling to one hour. Long, because each identity boot attempt may
+ * write the boot counter to flash before it fails again.
  */
+#define RADIANT_PRODUCT_RETRY_MAX_MS 3600000u
 uint32_t radiant_product_retry_ms(uint32_t attempt);
 
 /*

@@ -27,6 +27,14 @@ BUILD_ASSERT(sizeof(CONFIG_RADIANT_PRODUCT_MODEL_NAME) - 1u <=
 	     CONFIG_BT_DIS_STR_MAX,
 	     "CONFIG_RADIANT_PRODUCT_MODEL_NAME is longer than "
 	     "CONFIG_BT_DIS_STR_MAX and DIS would truncate it");
+/* And radiant_product_dis_strings()' own buffers, which truncate at
+ * RADIANT_PRODUCT_STR_MAX - 1 whatever CONFIG_BT_DIS_STR_MAX allows. */
+BUILD_ASSERT(sizeof(CONFIG_RADIANT_PRODUCT_MANUFACTURER_NAME) <= RADIANT_PRODUCT_STR_MAX,
+	     "CONFIG_RADIANT_PRODUCT_MANUFACTURER_NAME is longer than "
+	     "RADIANT_PRODUCT_STR_MAX - 1 and would be truncated");
+BUILD_ASSERT(sizeof(CONFIG_RADIANT_PRODUCT_MODEL_NAME) <= RADIANT_PRODUCT_STR_MAX,
+	     "CONFIG_RADIANT_PRODUCT_MODEL_NAME is longer than "
+	     "RADIANT_PRODUCT_STR_MAX - 1 and would be truncated");
 /* The longest generated string: a 10-digit serial. */
 BUILD_ASSERT(CONFIG_BT_DIS_STR_MAX >= 10, "a decimal 32-bit serial needs 10");
 
@@ -52,14 +60,20 @@ int radiant_ble_dis_apply(uint32_t serial)
 
 	err = set_one("bt/dis/manuf", d.manufacturer, 0);
 	err = set_one("bt/dis/model", d.model, err);
+#if defined(CONFIG_BT_DIS_SERIAL_NUMBER)
+	/* Absent with CONFIG_RADIANT_PRODUCT_PRIVACY: a node with a privacy
+	 * posture publishes no serial on either radio. */
 	err = set_one("bt/dis/serial", d.serial, err);
+#endif
 	err = set_one("bt/dis/fw", d.fw_rev, err);
 	err = set_one("bt/dis/hw", d.hw_rev, err);
 	err = set_one("bt/dis/sw", d.sw_rev, err);
 
 	if (err == 0) {
 		LOG_INF("DIS: %s %s serial %s fw %s hw %s", d.manufacturer,
-			d.model, d.serial, d.fw_rev, d.hw_rev);
+			d.model,
+			IS_ENABLED(CONFIG_BT_DIS_SERIAL_NUMBER) ? d.serial : "(none)",
+			d.fw_rev, d.hw_rev);
 	}
 	return err;
 }

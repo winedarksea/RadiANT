@@ -3,23 +3,29 @@
 # Your product's identity. Copy to product.conf, fill in every line, and
 # build with dual.conf (see dual.conf's header). One record feeds both radios:
 # ANT+ common pages 80/81 and the Bluetooth
-# Device Information Service. CONFIG_RADIANT_PRODUCT_STRICT, which dual.conf
-# turns on, refuses to configure while any of the first, second or fourth
-# lines is still a placeholder.
+# Device Information Service.
+#
+# CONFIG_RADIANT_PRODUCT_STRICT, which dual.conf turns on, refuses to configure
+# while the manufacturer id is 255, the manufacturer name, model name or BLE
+# name below still starts with "Your " (or is empty, or a RadiANT/Zephyr
+# default). It does NOT check the model number or hardware revision - a
+# placeholder 1 looks like a real 1 - so set those deliberately.
 #
 # The device number and the 32-bit serial are NOT here: each unit derives its
 # own from the identity key it generates on first boot (ADR 0020), so every
 # unit built from one image is distinct with no factory step.
 
 # Assigned by the ANT+ Alliance. 255 is the development id and is refused.
+# (Refused by strict; this template value must be replaced.)
 CONFIG_RADIANT_PRODUCT_MANUFACTURER_ID=255
 # DIS Manufacturer Name String, at most CONFIG_BT_DIS_STR_MAX (21) characters.
 CONFIG_RADIANT_PRODUCT_MANUFACTURER_NAME="Your Company"
-# ANT+ page 80's numeric model number.
+# ANT+ page 80's numeric model number. NOT checked by strict mode.
 CONFIG_RADIANT_PRODUCT_MODEL_NUMBER=1
 # DIS Model Number String, at most 21 characters.
 CONFIG_RADIANT_PRODUCT_MODEL_NAME="Your Treadmill"
 # Page 80's hardware revision and the DIS Hardware Revision String.
+# NOT checked by strict mode.
 CONFIG_RADIANT_PRODUCT_HW_REV=1
 # The software revision follows the repository VERSION file by default
 # (main = MAJOR*10+MINOR, supplemental = PATCHLEVEL). To state it by hand:

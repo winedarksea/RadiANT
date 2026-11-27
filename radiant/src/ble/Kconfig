@@ -95,21 +95,58 @@ config RADIANT_PRODUCT_SW_REV_SUPP
 	help
 	  255 means "not used".
 
+config RADIANT_PRODUCT_APP_UNIT_BOOT
+	bool
+	help
+	  Selected by an application whose device number comes from
+	  radiant_product_unit_boot() - the only path that honours strict
+	  identity at run time. Strict mode refuses an application without it
+	  (apps/trainer, which always transmits on its fixed fixture number).
+
+config RADIANT_PRODUCT_PRIVACY
+	bool "privacy posture: no serial number on the air"
+	help
+	  docs/radiant-security.md section 5.4 and docs/radiant-telemetry.md:
+	  a node with a privacy posture emits common page 81 with serial
+	  0xFFFFFFFF ("not supplied") and the BLE Device Information Service
+	  carries no Serial Number characteristic. A 32-bit serial in the
+	  clear is more identifying than the device number and survives any
+	  re-roll of it. Required (radiant/CMakeLists.txt) when the profile
+	  policy lets the node go private (RADIANT_PRIVATE_POLICY_PHYSICAL,
+	  _COMMAND or _ALWAYS).
+
+	  Not done here: section 5.4 also asks for a generic page 80 and a
+	  suppressed or zeroed page 82; those stay with the application.
+
 config RADIANT_PRODUCT_STRICT
 	bool "strict product identity: refuse placeholders and the shared devnum"
 	help
 	  For a shipped product (the dual.conf presets turn it on).
 
-	  AT CONFIGURE TIME radiant/CMakeLists.txt refuses the build when the
-	  manufacturer id is 255, the manufacturer or model name is empty or
-	  the placeholder, or the application has no node identity
-	  (CONFIG_RADIANT_NODE_IDENT) - without one the shared Kconfig device
-	  number is the only number there is.
+	  AT CONFIGURE TIME radiant/CMakeLists.txt refuses the build when:
+	  - the manufacturer id is 255;
+	  - the manufacturer or model name is empty, a RadiANT placeholder, or
+	    still a product.conf.example value (anything starting "Your ");
+	  - with BLE on, CONFIG_BT_DEVICE_NAME is empty, Zephyr's "Zephyr",
+	    an application's development name ("RadiANT HR",
+	    "RadiANT Treadmill") or starts with "Your ";
+	  - the application has no node identity (CONFIG_RADIANT_NODE_IDENT)
+	    or does not take its device number from radiant_product_unit_boot()
+	    (RADIANT_PRODUCT_APP_UNIT_BOOT) - either way a shared or fixed
+	    device number is the only one there is.
+
+	  NOT ENFORCED: the model number and hardware revision. Their
+	  placeholder 1 is also a legitimate value, so nothing can tell "unset"
+	  from "set to 1"; check them yourself.
 
 	  AT RUN TIME radiant_product_unit_boot() does not fall back: if the
 	  identity fails to boot, the node stays off the air (no ANT+ channel,
-	  no BLE) and retries, 1 s doubling to 60 s, logging every attempt. It
-	  never transmits on the device number every unit of the image shares.
+	  no BLE) and retries, 1 s doubling to an hour, logging every attempt.
+	  It never transmits on the device number every unit of the image
+	  shares. A persistent failure (dead storage, an exhausted boot
+	  counter) therefore leaves the unit off the air until it is repaired,
+	  reflashed or re-provisioned: that is the intended field-failure mode.
+	  Each retry may write the boot counter once, hence the long cap.
 
 	  Off (development builds), a failed identity boot falls back to the
 	  application's Kconfig device number as before, logged at error level,
@@ -124,7 +161,7 @@ menuconfig RADIANT_BLE
 	select BT_DIS
 	select BT_DIS_SETTINGS
 	select SETTINGS_RUNTIME
-	select BT_DIS_SERIAL_NUMBER
+	select BT_DIS_SERIAL_NUMBER if !RADIANT_PRODUCT_PRIVACY
 	select BT_DIS_FW_REV
 	select BT_DIS_HW_REV
 	select BT_DIS_SW_REV
@@ -201,15 +238,29 @@ config RADIANT_BLE_PAIRING_WINDOW
 	bool "equipment bonding: pairing only inside a console-opened window"
 	depends on BT_SMP
 	select BT_SMP_APP_PAIRING_ACCEPT
-	select BT_KEYS_OVERWRITE_OLDEST
-	select BT_KEYS_SAVE_AGING_COUNTER_ON_PAIRING if BT_SETTINGS
 	help
-	  New pairings are refused unless radiant_ble_pairing_window_open()
-	  was called (from a local console button) within the window; bonded
-	  peers still connect. A pairing inside the window with the bond store
-	  full replaces the least recently used bond, so a replaced phone
-	  always recovers through the window. See
-	  <radiant/radiant_ble_pairing.h>.
+	  New pairings are refused unless a pairing window is open
+	  (radiant_ble_pairing_window_open() from a local console button, or
+	  RADIANT_BLE_PAIRING_WINDOW_AT_BOOT_S after power-on); bonded peers
+	  still connect. With the bond store full, the window frees the least
+	  recently used bond (never a connected one), so a replaced phone
+	  always recovers through it. The callbacks register themselves at
+	  boot. See <radiant/radiant_ble_pairing.h>.
+
+	  BT_KEYS_OVERWRITE_OLDEST must stay OFF with this option: Zephyr
+	  evicts under it inside the Pairing Request handler, before
+	  pairing_accept can refuse, so every refused stranger would delete a
+	  bond. radiant/CMakeLists.txt refuses the combination.
+
+config RADIANT_BLE_PAIRING_WINDOW_AT_BOOT_S
+	int "pairing window opened at power-on, seconds (0 = none)"
+	depends on RADIANT_BLE_PAIRING_WINDOW
+	range 0 600
+	default 0
+	help
+	  Opens a pairing window for this long after boot - the common
+	  "power-cycle the machine to pair a new phone" pattern, and the
+	  trigger an application has before it wires a console button.
 
 module = RADIANT_BLE
 module-str = radiant BLE layer
@@ -232,6 +283,18 @@ config BT_DIS_MANUF_NAME_STR
 
 config BT_DIS_MODEL_NUMBER_STR
 	default RADIANT_PRODUCT_MODEL_NAME if RADIANT_BLE
+
+# The devnum suffix makes the name dynamic. Zephyr's 28-byte name store is
+# shorter than the treadmill's 29-character scan-response budget, so
+# bt_set_name() would refuse a long name with -ENOMEM; 36 covers every budget
+# here plus the 6-character suffix. And a dynamic name is writable over GATT by
+# default - any connected phone could rename the unit - which nothing here
+# wants.
+config BT_DEVICE_NAME_MAX
+	default 36 if RADIANT_BLE_NAME_DEVNUM_SUFFIX
+
+config BT_DEVICE_NAME_GATT_WRITABLE
+	default n if RADIANT_BLE_NAME_DEVNUM_SUFFIX
 
 # PnP ID's stock values are vendor-id source 1 (Bluetooth SIG), vendor 0x0000:
 # a claim to be company 0x0000, which is somebody else. PnP ID is optional in

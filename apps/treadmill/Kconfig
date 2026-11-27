@@ -82,6 +82,7 @@ menuconfig TREADMILL
 	# used to be TREADMILL_MANUFACTURER_ID is
 	# CONFIG_RADIANT_PRODUCT_MANUFACTURER_ID.
 	select RADIANT_PRODUCT
+	select RADIANT_PRODUCT_APP_UNIT_BOOT
 	help
 	  A RadiANT NODE that is fitness equipment: radiant driving TWO ANT+
 	  master channels - FE-C (0x11) and Stride Based Speed and Distance

@@ -61,9 +61,36 @@ int radiant_product_dis_strings(const struct radiant_product *p, uint32_t serial
 	return 0;
 }
 
+static bool templated(const char *s)
+{
+	return strncmp(s, RADIANT_PRODUCT_TEMPLATE_PREFIX,
+		       sizeof(RADIANT_PRODUCT_TEMPLATE_PREFIX) - 1u) == 0;
+}
+
 static bool placeholder(const char *s, const char *dflt)
 {
-	return s == NULL || s[0] == '\0' || strcmp(s, dflt) == 0;
+	return s == NULL || s[0] == '\0' || strcmp(s, dflt) == 0 || templated(s);
+}
+
+uint32_t radiant_product_check_ble_name(const char *name)
+{
+	static const char *const defaults[] = { "Zephyr", "RadiANT HR",
+						"RadiANT Treadmill" };
+
+	if (name == NULL || name[0] == '\0' || templated(name)) {
+		return RADIANT_PRODUCT_BAD_BLE_NAME;
+	}
+	for (size_t i = 0; i < sizeof(defaults) / sizeof(defaults[0]); i++) {
+		if (strcmp(name, defaults[i]) == 0) {
+			return RADIANT_PRODUCT_BAD_BLE_NAME;
+		}
+	}
+	return 0u;
+}
+
+uint32_t radiant_product_public_serial(bool privacy, uint32_t serial)
+{
+	return privacy ? RADIANT_PROFILE_COMMON_INVALID_U32 : serial;
 }
 
 uint32_t radiant_product_check(const struct radiant_product *p)
@@ -114,11 +141,11 @@ uint32_t radiant_product_retry_ms(uint32_t attempt)
 {
 	uint32_t ms = 1000u;
 
-	while (attempt > 1u && ms < 60000u) {
+	while (attempt > 1u && ms < RADIANT_PRODUCT_RETRY_MAX_MS) {
 		ms *= 2u;
 		attempt--;
 	}
-	return ms > 60000u ? 60000u : ms;
+	return ms > RADIANT_PRODUCT_RETRY_MAX_MS ? RADIANT_PRODUCT_RETRY_MAX_MS : ms;
 }
 
 void radiant_product_sw_rev_from_version(uint32_t major, uint32_t minor,

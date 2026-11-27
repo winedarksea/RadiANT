@@ -1,40 +1,235 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
- * radiant_ble_pairing.c - the pairing window and bond service calls. See
- * <radiant/radiant_ble_pairing.h> for the policy. The window decision is
- * radiant_ble_pairing_window_allows() in radiant_ble_policy.c.
+ * radiant_ble_pairing.c - the pairing window, the bond LRU and the bond
+ * service calls. See <radiant/radiant_ble_pairing.h> for the policy; the
+ * decisions (window expiry, which bond to evict, the record codec) are in
+ * radiant_ble_policy.c and tested on native_sim.
  *
- * pairing_accept runs on the Bluetooth RX thread; the window is opened from a
- * console driver's context. Two words under a spinlock.
+ * CONTEXTS. pairing_accept, connected and security_changed run on the
+ * Bluetooth RX thread; the window is opened from a console driver's context
+ * or at boot. Every bond deletion and settings write happens on the system
+ * work queue (room_work, lru_work), never inside a BT callback.
  */
 
 #include <errno.h>
+#include <string.h>
 
+#include <zephyr/init.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/conn.h>
+#include <zephyr/settings/settings.h>
 
 #include <radiant/radiant_ble_pairing.h>
 
 LOG_MODULE_DECLARE(radiant_ble_adv, CONFIG_RADIANT_BLE_LOG_LEVEL);
 
+BUILD_ASSERT(sizeof(bt_addr_le_t) == RADIANT_BLE_ADDR_BYTES,
+	     "the LRU record copies bt_addr_le_t byte-wise");
+BUILD_ASSERT(CONFIG_RADIANT_BLE_PAIRING_WINDOW_AT_BOOT_S <=
+	     RADIANT_BLE_PAIRING_WINDOW_MAX_S,
+	     "the boot pairing window is longer than the 600 s cap");
+
+#define LRU_N   CONFIG_BT_MAX_PAIRED
+#define LRU_KEY "rble/lru"
+
 static struct k_spinlock lock;
-static uint32_t win_opened_ms;
+static uint64_t win_opened_ms;
 static uint32_t win_len_ms; /* 0 = closed */
+
+/* Guarded by `lock`; written to settings from lru_work. */
+static struct radiant_ble_lru_entry lru[LRU_N];
+static uint32_t lru_next;
+
+static void room_work_fn(struct k_work *w);
+static K_WORK_DEFINE(room_work, room_work_fn);
+static void lru_work_fn(struct k_work *w);
+static K_WORK_DEFINE(lru_work, lru_work_fn);
 
 static bool window_allows_now(void)
 {
 	k_spinlock_key_t key = k_spin_lock(&lock);
 	bool ok = radiant_ble_pairing_window_allows(win_opened_ms, win_len_ms,
-						    k_uptime_get_32());
+						    (uint64_t)k_uptime_get());
 
 	if (!ok) {
-		win_len_ms = 0u; /* expired: closed for good, no wrap-around */
+		win_len_ms = 0u;
 	}
 	k_spin_unlock(&lock, key);
 	return ok;
 }
+
+/* ── The LRU record ───────────────────────────────────────────────────────── */
+
+static void lru_work_fn(struct k_work *w)
+{
+	ARG_UNUSED(w);
+#if defined(CONFIG_BT_SETTINGS)
+	uint8_t buf[1u + LRU_N * RADIANT_BLE_LRU_ENTRY_BYTES];
+	k_spinlock_key_t key = k_spin_lock(&lock);
+	int len = radiant_ble_lru_encode(lru, LRU_N, buf, sizeof(buf));
+
+	k_spin_unlock(&lock, key);
+	if (len > 0) {
+		int err = settings_save_one(LRU_KEY, buf, (size_t)len);
+
+		if (err != 0) {
+			LOG_WRN("bond LRU not saved: %d (eviction order falls "
+				"back to the last saved one)", err);
+		}
+	}
+#endif
+}
+
+#if defined(CONFIG_BT_SETTINGS)
+static int lru_set(const char *name, size_t len, settings_read_cb read_cb,
+		   void *cb_arg)
+{
+	uint8_t buf[1u + LRU_N * RADIANT_BLE_LRU_ENTRY_BYTES * 2u];
+	ssize_t got;
+
+	if (!settings_name_steq(name, "lru", NULL)) {
+		return -ENOENT;
+	}
+	if (len > sizeof(buf)) {
+		return -EINVAL;
+	}
+	got = read_cb(cb_arg, buf, len);
+	if (got < 0) {
+		return (int)got;
+	}
+
+	k_spinlock_key_t key = k_spin_lock(&lock);
+	uint32_t hi = 0u;
+
+	if (radiant_ble_lru_decode(buf, (size_t)got, lru, LRU_N, &hi) < 0) {
+		memset(lru, 0, sizeof(lru));
+		hi = 0u;
+	}
+	lru_next = hi;
+	k_spin_unlock(&lock, key);
+	return 0;
+}
+
+SETTINGS_STATIC_HANDLER_DEFINE(radiant_ble_lru, "rble", NULL, lru_set, NULL, NULL);
+#endif
+
+static void on_security_changed(struct bt_conn *conn, bt_security_t level,
+				enum bt_security_err err)
+{
+	if (err != BT_SECURITY_ERR_SUCCESS || level < BT_SECURITY_L2) {
+		return;
+	}
+
+	k_spinlock_key_t key = k_spin_lock(&lock);
+
+	radiant_ble_lru_touch(lru, LRU_N, (const uint8_t *)bt_conn_get_dst(conn),
+			      &lru_next);
+	k_spin_unlock(&lock, key);
+	(void)k_work_submit(&lru_work);
+}
+
+/* ── Making room, only inside an open window ──────────────────────────────── */
+
+struct bond_list {
+	uint8_t addr[LRU_N][RADIANT_BLE_ADDR_BYTES];
+	size_t  n;
+};
+
+static void collect_bond(const struct bt_bond_info *info, void *user)
+{
+	struct bond_list *b = user;
+
+	if (b->n < LRU_N) {
+		memcpy(b->addr[b->n], &info->addr, RADIANT_BLE_ADDR_BYTES);
+	}
+	b->n++;
+}
+
+static void room_work_fn(struct k_work *w)
+{
+	struct bond_list bonds = { .n = 0u };
+	bool connected[LRU_N];
+	int victim;
+
+	ARG_UNUSED(w);
+
+	if (!window_allows_now() || !bt_is_ready()) {
+		return;
+	}
+	bt_foreach_bond(BT_ID_DEFAULT, collect_bond, &bonds);
+	if (bonds.n < LRU_N) {
+		return; /* there is room */
+	}
+	bonds.n = LRU_N;
+
+	for (size_t i = 0; i < bonds.n; i++) {
+		struct bt_conn *c = bt_conn_lookup_addr_le(
+			BT_ID_DEFAULT, (const bt_addr_le_t *)bonds.addr[i]);
+
+		connected[i] = c != NULL;
+		if (c != NULL) {
+			bt_conn_unref(c);
+		}
+	}
+
+	k_spinlock_key_t key = k_spin_lock(&lock);
+
+	victim = radiant_ble_lru_pick_victim(lru, LRU_N,
+					     (const uint8_t (*)[RADIANT_BLE_ADDR_BYTES])bonds.addr,
+					     connected, bonds.n);
+	if (victim >= 0) {
+		radiant_ble_lru_forget(lru, LRU_N, bonds.addr[victim]);
+	}
+	k_spin_unlock(&lock, key);
+
+	if (victim < 0) {
+		LOG_WRN("bond store full and every bonded peer is connected: "
+			"no room for a new pairing");
+		return;
+	}
+
+	int err = bt_unpair(BT_ID_DEFAULT, (const bt_addr_le_t *)bonds.addr[victim]);
+
+	if (err != 0) {
+		LOG_ERR("evicting the least recently used bond: bt_unpair %d", err);
+		return;
+	}
+	LOG_INF("bond store full: least recently used bond deleted to make room "
+		"for the pairing window");
+	(void)k_work_submit(&lru_work);
+}
+
+static bool is_bonded(const bt_addr_le_t *addr)
+{
+	struct bond_list bonds = { .n = 0u };
+
+	bt_foreach_bond(BT_ID_DEFAULT, collect_bond, &bonds);
+	for (size_t i = 0; i < MIN(bonds.n, (size_t)LRU_N); i++) {
+		if (memcmp(bonds.addr[i], addr, RADIANT_BLE_ADDR_BYTES) == 0) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static void on_connected(struct bt_conn *conn, uint8_t err)
+{
+	/* A stranger connecting inside an open window is about to pair: make
+	 * room now, before its Pairing Request arrives. A bonded peer needs
+	 * none and must not cost another bond its slot. */
+	if (err == 0u && window_allows_now() && !is_bonded(bt_conn_get_dst(conn))) {
+		(void)k_work_submit(&room_work);
+	}
+}
+
+BT_CONN_CB_DEFINE(radiant_ble_pairing_conn_cb) = {
+	.connected = on_connected,
+	.security_changed = on_security_changed,
+};
+
+/* ── Pairing acceptance ───────────────────────────────────────────────────── */
 
 static enum bt_security_err pairing_accept(struct bt_conn *conn,
 					   const struct bt_conn_pairing_feat *const feat)
@@ -55,16 +250,27 @@ static struct bt_conn_auth_cb auth_cb = {
 	.pairing_accept = pairing_accept,
 };
 
-int radiant_ble_pairing_init(void)
+/* Registered at boot, not by the application: a window that is only
+ * enforced when the application remembers to call an init function fails
+ * open. Registration only stores a pointer, so it needs no bt_enable(). */
+static int pairing_sys_init(void)
 {
 	int err = bt_conn_auth_cb_register(&auth_cb);
 
 	if (err != 0) {
 		LOG_ERR("bt_conn_auth_cb_register: %d - the pairing window is "
-			"not enforced", err);
+			"NOT enforced", err);
 	}
+#if CONFIG_RADIANT_BLE_PAIRING_WINDOW_AT_BOOT_S > 0
+	win_opened_ms = (uint64_t)k_uptime_get();
+	win_len_ms = CONFIG_RADIANT_BLE_PAIRING_WINDOW_AT_BOOT_S * 1000u;
+#endif
 	return err;
 }
+
+SYS_INIT(pairing_sys_init, APPLICATION, CONFIG_APPLICATION_INIT_PRIORITY);
+
+/* ── Public calls ─────────────────────────────────────────────────────────── */
 
 int radiant_ble_pairing_window_open(uint32_t seconds)
 {
@@ -74,10 +280,11 @@ int radiant_ble_pairing_window_open(uint32_t seconds)
 
 	k_spinlock_key_t key = k_spin_lock(&lock);
 
-	win_opened_ms = k_uptime_get_32();
+	win_opened_ms = (uint64_t)k_uptime_get();
 	win_len_ms = seconds * 1000u;
 	k_spin_unlock(&lock, key);
 	LOG_INF("pairing window open for %u s", seconds);
+	(void)k_work_submit(&room_work);
 	return 0;
 }
 
@@ -100,8 +307,15 @@ int radiant_ble_bonds_forget_all(void)
 
 	if (err != 0) {
 		LOG_ERR("bt_unpair (all): %d", err);
-	} else {
-		LOG_INF("every bond deleted");
+		return err;
 	}
-	return err;
+
+	k_spinlock_key_t key = k_spin_lock(&lock);
+
+	memset(lru, 0, sizeof(lru));
+	lru_next = 0u;
+	k_spin_unlock(&lock, key);
+	(void)k_work_submit(&lru_work);
+	LOG_INF("every bond deleted");
+	return 0;
 }

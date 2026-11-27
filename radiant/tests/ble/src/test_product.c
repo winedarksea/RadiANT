@@ -167,6 +167,60 @@ ZTEST(product, test_each_strict_check_on_its_own)
 	zassert_equal(RADIANT_PRODUCT_BAD_NULL, radiant_product_check(NULL));
 }
 
+/* product.conf.example's own values are placeholders too: copying the
+ * template without editing it must not satisfy strict mode. */
+ZTEST(product, test_template_values_fail_the_strict_check)
+{
+	struct radiant_product p = shipping;
+
+	p.manufacturer_name = "Your Company";
+	p.model_name = "Your HR Strap";
+	zassert_equal(RADIANT_PRODUCT_BAD_MANUFACTURER_NAME |
+		      RADIANT_PRODUCT_BAD_MODEL_NAME, radiant_product_check(&p));
+	p.model_name = "Your Treadmill";
+	zassert_equal(RADIANT_PRODUCT_BAD_MANUFACTURER_NAME |
+		      RADIANT_PRODUCT_BAD_MODEL_NAME, radiant_product_check(&p));
+	p.manufacturer_name = "Your anything";
+	p.model_name = "Yours Truly";
+	zassert_equal(RADIANT_PRODUCT_BAD_MANUFACTURER_NAME, radiant_product_check(&p),
+		      "only the template prefix, with its space, is refused");
+}
+
+ZTEST(product, test_default_and_template_ble_names_fail)
+{
+	zassert_equal(RADIANT_PRODUCT_BAD_BLE_NAME, radiant_product_check_ble_name(NULL));
+	zassert_equal(RADIANT_PRODUCT_BAD_BLE_NAME, radiant_product_check_ble_name(""));
+	zassert_equal(RADIANT_PRODUCT_BAD_BLE_NAME, radiant_product_check_ble_name("Zephyr"));
+	zassert_equal(RADIANT_PRODUCT_BAD_BLE_NAME,
+		      radiant_product_check_ble_name("RadiANT HR"));
+	zassert_equal(RADIANT_PRODUCT_BAD_BLE_NAME,
+		      radiant_product_check_ble_name("RadiANT Treadmill"));
+	zassert_equal(RADIANT_PRODUCT_BAD_BLE_NAME,
+		      radiant_product_check_ble_name("Your HR Strap"));
+	zassert_equal(0u, radiant_product_check_ble_name("Acme Strap 2"));
+	zassert_equal(0u, radiant_product_check_ble_name("RadiANT Test"));
+}
+
+/* docs/radiant-security.md 5.4: a privacy posture puts serial 0xFFFFFFFF on
+ * page 81 (and so page 2's upper half is 0xFFFF); without one, serial32. */
+ZTEST(product, test_privacy_posture_withholds_the_serial)
+{
+	struct radiant_profile_common_id id;
+	uint8_t p81[8];
+
+	zassert_equal(0x993BC823u, radiant_product_public_serial(false, 0x993BC823u));
+	zassert_equal(0xFFFFFFFFu, radiant_product_public_serial(true, 0x993BC823u));
+
+	zassert_ok(radiant_product_fill_common_id(
+		&shipping, radiant_product_public_serial(true, 0x993BC823u), &id));
+	zassert_ok(radiant_profile_common_81(&id, p81));
+	zassert_equal(0xFFu, p81[4]);
+	zassert_equal(0xFFu, p81[5]);
+	zassert_equal(0xFFu, p81[6]);
+	zassert_equal(0xFFu, p81[7]);
+	zassert_equal(0xFFFFu, (uint16_t)(radiant_product_public_serial(true, 1u) >> 16));
+}
+
 /* ── The identity-fallback decision ──────────────────────────────────────── */
 
 #define IDENT_DEVNUM   51235u
@@ -222,14 +276,18 @@ ZTEST(product, test_strict_never_transmits_on_the_shared_number)
 	zassert_equal(0u, u.devnum);
 }
 
-ZTEST(product, test_strict_retry_backs_off_to_a_minute)
+ZTEST(product, test_strict_retry_backs_off_to_an_hour)
 {
 	zassert_equal(1000u, radiant_product_retry_ms(0u));
 	zassert_equal(1000u, radiant_product_retry_ms(1u));
 	zassert_equal(2000u, radiant_product_retry_ms(2u));
 	zassert_equal(32000u, radiant_product_retry_ms(6u));
-	zassert_equal(60000u, radiant_product_retry_ms(7u));
-	zassert_equal(60000u, radiant_product_retry_ms(0xFFFFFFFFu));
+	zassert_equal(2048000u, radiant_product_retry_ms(12u));
+	zassert_equal(RADIANT_PRODUCT_RETRY_MAX_MS, radiant_product_retry_ms(13u));
+	zassert_equal(RADIANT_PRODUCT_RETRY_MAX_MS, radiant_product_retry_ms(0xFFFFFFFFu));
+	/* Each attempt may write the boot counter: an hour's cap keeps a
+	 * persistent fault to a few writes an hour. */
+	zassert_equal(3600000u, RADIANT_PRODUCT_RETRY_MAX_MS);
 }
 
 ZTEST(product, test_resolve_refuses_null)

@@ -69,7 +69,7 @@ static int attempt(const char *why)
 		/* Once per failure run at error level, then quietly: a stuck
 		 * stack must not flood the log at the 5 s cap forever. */
 		if (failures == 1u) {
-			LOG_ERR("bt_le_adv_start (%s): %d - retrying in %u ms "
+			LOG_WRN("bt_le_adv_start (%s): %d - retrying in %u ms "
 				"until it succeeds", why, err, delay);
 		} else {
 			LOG_DBG("bt_le_adv_start retry %u: %d, next in %u ms",

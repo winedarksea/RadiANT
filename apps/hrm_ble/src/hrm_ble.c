@@ -78,6 +78,14 @@ BUILD_ASSERT(sizeof(CONFIG_BT_DEVICE_NAME) - 1u + NAME_SUFFIX_BUDGET <= 22u,
 static char adv_name[sizeof(CONFIG_BT_DEVICE_NAME) + RADIANT_BLE_NAME_SUFFIX_MAX] =
 	CONFIG_BT_DEVICE_NAME;
 
+#if defined(CONFIG_RADIANT_BLE_NAME_DEVNUM_SUFFIX)
+/* bt_set_name() refuses a name longer than its store with -ENOMEM. */
+BUILD_ASSERT(sizeof(CONFIG_BT_DEVICE_NAME) - 1u + RADIANT_BLE_NAME_SUFFIX_MAX <=
+	     CONFIG_BT_DEVICE_NAME_MAX,
+	     "CONFIG_BT_DEVICE_NAME plus the devnum suffix exceeds "
+	     "CONFIG_BT_DEVICE_NAME_MAX");
+#endif
+
 #define AD_NAME 2
 
 static struct bt_data ad[] = {
@@ -196,10 +204,15 @@ int hrm_ble_start(uint16_t devnum, uint32_t serial)
 		return err;
 	}
 
-	/* On failure the layer has already scheduled a retry. */
+	/* A failure here is not BLE being dead: the layer has already
+	 * scheduled a retry and keeps retrying until advertising starts. So
+	 * it is a warning and this returns 0 - only a fatal step above (the
+	 * controller not coming up) may make the caller report "ANT+ only". */
 	err = radiant_ble_adv_ensure();
 	if (err != 0) {
-		return err;
+		LOG_WRN("BLE advertising not started yet (%d); retrying in the "
+			"background", err);
+		return 0;
 	}
 
 	LOG_INF("BLE: SIG HRS advertising every %u ms as '%s'",
