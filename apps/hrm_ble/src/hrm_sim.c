@@ -56,6 +56,7 @@ static atomic_t sim_contact = ATOMIC_INIT(1);
 static void sim_work_fn(struct k_work *w);
 static K_WORK_DELAYABLE_DEFINE(sim_work, sim_work_fn);
 
+#if defined(CONFIG_HRM_SENSOR_SIM_CONTACT_BUTTON) || CONFIG_HRM_SENSOR_SIM_CONTACT_TOGGLE_S > 0
 /* Flip contact and report it. Safe from the button ISR: one atomic, and
  * hrm_sensor_report_contact() is ISR-safe. */
 static void sim_contact_toggle(void)
@@ -64,6 +65,7 @@ static void sim_contact_toggle(void)
 
 	hrm_sensor_report_contact(detected);
 }
+#endif
 
 #if defined(CONFIG_HRM_SENSOR_SIM_CONTACT_BUTTON)
 static const struct gpio_dt_spec contact_button = GPIO_DT_SPEC_GET(DT_ALIAS(sw0), gpios);
