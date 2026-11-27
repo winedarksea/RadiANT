@@ -282,8 +282,14 @@ if(CONFIG_RADIANT_PRODUCT)
   # <radiant/radiant_product.h> names the placeholder strings for both.
   if(CONFIG_RADIANT_PRODUCT_STRICT)
     set(radiant_strict_errors "")
+    # One list item per reason: the pieces of a message are concatenated
+    # first, or list(APPEND) would make each piece a separate "- " line.
+    macro(radiant_strict_error)
+      string(CONCAT radiant_strict_msg ${ARGN})
+      list(APPEND radiant_strict_errors "${radiant_strict_msg}")
+    endmacro()
     if(CONFIG_RADIANT_PRODUCT_MANUFACTURER_ID EQUAL 255)
-      list(APPEND radiant_strict_errors
+      radiant_strict_error(
         "CONFIG_RADIANT_PRODUCT_MANUFACTURER_ID is 255, the ANT+ development id")
     endif()
     set(radiant_name_checks
@@ -301,7 +307,7 @@ if(CONFIG_RADIANT_PRODUCT)
         list(GET parts 1 dflt)
       endif()
       if("${val}" STREQUAL "" OR "${val}" STREQUAL "${dflt}" OR "${val}" MATCHES "^Your ")
-        list(APPEND radiant_strict_errors
+        radiant_strict_error(
           "CONFIG_RADIANT_PRODUCT_${sym} is empty, the placeholder or a "
           "product.conf.example value (\"${val}\")")
       endif()
@@ -312,18 +318,18 @@ if(CONFIG_RADIANT_PRODUCT)
          "${CONFIG_BT_DEVICE_NAME}" STREQUAL "RadiANT HR" OR
          "${CONFIG_BT_DEVICE_NAME}" STREQUAL "RadiANT Treadmill" OR
          "${CONFIG_BT_DEVICE_NAME}" MATCHES "^Your ")
-        list(APPEND radiant_strict_errors
+        radiant_strict_error(
           "CONFIG_BT_DEVICE_NAME is a default or product.conf.example name "
           "(\"${CONFIG_BT_DEVICE_NAME}\")")
       endif()
     endif()
     if(NOT CONFIG_RADIANT_NODE_IDENT)
-      list(APPEND radiant_strict_errors
+      radiant_strict_error(
         "CONFIG_RADIANT_NODE_IDENT is off, so the shared Kconfig device number "
         "is the only one this image can transmit on")
     endif()
     if(NOT CONFIG_RADIANT_PRODUCT_APP_UNIT_BOOT)
-      list(APPEND radiant_strict_errors
+      radiant_strict_error(
         "this application does not take its device number from "
         "radiant_product_unit_boot() (RADIANT_PRODUCT_APP_UNIT_BOOT), so it "
         "transmits on a fixed number - apps/trainer is a fixture and is one")
