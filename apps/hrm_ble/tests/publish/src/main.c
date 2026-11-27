@@ -482,6 +482,33 @@ ZTEST(hrm_publish, test_expiry_never_revives_old_rate)
 	zassert_equal(hrm_publish_bpm(&pub, now), 62);
 }
 
+ZTEST(hrm_publish, test_expiry_without_a_tick_still_a_gap)
+{
+	/* Intervals and a rate, then silence past the deadline - and the next
+	 * beat arrives before any node tick has run hrm_publish_tick(). The
+	 * beat must not refresh across the gap: neither the old 150 nor a rate
+	 * derived from the pre-gap intervals may come back. */
+	hrm_publish_rate(&pub, 150, now);
+	for (unsigned int i = 0; i < 3; i++) {
+		now += 400u;
+		beat_at(now);
+		drain();
+	}
+	zassert_equal(hrm_publish_bpm(&pub, now), 150);
+
+	now += STALE_MS + 50u;
+	beat_at(now);
+	drain();
+	zassert_equal(hrm_publish_bpm(&pub, now), 0, "no interval since the gap");
+
+	/* The same for a rate report arriving first: it is fresh, so it
+	 * counts - but only because it is new, not because the old one was. */
+	now += STALE_MS + 50u;
+	hrm_publish_rate(&pub, 90, now);
+	zassert_equal(hrm_publish_bpm(&pub, now), 90);
+	zassert_false(pub.have_baseline, "the expiry ended the baseline");
+}
+
 ZTEST(hrm_publish, test_beat_only_driver_gets_derived_rate)
 {
 	unsigned int bpm;

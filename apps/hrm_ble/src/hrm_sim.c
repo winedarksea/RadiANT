@@ -58,8 +58,9 @@ static K_WORK_DELAYABLE_DEFINE(sim_work, sim_work_fn);
 
 #if defined(CONFIG_HRM_SENSOR_SIM_CONTACT_BUTTON) || CONFIG_HRM_SENSOR_SIM_CONTACT_TOGGLE_S > 0
 /*
- * Flip contact and report it, as ONE step. Two controls (the button ISR and the
- * timed pattern on the workqueue) can toggle; without the lock, A flips, B
+ * Flip contact and report it, as ONE step. Two controls (the button's settle
+ * work and the timed pattern) can toggle - today both on the system
+ * workqueue, but nothing in this file should depend on that; without the lock, A flips, B
  * flips and reports, then A reports its stale value, and the node is left
  * believing the opposite of sim_contact for good. The spinlock makes flip and
  * report atomic; hrm_sensor_report_contact() is ISR-safe and short (atomics
@@ -82,32 +83,40 @@ static const struct gpio_dt_spec contact_button = GPIO_DT_SPEC_GET(DT_ALIAS(sw0)
 static struct gpio_callback contact_button_cb;
 
 /*
- * Interrupt context, on BOTH edges. The debounce is a 250 ms quiet period
- * re-armed by every edge, press or release: an edge that comes less than
- * 250 ms after the previous one is bounce and is ignored (but still re-arms
- * the period). Only a press - an edge after quiet with the pin now active -
- * toggles. Arming the lockout on the press edge alone let the RELEASE bounce,
- * often more than 250 ms after a slow press, toggle contact a second time.
+ * Debounce by settling: every edge, press or release, (re)schedules one
+ * delayed sample CONTACT_BUTTON_QUIET_MS later, so the sample is taken only
+ * once the pin has been quiet that long. The sample is compared with the last
+ * STABLE level, and only an inactive -> active transition toggles contact.
+ * Sampling at the first edge instead (the earlier version) could read a
+ * bounce: a lost press, or a toggle on release.
  */
-#define CONTACT_BUTTON_QUIET_MS 250u
+#define CONTACT_BUTTON_QUIET_MS 50u
 
+static bool contact_button_stable; /* last settled level; workqueue only */
+
+static void contact_button_settled(struct k_work *w)
+{
+	bool level = gpio_pin_get_dt(&contact_button) > 0;
+
+	ARG_UNUSED(w);
+
+	if (level && !contact_button_stable) {
+		sim_contact_toggle();
+	}
+	contact_button_stable = level;
+}
+
+static K_WORK_DELAYABLE_DEFINE(contact_button_work, contact_button_settled);
+
+/* Interrupt context, both edges: push the sample back. ISR-safe. */
 static void contact_button_isr(const struct device *port, struct gpio_callback *cb,
 			       gpio_port_pins_t pins)
 {
-	static bool seen;
-	static uint32_t last_edge_ms;
-	uint32_t now = k_uptime_get_32();
-	bool quiet = !seen || (now - last_edge_ms) >= CONTACT_BUTTON_QUIET_MS;
-
 	ARG_UNUSED(port);
 	ARG_UNUSED(cb);
 	ARG_UNUSED(pins);
 
-	seen = true;
-	last_edge_ms = now;
-	if (quiet && gpio_pin_get_dt(&contact_button) > 0) {
-		sim_contact_toggle();
-	}
+	(void)k_work_reschedule(&contact_button_work, K_MSEC(CONTACT_BUTTON_QUIET_MS));
 }
 
 static int contact_button_init(void)
@@ -121,6 +130,7 @@ static int contact_button_init(void)
 	if (err != 0) {
 		return err;
 	}
+	contact_button_stable = gpio_pin_get_dt(&contact_button) > 0;
 	gpio_init_callback(&contact_button_cb, contact_button_isr, BIT(contact_button.pin));
 	err = gpio_add_callback_dt(&contact_button, &contact_button_cb);
 	if (err != 0) {

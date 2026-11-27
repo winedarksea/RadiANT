@@ -144,5 +144,11 @@ int radiant_ble_hrs_notify(const struct radiant_ble_hrs_meas *m, size_t *rr_sent
 	if (rr_sent != NULL) {
 		*rr_sent = ctx.rr_sent;
 	}
-	return (ctx.err != 0) ? ctx.err : ctx.sent;
+	/* A connection whose encode failed is skipped: if any other accepted
+	 * the notification, report that, so the caller consumes the intervals
+	 * it carried rather than repeating them next time. */
+	if (ctx.sent > 0) {
+		return ctx.sent;
+	}
+	return ctx.err;
 }

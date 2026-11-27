@@ -301,6 +301,12 @@ config HRM_BPM_STALE_MS
 	  the 2500 floor: 30 bpm is a 2000 ms interval, and a lower setting
 	  would silently drop every RR-Interval of a slow resting heart.
 
+	  Above 32000 a second limit bites: the 1/1024 s event times wrap
+	  every 64 000 ms, so two beats delivered at least 64000 - stale ms
+	  apart are treated as a gap, and intervals between 64000 - stale and
+	  stale ms are dropped as well (a missing interval is legal; a wrapped
+	  one would not be).
+
 config HRM_BLE_HRS
 	bool "also advertise the SIG Heart Rate Service over BLE"
 	depends on BT && BT_PERIPHERAL

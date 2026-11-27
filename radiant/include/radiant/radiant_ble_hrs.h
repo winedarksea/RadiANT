@@ -104,9 +104,9 @@ bool radiant_ble_hrs_subscribed(void);
 
 /*
  * Notify `m` to every subscribed connection, each encoded for its own ATT
- * MTU. Returns the number of connections bt_gatt_notify() accepted (0 when
- * none is subscribed or every attempt failed), or a negative errno from the
- * encoder. *rr_sent (may be NULL) receives how many of m->rr, from the oldest,
+ * MTU. Returns the number of connections bt_gatt_notify() accepted - a
+ * connection whose encode failed is skipped - or, when none accepted, 0 (none
+ * subscribed, or every send failed) or the encoder's negative errno. *rr_sent (may be NULL) receives how many of m->rr, from the oldest,
  * went out: the most any accepted notification carried, 0 when none was
  * accepted. The caller removes exactly those and keeps the rest pending; with
  * several collectors at different MTUs, one with a smaller MTU misses the

@@ -25,14 +25,20 @@ static uint32_t rr_limit_1024(const struct hrm_publish *p)
 }
 
 /*
- * The 1/1024 s event times wrap every 65 536 ms, so an interval of 64 s + x
- * reads as x. The delivery times (ms, not wrapping) bound the true interval
- * from above, give or take the baseline beat's own delivery latency: while
- * they are less than 64 000 - stale ms apart, a true interval that wrapped
- * into the accepted range (<= stale) is impossible, with 1.5 s to spare for
- * that latency. At or beyond it the interval is ambiguous, and treated as a
- * gap. NOT the stale limit itself: beats coalesced by a workqueue stall are
- * delivered late together, and their genuine intervals must survive.
+ * The 1/1024 s event times are 16 bits, so they wrap every 64 000 ms (65 536
+ * ticks): a true interval of 64 s + x reads as x. A wrapped interval that lands
+ * in the accepted range (x <= stale) means a true interval of at least 64 s.
+ * The delivery times (ms, no wrap) track the true interval, except that a late
+ * delivery of the BASELINE beat shrinks their difference by that latency. So
+ * with the guard at 64 000 - stale ms, any wrapped-into-range interval is
+ * caught as long as the baseline's delivery latency is at most `stale` - that
+ * is the margin. At or beyond the guard the interval is ambiguous and treated
+ * as a gap. NOT the stale limit itself: beats coalesced by a workqueue stall
+ * are delivered late together, and their genuine intervals must survive.
+ *
+ * With stale above 32 s the guard falls below stale, so genuine intervals
+ * between 64 000 - stale and stale ms are dropped too (legal; see the
+ * HRM_BPM_STALE_MS help).
  */
 static uint32_t wrap_guard_ms(const struct hrm_publish *p)
 {
@@ -91,6 +97,23 @@ static uint8_t derived_bpm(const struct hrm_publish *p)
 	return (bpm == 0u) ? 1u : (uint8_t)bpm;
 }
 
+/*
+ * The deadline has passed: a gap. Checked by the node tick AND at the top of
+ * every rate and beat, because a report can arrive after the deadline but
+ * before the next 100 ms tick - refreshing then, with `armed` still true,
+ * would carry the old rate (or intervals from before the silence) straight
+ * across the gap and byte 7 would never drop to 0.
+ */
+static bool expire_if_due(struct hrm_publish *p, uint32_t now_ms)
+{
+	if (p->armed && reached(now_ms, p->deadline_ms)) {
+		p->armed = false;
+		gap(p);
+		return true;
+	}
+	return false;
+}
+
 void hrm_publish_init(struct hrm_publish *p, bool contact_supported, uint32_t stale_ms)
 {
 	memset(p, 0, sizeof(*p));
@@ -105,6 +128,7 @@ void hrm_publish_init(struct hrm_publish *p, bool contact_supported, uint32_t st
 
 void hrm_publish_rate(struct hrm_publish *p, uint8_t bpm, uint32_t now_ms)
 {
+	(void)expire_if_due(p, now_ms);
 	if (!p->contact) {
 		/* Off the chest there is no rate; a report now would otherwise
 		 * be "fresh" the moment contact returned. */
@@ -126,6 +150,8 @@ uint16_t hrm_publish_beat(struct hrm_publish *p, uint16_t seq, uint16_t event_ti
 	uint16_t n = (uint16_t)(seq - p->last_seq);
 	uint16_t iv;
 
+	(void)expire_if_due(p, now_ms);
+
 	/* Already accounted for (0), or older than the newest (the upper
 	 * half of the modular range). */
 	if (n == 0u || n >= 0x8000u) {
@@ -146,7 +172,7 @@ uint16_t hrm_publish_beat(struct hrm_publish *p, uint16_t seq, uint16_t event_ti
 
 	if (n == 1u && p->have_baseline) {
 		iv = (uint16_t)(event_time - p->baseline_time);
-		/* Both clocks: the 1/1024 s difference wraps every 65.536 s,
+		/* Both clocks: the 1/1024 s difference wraps every 64 s,
 		 * so a 66 s pause (kept alive by rate reports) would read as
 		 * a plausible 2 s interval. The delivery times do not wrap;
 		 * see wrap_guard_ms(). */
@@ -193,12 +219,7 @@ uint8_t hrm_publish_bpm(const struct hrm_publish *p, uint32_t now_ms)
 
 bool hrm_publish_tick(struct hrm_publish *p, uint32_t now_ms)
 {
-	if (p->armed && reached(now_ms, p->deadline_ms)) {
-		p->armed = false;
-		gap(p);
-		return true;
-	}
-	return false;
+	return expire_if_due(p, now_ms);
 }
 
 bool hrm_publish_ble_step(struct hrm_publish *p, uint32_t now_ms, bool subscribed,

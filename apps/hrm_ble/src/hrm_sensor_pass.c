@@ -19,6 +19,11 @@ void hrm_pass_run(struct hrm_pass_state *s, uint32_t rate_word, uint32_t losses,
 {
 	bool level;
 
+	/* KNOWN, ACCEPTED: a loss, a noise beat and a regain all landing inside
+	 * ONE pass after `losses` was read below - i.e. a contact driver
+	 * chattering faster than one worker pass - lets that noise beat drain
+	 * with contact still believed. The next pass sees the counter move and
+	 * delivers the loss, which clears whatever it produced. */
 	/* 1. A new loss first: this pass's beats go in without contact. */
 	if (losses != s->losses) {
 		s->losses = losses;
