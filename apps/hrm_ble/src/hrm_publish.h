@@ -29,6 +29,10 @@
  *   - Every rate report (a repeat of the same value included) and every beat
  *     refreshes the deadline (CONFIG_HRM_BPM_STALE_MS); when it passes, bpm is
  *     invalid on both radios. A rate of 0 is invalid at once.
+ *     The deadline is checked on every report as well as on the tick, in
+ *     DELIVERY time: a report arriving after it is a gap even if no tick ran
+ *     in between - and so is a worker stall longer than the stale limit,
+ *     which costs the first coalesced interval and the reported rate.
  *   - AFTER A GAP (contact loss or expiry) the old reported rate is never
  *     revived. Until a fresh rate report arrives, bpm is derived from the
  *     snapshot's own recent valid RR-Intervals (60 * 1024 / their mean), and

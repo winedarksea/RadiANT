@@ -238,7 +238,10 @@ static void beat_at(uint32_t ms)
 
 ZTEST(hrm_publish, test_burst_of_n_beats_yields_n_intervals)
 {
-	const uint32_t iv_ms[] = { 800, 812, 790, 805, 1001, 640 };
+	/* All within the stale window (2448 ms < 3000): a worker stall longer
+	 * than HRM_BPM_STALE_MS is an expiry, and costs the first interval -
+	 * see test_stall_past_the_deadline_costs_one_interval. */
+	const uint32_t iv_ms[] = { 400, 412, 390, 405, 501, 340 };
 	uint32_t t = now;
 
 	/* A baseline beat, drained. */
@@ -266,6 +269,31 @@ ZTEST(hrm_publish, test_burst_of_n_beats_yields_n_intervals)
 	}
 }
 
+ZTEST(hrm_publish, test_stall_past_the_deadline_costs_one_interval)
+{
+	uint32_t t = now;
+
+	/* Beats every 800 ms, but the worker stalls 4 s: by the time they are
+	 * delivered the deadline set by the baseline beat has passed. That is an
+	 * expiry - the first interval is dropped (legal), the others survive,
+	 * and the count is exact. */
+	hrm_publish_rate(&pub, 75, t);
+	beat_at(t);
+	drain();
+	for (unsigned int i = 0; i < 5; i++) {
+		t += 800u;
+		beat_at(t);
+	}
+	now = t;
+	drain();
+	zassert_equal(ant_beats, 6);
+	zassert_equal(pub.rr_count, 4);
+	/* The reported 75 is not revived across the expiry; the rate shown is
+	 * derived from the surviving intervals. */
+	zassert_false(pub.rate_fresh);
+	zassert_true(hrm_publish_bpm(&pub, now) >= 74 && hrm_publish_bpm(&pub, now) <= 76);
+}
+
 ZTEST(hrm_publish, test_ring_overflow_drops_rr_never_misstates)
 {
 	uint32_t times[1 + HRM_BEAT_RING_LEN + 3 + 1];
@@ -277,8 +305,9 @@ ZTEST(hrm_publish, test_ring_overflow_drops_rr_never_misstates)
 	drain();
 
 	/* Ring length + 3 beats before the worker: 3 find the ring full. */
+	/* 11 beats in 2475 ms, inside the stale window. */
 	for (unsigned int i = 0; i < HRM_BEAT_RING_LEN + 3; i++) {
-		t += 700u + 10u * i;
+		t += 200u + 5u * i;
 		times[k++] = t;
 		zassert_equal(hrm_beat_ring_push(&ring, t1024(t)), i < HRM_BEAT_RING_LEN,
 			      "beat %u", i);
