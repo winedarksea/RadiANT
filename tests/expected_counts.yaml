@@ -323,7 +323,9 @@ min_scenarios: 33
 # RR carry-over and failed notify, no stale revival, derived rate, the pass
 # order and its loss/noise/regain race) and radiant_profile_hr_beats' case in
 # each of the seven unit scenarios. Cassandra twister mp2d: 11597.
-min_testcases: 11597
+# 2026-11-27: +2 (re-review: expiry without a tick, a stall past the
+# deadline). Cassandra twister mp2g.
+min_testcases: 11599
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -492,7 +494,8 @@ min_cases.hrm_ble.sim_sched: 4
 # intervals, overflow drops RR and never mis-states one) and hrm_publish (rate
 # expiry on both radios, contact loss, disconnect, the 1 Hz cadence).
 # 2026-11-27: 29 (+10, the Phase 2 review fixes, see min_testcases).
-min_cases.hrm_ble.publish: 29
+# 2026-11-27: 31 (+2, the re-review fixes).
+min_cases.hrm_ble.publish: 31
 # 2026-11-23: +4 (security review 2026-11-22 item 2: the machine range), +2
 # (review nits: conversion saturation, over-wide range narrowing).
 min_cases.treadmill.pages: 26
