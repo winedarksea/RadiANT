@@ -789,6 +789,19 @@ class TestNodeIdentity(unittest.TestCase):
             devnum = rc.node_tier0_devnum(key)
             self.assertTrue(1 <= devnum <= 0xFFFF)
 
+    def test_serial32_vectors(self):
+        # radiant/tests/src/test_node_ident.c asserts the same two numbers.
+        self.assertEqual(rc.node_serial32(self.K_DEV, self.TIER0_DEVNUM),
+                         0x993BC823)
+        self.assertEqual(rc.node_serial32(self.K_DEV, 1), 0x6B090001)
+        # The lower half is the device number; the upper half is not the
+        # devnum label's output.
+        serial = rc.node_serial32(self.K_DEV, self.TIER0_DEVNUM)
+        self.assertEqual(serial & 0xFFFF, self.TIER0_DEVNUM)
+        id_hi = int.from_bytes(rc.kdf(self.K_DEV, rc.LABEL_ID, 0, 0)[:2],
+                               "little")
+        self.assertNotEqual(serial >> 16, id_hi)
+
     def test_pair_scalar_vectors(self):
         self.assertEqual(
             rc.node_pair_scalar(self.K_DEV, 1, self.TIER0_DEVNUM).hex(),

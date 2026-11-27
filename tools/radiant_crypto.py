@@ -729,6 +729,26 @@ def node_tier0_devnum(k_dev: bytes) -> int:
     return (int.from_bytes(block[:2], "little") % 65535) + 1
 
 
+
+LABEL_SERIAL = "ser"
+
+
+def node_serial32(k_dev: bytes, devnum: int) -> int:
+    """The unit's 32-bit serial (ANT+ page 81, Bluetooth DIS).
+
+    The mirror of radiant_node_ident_serial32_derive(): the upper 16 bits are
+    the first two bytes (LE) of KDF(K_dev, "ser", 0, devnum), the lower 16 the
+    device number - the heart-rate profile's page 2 carries only a serial's
+    upper half and says the lower half is the device number. 0xFFFFFFFF is
+    page 81's "no serial", so that one result moves its upper half to 0xFFFE.
+    """
+    if not 1 <= devnum <= 0xFFFF:
+        raise ValueError("devnum is 1..65535")
+    hi = int.from_bytes(kdf(k_dev, LABEL_SERIAL, 0, devnum)[:2], "little")
+    if hi == 0xFFFF and devnum == 0xFFFF:
+        hi = 0xFFFE
+    return (hi << 16) | devnum
+
 # ── Pairing: the commit/reveal fingerprint and the root ────────────────────
 #
 # The mirror of radiant/src/radiant_sec_pair.c (docs/radiant-security.md

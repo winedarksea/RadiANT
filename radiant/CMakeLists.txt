@@ -205,6 +205,98 @@ if(CONFIG_RADIANT_BRIDGE)
   zephyr_linker_sources(SECTIONS src/bridge/radiant_bridge_sections.ld)
 endif()
 
+# ── Product identity and the shared BLE layer ──────────────────────────────
+#
+# Both opt-in (src/ble/Kconfig) and absent from every build that leaves them
+# off. radiant_product.c and radiant_ble_policy.c are kernel-free and are also
+# compiled, unmodified, by radiant/tests/ble on native_sim.
+if(CONFIG_RADIANT_PRODUCT)
+  zephyr_library_sources(
+    src/ble/radiant_product.c
+    src/ble/radiant_product_kconfig.c
+  )
+  # The node identity lives in the application (ADR 0009 decision 7), so the
+  # boot helper that calls it is compiled only where the application has one.
+  zephyr_library_sources_ifdef(CONFIG_RADIANT_NODE_IDENT src/ble/radiant_product_boot.c)
+
+  # Page 81's software revision and the DIS revision strings come from the
+  # repository's VERSION file, the one the release tag must equal. Absent
+  # (radiant/ used on its own), radiant_product_kconfig.c says 0.0.0.
+  set(radiant_version_file "${CMAKE_CURRENT_LIST_DIR}/../VERSION")
+  if(EXISTS "${radiant_version_file}")
+    file(STRINGS "${radiant_version_file}" radiant_version_lines)
+    foreach(field MAJOR MINOR PATCH)
+      set(key "VERSION_${field}")
+      if(field STREQUAL "PATCH")
+        set(key "PATCHLEVEL")
+      endif()
+      set(radiant_version_${field} "")
+      foreach(line ${radiant_version_lines})
+        if(line MATCHES "^${key} *= *([0-9]+)")
+          set(radiant_version_${field} "${CMAKE_MATCH_1}")
+        endif()
+      endforeach()
+    endforeach()
+    if(radiant_version_MAJOR STREQUAL "" OR radiant_version_MINOR STREQUAL "" OR
+       radiant_version_PATCH STREQUAL "")
+      message(FATAL_ERROR "radiant: ${radiant_version_file} lacks VERSION_MAJOR, "
+                          "VERSION_MINOR or PATCHLEVEL")
+    endif()
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${radiant_version_file}")
+    zephyr_library_compile_definitions(
+      RADIANT_BUILD_VERSION_MAJOR=${radiant_version_MAJOR}
+      RADIANT_BUILD_VERSION_MINOR=${radiant_version_MINOR}
+      RADIANT_BUILD_VERSION_PATCH=${radiant_version_PATCH}
+    )
+  endif()
+
+  # Strict identity, refused at configure time. radiant_product_check() makes
+  # the same three checks in C (tested on native_sim) and logs them at boot
+  # in a development build; the strings are the Kconfig defaults, and
+  # <radiant/radiant_product.h> names them for both.
+  if(CONFIG_RADIANT_PRODUCT_STRICT)
+    set(radiant_strict_errors "")
+    if(CONFIG_RADIANT_PRODUCT_MANUFACTURER_ID EQUAL 255)
+      list(APPEND radiant_strict_errors
+        "CONFIG_RADIANT_PRODUCT_MANUFACTURER_ID is 255, the ANT+ development id")
+    endif()
+    if("${CONFIG_RADIANT_PRODUCT_MANUFACTURER_NAME}" STREQUAL "" OR
+       "${CONFIG_RADIANT_PRODUCT_MANUFACTURER_NAME}" STREQUAL "RadiANT development")
+      list(APPEND radiant_strict_errors
+        "CONFIG_RADIANT_PRODUCT_MANUFACTURER_NAME is empty or the placeholder")
+    endif()
+    if("${CONFIG_RADIANT_PRODUCT_MODEL_NAME}" STREQUAL "" OR
+       "${CONFIG_RADIANT_PRODUCT_MODEL_NAME}" STREQUAL "RadiANT reference")
+      list(APPEND radiant_strict_errors
+        "CONFIG_RADIANT_PRODUCT_MODEL_NAME is empty or the placeholder")
+    endif()
+    if(NOT CONFIG_RADIANT_NODE_IDENT)
+      list(APPEND radiant_strict_errors
+        "CONFIG_RADIANT_NODE_IDENT is off, so the shared Kconfig device number "
+        "is the only one this image can transmit on")
+    endif()
+    if(radiant_strict_errors)
+      string(REPLACE ";" "\n  - " radiant_strict_text "${radiant_strict_errors}")
+      message(FATAL_ERROR
+        "radiant: CONFIG_RADIANT_PRODUCT_STRICT refuses this product identity:\n"
+        "  - ${radiant_strict_text}\n"
+        "Set the CONFIG_RADIANT_PRODUCT_* values in your product .conf "
+        "(see the application's product.conf.example), or build without "
+        "strict identity for development.")
+    endif()
+  endif()
+endif()
+
+if(CONFIG_RADIANT_BLE)
+  zephyr_library_sources(
+    src/ble/radiant_ble_policy.c
+    src/ble/radiant_ble_adv.c
+    src/ble/radiant_ble_dis.c
+  )
+  zephyr_library_sources_ifdef(CONFIG_RADIANT_BLE_CONN_POLICY src/ble/radiant_ble_conn.c)
+  zephyr_library_sources_ifdef(CONFIG_RADIANT_BLE_PAIRING_WINDOW src/ble/radiant_ble_pairing.c)
+endif()
+
 # X25519, under its own symbol and in src/ext/ because it is a standard
 # algorithm rather than RadiANT protocol logic - the directory is the signal
 # that a PKA backend may replace the whole file. Default n: most deployments

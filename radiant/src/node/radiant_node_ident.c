@@ -757,6 +757,53 @@ int radiant_node_ident_devnum(uint16_t *out)
 	return RADIANT_NODE_IDENT_OK;
 }
 
+/* ── The 32-bit serial ────────────────────────────────────────────────────── */
+
+int radiant_node_ident_serial32_derive(const uint8_t k_dev[RADIANT_NODE_IDENT_K_DEV_BYTES],
+				       uint16_t devnum, uint32_t *out)
+{
+	struct radiant_sec_key root;
+	struct radiant_sec_key ser;
+	uint32_t               hi;
+	int                    rc;
+
+	if (k_dev == NULL || out == NULL || devnum == 0u) {
+		return RADIANT_NODE_IDENT_EINVAL;
+	}
+	rc = radiant_sec_key_import(&root, k_dev, 128u);
+	if (rc != RADIANT_SEC_OK) {
+		return RADIANT_NODE_IDENT_ENOTSUP;
+	}
+	/* Epoch 0 like "id": a property of the key, not of a session. The
+	 * device number is bound in as base_devnum. */
+	rc = radiant_sec_kdf(&root, RADIANT_SEC_LABEL_SERIAL, 0u, devnum, &ser);
+	radiant_sec_key_destroy(&root);
+	if (rc != RADIANT_SEC_OK) {
+		radiant_sec_key_destroy(&ser);
+		return RADIANT_NODE_IDENT_ENOTSUP;
+	}
+	hi = (uint32_t)ser.b[0] | ((uint32_t)ser.b[1] << 8);
+	radiant_sec_key_destroy(&ser);
+
+	/* 0xFFFFFFFF is page 81's "no serial": only reachable at devnum 65535. */
+	if (hi == 0xFFFFu && devnum == 0xFFFFu) {
+		hi = 0xFFFEu;
+	}
+	*out = (hi << 16) | (uint32_t)devnum;
+	return RADIANT_NODE_IDENT_OK;
+}
+
+int radiant_node_ident_serial32(uint32_t *out)
+{
+	if (out == NULL) {
+		return RADIANT_NODE_IDENT_EINVAL;
+	}
+	if (!s.booted || !s.have_k_dev) {
+		return RADIANT_NODE_IDENT_ESTATE;
+	}
+	return radiant_node_ident_serial32_derive(s.k_dev, s.devnum, out);
+}
+
 /* ── Handing the epoch to radiant ────────────────────────────────────── */
 
 /* Bit for channel `ch` in sec_armed/compat_armed; 0 for a channel number the

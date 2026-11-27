@@ -2181,5 +2181,10 @@ config RADIANT_SEARCH_DENIAL_ESCAPE_RUN
 	  than forever. A denial that credits any real dwell resets the run, so
 	  a sweep that is merely slow never escapes at all.
 
+# The product identity record and the shared BLE peripheral layer, both
+# opt-in. orsource, not osource: osource resolves against $srctree (Zephyr's
+# tree) and silently loads nothing from here.
+orsource "src/ble/Kconfig"
+
 endif # RADIANT
 
