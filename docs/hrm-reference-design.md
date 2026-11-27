@@ -129,11 +129,18 @@ uint16_t hrm_sensor_now_1024(void);
 
 A driver may report beats, rates or both; both radios work either way. A rate
 **goes stale**: each report (a repeat of the same value included) and each beat
-keeps it valid for `CONFIG_HRM_BPM_STALE_MS` (3000 by default), after which
-ANT+ byte 7 and the BLE rate are both 0 until the next report. A driver that can
-sense skin contact sets `contact_supported` and calls
-`hrm_sensor_report_contact()` on every change; losing contact invalidates the
-rate on both radios at once and discards RR-Intervals not yet sent.
+keeps it valid for `CONFIG_HRM_BPM_STALE_MS` (3000 by default, at least 2500),
+after which ANT+ byte 7 and the BLE rate are both 0. A driver that can sense
+skin contact sets `contact_supported` and calls `hrm_sensor_report_contact()` on
+every change; losing contact invalidates the rate on both radios at once and
+discards RR-Intervals not yet sent. Beats and rates reported while contact is
+lost count on ANT+ (beats) and nothing else.
+
+**A gap never revives an old rate.** After contact loss or expiry the last
+reported value is not shown again: until a fresh `hrm_sensor_report_rate()`,
+both radios carry a rate derived from the snapshot's own recent valid
+RR-Intervals (60·1024 / their mean), and 0 until there is at least one. A
+driver that never reports a rate gets the derived rate throughout.
 
 ### Why it is push, and why not the two obvious alternatives
 
@@ -182,9 +189,23 @@ Each record updates **one snapshot** (`src/hrm_publish.h`):
 `{bpm, stale deadline, contact, RR baseline, pending RR}`. ANT+ byte 7 and the
 BLE Heart Rate Measurement are both read from it, so a receiver on either radio
 cannot see a rate the other does not. BLE notifies at **1 Hz** while a collector
-is subscribed — the snapshot plus every RR-Interval since the last notification,
-the newest kept if the ATT MTU cannot carry them all — so BLE no longer depends
-on whether the driver reports beats, rates or both.
+is subscribed — the snapshot plus the pending RR-Intervals, oldest first; those
+the ATT MTU cannot carry wait for the next notification (HRS 1.0 §3.1.1.5), and
+only what a successful notification carried is removed — so BLE no longer
+depends on whether the driver reports beats, rates or both. The pending buffer
+(16) drops its oldest entry when full, the one legal loss.
+
+The worker's pass order is its own kernel-free, tested function
+(`src/hrm_sensor_pass.h`): a new contact loss first, then the rate, then the
+beats, then contact as it is **after** the drain. So beats drained in a pass
+that starts with contact lost — noise while off the skin, even if the regain
+arrived before the pass ran — count on ANT+ and produce no interval and no rate.
+
+When the ring overflowed, ANT+ gets one profile update for the coalesced beats
+(`radiant_profile_hr_beats()`): the count advances by n and page 4's previous
+event time stays at the last beat really delivered. **A receiver may treat page
+4's (current − previous) as an R-R interval only when the event count advanced
+by exactly 1**; a larger jump spans several beats.
 
 The consumer compares sequence numbers with modular arithmetic, never with `<`,
 which is why 16 bits suffice. The ring is **single-producer by construction**:
@@ -345,7 +366,8 @@ what you still check.
    node that transmits ANT+ perfectly and **never advertises**, with the only
    evidence a log line on a board with no console attached. There is now a
    `BUILD_ASSERT`. The appearance (833) goes in the scan response, so it costs
-   this budget nothing.
+   this budget nothing. HRP does not require an appearance; it is good practice
+   (the phone shows a heart-rate icon, a collector can filter on it).
 6. **Beat-schedule drift.** See §6 — this is the item with the history.
 7. **The suppression policy.** `CONFIG_HRM_SUPPRESS_ANT_WHEN_CONNECTED` defaults
    off: the strap keeps transmitting ANT+ while a phone is connected, so a watch
@@ -396,7 +418,11 @@ what you still check.
 13. **Rate expiry.** `CONFIG_HRM_BPM_STALE_MS` (3000) is how long a rate stays
     valid without a report or a beat. Report your rate at least that often while
     you have one; when your detector loses the signal, stop reporting (or report
-    0) and both radios show "no reading" instead of the last value forever.
+    0) and both radios show "no reading" instead of the last value forever. After
+    that gap the old value never returns: beats bring back a rate derived from
+    their intervals until you report a fresh one. The same number is the longest
+    RR-Interval sent, which is why it cannot go below 2500 ms (30 bpm is a
+    2000 ms interval).
 14. **Reconnect.** Advertising restarts from `recycled`, retries with backoff and
     has a watchdog (`radiant_ble_adv`), so a dropped link or a failed restart
     does not leave the unit undiscoverable. Verify it on your hardware: force a
@@ -499,8 +525,9 @@ re-measures them.
   log says `skin contact lost`, the next Measurement's flags read `0x04`
   (contact supported, not detected) with a rate of 0 and no RR-Intervals, and
   ANT+ byte 7 reads 0 with the event count frozen. Press again: `skin contact
-  detected`, then flags `0x06` with the rate back within a second and `0x16`
-  (RR present) from the second beat on. `CONFIG_HRM_SENSOR_SIM_CONTACT_TOGGLE_S=<n>`
+  detected`, then flags `0x06` with the rate back within a second (the simulator
+  reports a fresh rate with its first beat) and `0x16` (RR present) from the
+  second beat on. `CONFIG_HRM_SENSOR_SIM_CONTACT_TOGGLE_S=<n>`
   toggles it on a timer instead, for a bench with nobody at the button.
 - **What nRF Connect should show** on the dual build: the Device Information
   Service, appearance 833 (Heart Rate Belt) in the scan response and in the GAP
