@@ -704,6 +704,8 @@ try {
                 foreach ($sym in @('CONFIG_HRM_BLE_HRS=y',
                                    'CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL=y',
                                    'CONFIG_MPSL_TIMESLOT_SESSION_COUNT=2',
+                                   'CONFIG_RADIANT_BLE=y',
+                                   'CONFIG_BT_DIS=y',
                                    'CONFIG_RADIANT_BLE_HRS=y',
                                    '# CONFIG_BT_HRS is not set',
                                    'CONFIG_BT_DEVICE_APPEARANCE=833')) {
