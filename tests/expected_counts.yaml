@@ -311,7 +311,9 @@ min_scenarios: 32
 # pairing-window wrap, template and BLE-name strict checks, privacy serial).
 # Cassandra twister mp1c2: 11558.
 # 2026-11-27: +1 (bond LRU re-key from RPA to identity). mp1d: 11559.
-min_testcases: 11559
+# 2026-11-27: +2 (spare-slot over-capacity victim, the just-paired shield).
+# mp1e: 11561.
+min_testcases: 11561
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -596,4 +598,5 @@ min_cases.radiant.unit.rules_outputs_off: 1356
 # checks and the identity-fallback decision.
 # 2026-11-27: 48 after the review fixes (+9, see min_testcases).
 # 2026-11-27: 49 (+1, the LRU re-key case).
-min_cases.radiant.ble: 49
+# 2026-11-27: 51 (+2, the spare-slot over-capacity cases).
+min_cases.radiant.ble: 51
