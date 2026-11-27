@@ -12,6 +12,11 @@ source "Kconfig.zephyr"
 menuconfig TRAINER
 	bool "RadiANT FE-C trainer simulator"
 	default y
+	# Pages 80/81 come from the product record; the manufacturer id that
+	# used to be TRAINER_MANUFACTURER_ID is
+	# CONFIG_RADIANT_PRODUCT_MANUFACTURER_ID. The serial stays the fixture's
+	# device number.
+	select RADIANT_PRODUCT
 	help
 	  A RadiANT node that is an ANT+ FE-C bike trainer (equipment type
 	  25): pages 16, 25 and 17, page 54 declaring basic resistance,
@@ -43,13 +48,6 @@ config TRAINER_DEVICE_NUMBER
 	  nRF-based receivers lose up to ~5 % of their frames (ADR 0019). Check
 	  one with `tools/ant_identity.py check <number> --device-type 0x11`.
 	  The image logs a warning when it opens a channel with such a number.
-
-config TRAINER_MANUFACTURER_ID
-	int "manufacturer id for the common pages"
-	range 0 65535
-	default 255
-	help
-	  255 is the ANT+ development id.
 
 config TRAINER_ACKFAULT_RING
 	int "ground-truth records kept"

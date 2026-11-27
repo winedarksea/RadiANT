@@ -53,6 +53,7 @@
 #include <radiant/radiant_ant.h>
 #include <radiant/radiant_wire.h>
 #include <radiant/radiant_node_ident.h>
+#include <radiant/radiant_product.h>
 #include <radiant/radiant_profile_common.h>
 #include <radiant/radiant_profile_fec.h>
 #include <radiant/radiant_profile_fec_tx.h>
@@ -810,38 +811,24 @@ static void node_tick_fn(struct k_work *w)
 	treadmill_control_tick((uint32_t)k_uptime_get_32());
 #endif
 
+#if defined(CONFIG_TREADMILL_BLE)
+	/* The advertising watchdog (radiant_ble_adv.h): cheap unless a probe
+	 * is due, and the backstop for advertising ending unseen. */
+	treadmill_ble_tick();
+#endif
+
 	publish();
 
 	k_work_schedule(&node_tick, K_MSEC(NODE_TICK_MS));
 }
 
-static void fill_common_id(struct radiant_profile_common_id *id, uint16_t devnum)
-{
-	/*
-	 * The common-page identity (0x50/0x51), not the ANT channel id -
-	 * conflating them produces a machine that is found and then
-	 * misidentifies itself.
-	 *
-	 * THE PLACEHOLDER 1s ARE DISPLAYED BY A HEAD UNIT. model_number,
-	 * hw_revision and the two sw_revision fields land on a watch's
-	 * device-information screen, so a shipped product must set them from
-	 * something real. Production checklist item 2 in
-	 * docs/treadmill-reference-design.md.
-	 */
-	memset(id, 0, sizeof(*id));
-	id->hw_revision = 1u;
-	id->manufacturer_id = CONFIG_TREADMILL_MANUFACTURER_ID;
-	id->model_number = 1u;
-	id->sw_revision_main = 1u;
-	id->sw_revision_supplemental = RADIANT_PROFILE_COMMON_INVALID_U8;
-	id->serial_number = devnum;
-}
-
 int main(void)
 {
 	struct radiant_profile_fec_tx_cfg fec_cfg;
-	uint16_t                  devnum = CONFIG_TREADMILL_DEVICE_NUMBER;
-	int                       err;
+	const struct radiant_product     *product = radiant_product_get();
+	struct radiant_product_unit       unit;
+	uint16_t                          devnum;
+	int                               err;
 
 	/*
 	 * Assembled by the preprocessor into ONE string literal before it
@@ -863,29 +850,29 @@ int main(void)
 	}
 
 	/*
-	 * Device number from the identity record (ADR 0009). On the first boot
-	 * of a part with no record, radiant_node_ident_boot() generates K_dev from the
-	 * on-chip TRNG and stores it first (ADR 0020), so every treadmill
-	 * flashed from one build gets its own number - which a gym needs.
+	 * Device number and serial from the identity record (ADR 0009). On the
+	 * first boot of a part with no record, radiant_node_ident_boot()
+	 * generates K_dev from the on-chip TRNG and stores it first (ADR 0020),
+	 * so every treadmill flashed from one build gets its own number - which
+	 * a gym needs.
 	 *
-	 * Any failure falls back to the Kconfig number with no transforms, and
-	 * is logged as an error on every boot: on that branch every machine
-	 * built from the same image shares one identity, which for a gym is
-	 * fatal. See docs/treadmill-reference-design.md.
+	 * radiant_product_unit_boot() owns the failure branch. A development
+	 * build falls back to the Kconfig number with no transforms, logged as
+	 * an error on every boot: on that branch every machine built from the
+	 * same image shares one identity, which for a gym is fatal. A strict
+	 * build (CONFIG_RADIANT_PRODUCT_STRICT) does not return until the
+	 * identity boots - nothing is on the air yet, so that is staying off it.
+	 * See docs/treadmill-reference-design.md.
+	 *
+	 * The common-page identity (0x50/0x51) is not the ANT channel id -
+	 * conflating them produces a machine that is found and then
+	 * misidentifies itself. It comes from radiant_product
+	 * (CONFIG_RADIANT_PRODUCT_*, the record the BLE DIS strings come from
+	 * too) and the unit's 32-bit serial; production checklist item 2 in
+	 * docs/treadmill-reference-design.md.
 	 */
-	err = radiant_node_ident_boot();
-	if (err == 0) {
-		uint16_t d;
-
-		if (radiant_node_ident_devnum(&d) == 0 && d != 0u) {
-			devnum = d;
-			LOG_INF("device number %u from the identity record", d);
-		}
-	} else {
-		LOG_ERR("identity boot failed: %s (%d); falling back to Kconfig "
-			"device number %u, no transforms",
-			radiant_node_ident_strerror(err), err, devnum);
-	}
+	(void)radiant_product_unit_boot(CONFIG_TREADMILL_DEVICE_NUMBER, &unit);
+	devnum = unit.devnum;
 
 	treadmill_state_init(&state);
 	/* The machine range bounds every command path, FE-C page 51 included.
@@ -900,7 +887,7 @@ int main(void)
 #endif
 
 	memset(&fec_cfg, 0, sizeof(fec_cfg));
-	fill_common_id(&fec_cfg.id, devnum);
+	(void)radiant_product_fill_common_id(product, unit.serial, &fec_cfg.id);
 	fec_cfg.equipment_type = RADIANT_PROFILE_FEC_TYPE_TREADMILL;
 	/*
 	 * SIMULATION MODE IS WHAT UNLOCKS PAGE 51, and declaring it is a claim
@@ -927,7 +914,7 @@ int main(void)
 		struct radiant_profile_sdm_cfg sdm_cfg;
 
 		memset(&sdm_cfg, 0, sizeof(sdm_cfg));
-		fill_common_id(&sdm_cfg.id, devnum);
+		(void)radiant_product_fill_common_id(product, unit.serial, &sdm_cfg.id);
 		/* OTHER, not laces and not midsole: this is not on anybody's
 		 * shoe, and a receiver that draws a foot-pod icon from the
 		 * location field should not draw one here. */
@@ -1038,7 +1025,7 @@ int main(void)
 	 * be assembled from an error further up and the absence of the
 	 * advertising line further down.
 	 */
-	err = treadmill_ble_start();
+	err = treadmill_ble_start(devnum, unit.serial);
 	if (err != 0) {
 		LOG_ERR("BLE did not start: %d. The ANT+ masters above are "
 			"unaffected and this node is now ANT+ only - no FTMS, "

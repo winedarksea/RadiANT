@@ -286,13 +286,17 @@ build as a working node.
 Nine items. Items 3 and 4 are met by the firmware since ADR 0020 — see §5.1 for
 what you still check.
 
-1. **Manufacturer ID ≠ 255.** `CONFIG_HRM_MANUFACTURER_ID` defaults to 255, the
-   ANT+ development ID. A shipped product needs a real one from the alliance;
-   using someone else's is claiming someone else's.
-2. **`model_number`, `hw_revision`, `sw_revision`.** All four are hardcoded to
-   `1` in `main.c`, and common pages 0x50/0x51 are what a head unit's
-   device-information screen displays. They are placeholders, and they look
-   exactly like real values from the outside.
+1. **Manufacturer ID ≠ 255.** `CONFIG_RADIANT_PRODUCT_MANUFACTURER_ID`
+   defaults to 255, the ANT+ development ID. A shipped product needs a real one
+   from the alliance; using someone else's is claiming someone else's.
+2. **Model number, hardware and software revision, names.** Common pages
+   0x50/0x51 (and page 0x02) and, with BLE, the Device Information Service come
+   from one record, `CONFIG_RADIANT_PRODUCT_*` (`radiant_product.h`). The model
+   number and hardware revision default to placeholder `1`s and the names to
+   placeholders; the software revision defaults to the repository `VERSION`.
+   A head unit's device-information screen displays them, and placeholders
+   look exactly like real values from the outside.
+   `CONFIG_RADIANT_PRODUCT_STRICT` refuses to configure until they are set.
 3. **Device number from the identity record, not from Kconfig.** The boot log
    must say `device number N from the identity record`.
    `CONFIG_HRM_DEVICE_NUMBER` is used only when identity boot fails, and the

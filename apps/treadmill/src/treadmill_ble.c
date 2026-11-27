@@ -101,6 +101,9 @@
 
 #include <bluetooth/services/rscs.h>
 
+#include <radiant/radiant_ble_adv.h>
+#include <radiant/radiant_ble_dis.h>
+
 #include "treadmill_ble.h"
 #include "treadmill_ftms_actuate.h"
 #include "treadmill_state.h"
@@ -1156,10 +1159,6 @@ static void on_connected(struct bt_conn *conn, uint8_t err)
 	LOG_INF("BLE connected");
 }
 
-/* Defined further down, beside the advertising parameters it restarts - the
- * AD and scan-response arrays it needs are declared after this callback. */
-static void adv_restart_submit(void);
-
 /*
  * Losing the control permission on disconnect is §4.16.2, and it has to happen
  * on the workqueue like every other write to `controller` and to the ownership
@@ -1220,72 +1219,18 @@ static void on_disconnected(struct bt_conn *conn, uint8_t reason)
 	}
 
 	LOG_INF("BLE disconnected (0x%02x)", reason);
-	adv_restart_submit();
+	/* No restart here: radiant_ble_adv restarts from `recycled`. */
 }
 
 /*
- * Rewrite a non-compliant connection-interval request to policy rather than
- * reject it: textual twin of apps/hrm_ble/src/hrm_ble.c's on_param_req() -
- * keep the two parallel and edit both together. That file's comment carries
- * the full reasoning (why rewrite beats reject, and the invalid-timeout bug
- * this replaces); it is not repeated here.
+ * The connection-parameter policy that used to be here as a textual twin of
+ * apps/hrm_ble's (le_param_req rewrite, le_param_updated log) is
+ * radiant/src/ble/radiant_ble_conn.c, configured from
+ * TREADMILL_BLE_MIN_CONN_INTERVAL_UNITS via RADIANT_BLE_CONN_MIN_INTERVAL_UNITS.
  */
-static bool on_param_req(struct bt_conn *conn, struct bt_le_conn_param *param)
-{
-	ARG_UNUSED(conn);
-
-	/* Same validity guard on the accept branch as hrm_ble.c's twin; see the
-	 * comment there for why a policy-compliant ask can still be an invalid
-	 * triple the controller silently neg-replies. */
-	bool valid = (uint32_t)param->timeout * 4u >
-		     ((uint32_t)param->latency + 1u) * (uint32_t)param->interval_max;
-
-	bool compliant = param->interval_min >= CONFIG_TREADMILL_BLE_MIN_CONN_INTERVAL_UNITS &&
-			  param->interval_max >= CONFIG_TREADMILL_BLE_MIN_CONN_INTERVAL_UNITS &&
-			  param->latency == 0 &&
-			  param->timeout >= CONFIG_BT_PERIPHERAL_PREF_TIMEOUT;
-
-	if (compliant && valid) {
-		return true;
-	}
-
-	LOG_INF("rewriting non-compliant request (interval %u-%u latency %u "
-		"timeout %u) to policy %u/%u/0/%u",
-		param->interval_min, param->interval_max, param->latency,
-		param->timeout,
-		(unsigned)CONFIG_TREADMILL_BLE_MIN_CONN_INTERVAL_UNITS,
-		(unsigned)CONFIG_TREADMILL_BLE_MIN_CONN_INTERVAL_UNITS,
-		(unsigned)CONFIG_BT_PERIPHERAL_PREF_TIMEOUT);
-
-	param->interval_min = CONFIG_TREADMILL_BLE_MIN_CONN_INTERVAL_UNITS;
-	param->interval_max = CONFIG_TREADMILL_BLE_MIN_CONN_INTERVAL_UNITS;
-	param->latency = 0;
-	if (param->timeout < CONFIG_BT_PERIPHERAL_PREF_TIMEOUT) {
-		param->timeout = CONFIG_BT_PERIPHERAL_PREF_TIMEOUT;
-	}
-
-	return true;
-}
-
-/*
- * Textual twin of apps/hrm_ble/src/hrm_ble.c's on_param_updated() - the
- * observability that would have caught the previous silent failure.
- */
-static void on_param_updated(struct bt_conn *conn, uint16_t interval,
-			      uint16_t latency, uint16_t timeout)
-{
-	ARG_UNUSED(conn);
-
-	LOG_INF("connection params updated: interval=%u (%u ms) latency=%u "
-		"timeout=%u (%u ms)",
-		interval, (interval * 5u) / 4u, latency, timeout, timeout * 10u);
-}
-
 BT_CONN_CB_DEFINE(treadmill_ble_conn_cb) = {
 	.connected = on_connected,
 	.disconnected = on_disconnected,
-	.le_param_req = on_param_req,
-	.le_param_updated = on_param_updated,
 };
 
 /*
@@ -1326,11 +1271,15 @@ static const struct bt_data ad[] = {
  * never advertising, with the only evidence a log line on a board that may
  * have no console attached. Hence a BUILD_ASSERT.
  */
-BUILD_ASSERT(sizeof(CONFIG_BT_DEVICE_NAME) - 1u <= 29u,
-	     "CONFIG_BT_DEVICE_NAME does not fit the 31-byte scan response: "
-	     "the budget is 29 characters (2 + N <= 31). Over it, "
-	     "bt_le_adv_start() returns -EINVAL and the node silently never "
-	     "advertises.");
+#define NAME_SUFFIX_BUDGET \
+	(IS_ENABLED(CONFIG_RADIANT_BLE_NAME_DEVNUM_SUFFIX) ? RADIANT_BLE_NAME_SUFFIX_MAX : 0u)
+
+BUILD_ASSERT(sizeof(CONFIG_BT_DEVICE_NAME) - 1u + NAME_SUFFIX_BUDGET <= 29u,
+	     "CONFIG_BT_DEVICE_NAME (plus the 6-character devnum suffix when "
+	     "CONFIG_RADIANT_BLE_NAME_DEVNUM_SUFFIX is on) does not fit the "
+	     "31-byte scan response: the budget is 29 characters (2 + N <= 31). "
+	     "Over it, bt_le_adv_start() returns -EINVAL and the node silently "
+	     "never advertises.");
 
 /* And the advertisement's own sum, so that adding an AD structure is a build
  * error rather than a node that stops being discoverable. */
@@ -1340,70 +1289,40 @@ BUILD_ASSERT((3u + 6u + 7u) <= 31u,
 	     "Anything added here comes out of nothing, because the name is "
 	     "already in the scan response.");
 
-static const struct bt_data sd[] = {
-	BT_DATA(BT_DATA_NAME_COMPLETE, CONFIG_BT_DEVICE_NAME,
+/* The advertised name: CONFIG_BT_DEVICE_NAME, or "<name> <devnum>" once
+ * treadmill_ble_start() has written it. */
+static char adv_name[sizeof(CONFIG_BT_DEVICE_NAME) + RADIANT_BLE_NAME_SUFFIX_MAX] =
+	CONFIG_BT_DEVICE_NAME;
+
+static struct bt_data sd[] = {
+	BT_DATA(BT_DATA_NAME_COMPLETE, adv_name,
 		sizeof(CONFIG_BT_DEVICE_NAME) - 1u),
 };
 
 /*
- * ONE definition of what "advertising" means here, shared by start-up and by
- * the post-disconnect restart below - see the restart work item for why that
- * restart has to exist at all. Two copies would let the two advertisers drift
- * apart, and on this application family the interval is the MPSL arbitration
- * policy against the ANT+ masters, not a power tweak.
- */
-static int adv_start(void)
-{
-	struct bt_le_adv_param param = *BT_LE_ADV_CONN_FAST_1;
-
-	param.interval_min = ADV_UNITS(CONFIG_TREADMILL_BLE_ADV_INTERVAL_MS);
-	param.interval_max = ADV_UNITS(CONFIG_TREADMILL_BLE_ADV_INTERVAL_MS) +
-			     16u;
-
-	/* A NON-NULL `sd` IS THE WHOLE CHANGE that makes this advertiser
-	 * scannable - see trap 7 and ADR 0017 for what it costs. */
-	return bt_le_adv_start(&param, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
-}
-
-/*
- * ADVERTISING DOES NOT COME BACK BY ITSELF. Zephyr stops a connectable
- * advertiser on connection and does not resume it on disconnect - the old
- * auto-resume behind BT_LE_ADV_OPT_CONNECTABLE is gone, so restarting is the
- * application's job.
+ * ONE definition of what "advertising" means here, registered with
+ * radiant_ble_adv at start-up and used by it for every restart. Two copies
+ * would let the advertisers drift apart, and on this application family the
+ * interval is the MPSL arbitration policy against the ANT+ masters, not a
+ * power tweak.
  *
- * Found on apps/hrm_ble on real hardware, 2026-08-16: a phone discovered the
- * node, connected, read it, and after disconnecting the node was invisible to
- * every scanner until power cycled. This file had the identical omission. It
- * is worth stating why it hid for so long - the node keeps transmitting ANT+
- * flawlessly throughout, so every ANT-side check stays green and the only
- * symptom is on a radio nobody was watching. Same silent-failure shape the
- * BUILD_ASSERTs above guard from the other direction.
+ * RESTARTING IS THE SHARED LAYER'S JOB (radiant/src/ble/radiant_ble_adv.c).
+ * Zephyr stops a connectable advertiser on connection and does not resume it.
+ * This file used to restart it once, from `disconnected`, with no retry -
+ * found on apps/hrm_ble on real hardware (2026-08-16) to leave the node
+ * invisible until power-cycled, while ANT+ kept every ANT-side check green.
+ * The layer restarts from `recycled` (when the connection object is free
+ * again), retries with a backoff until it succeeds, and treadmill_ble_tick()
+ * runs its watchdog.
  *
- * Out of the BT RX thread via the system work queue rather than inline,
- * because this callback runs in that thread and bt_le_adv_start() there
- * re-enters the host from its own callback.
+ * A NON-NULL `sd` makes this advertiser scannable - see trap 7 and ADR 0017
+ * for what it costs.
  */
-static void adv_restart_fn(struct k_work *work)
+static struct bt_le_adv_param adv_param;
+
+void treadmill_ble_tick(void)
 {
-	ARG_UNUSED(work);
-
-	int err = adv_start();
-
-	if (err == -EALREADY) {
-		return;
-	}
-	if (err != 0) {
-		LOG_ERR("bt_le_adv_start after disconnect: %d", err);
-		return;
-	}
-	LOG_INF("BLE: advertising again after disconnect");
-}
-
-static K_WORK_DEFINE(adv_restart_work, adv_restart_fn);
-
-static void adv_restart_submit(void)
-{
-	k_work_submit(&adv_restart_work);
+	radiant_ble_adv_watchdog();
 }
 
 bool treadmill_ble_connected(void)
@@ -1431,7 +1350,7 @@ static const struct bt_rscs_cp_cb rscs_cp_cb = {
 	.set_cumulative = rscs_set_cumulative,
 };
 
-int treadmill_ble_start(void)
+int treadmill_ble_start(uint16_t devnum, uint32_t serial)
 {
 	struct bt_rscs_init_params rscs_params;
 	int                        err;
@@ -1510,14 +1429,48 @@ int treadmill_ble_start(void)
 		return err;
 	}
 
-	err = adv_start();
+	/* DIS from radiant_product and the unit's serial - after
+	 * settings_load() above, which would otherwise replace the values with
+	 * any stored ones. A failure keeps the Kconfig strings and is not a
+	 * reason to stay invisible. */
+	(void)radiant_ble_dis_apply(serial);
+
+#if defined(CONFIG_RADIANT_BLE_NAME_DEVNUM_SUFFIX)
+	{
+		int n = radiant_ble_name_with_devnum(adv_name, sizeof(adv_name),
+						     CONFIG_BT_DEVICE_NAME, devnum);
+
+		if (n > 0) {
+			sd[0].data_len = (uint8_t)n;
+			err = bt_set_name(adv_name);
+			if (err != 0) {
+				LOG_WRN("bt_set_name(%s): %d", adv_name, err);
+			}
+		}
+	}
+#else
+	ARG_UNUSED(devnum);
+#endif
+
+	adv_param = *BT_LE_ADV_CONN_FAST_1;
+	adv_param.interval_min = ADV_UNITS(CONFIG_TREADMILL_BLE_ADV_INTERVAL_MS);
+	adv_param.interval_max = ADV_UNITS(CONFIG_TREADMILL_BLE_ADV_INTERVAL_MS) +
+				 16u;
+
+	err = radiant_ble_adv_init(&adv_param, ad, ARRAY_SIZE(ad), sd,
+				   ARRAY_SIZE(sd));
 	if (err != 0) {
-		LOG_ERR("bt_le_adv_start: %d", err);
+		LOG_ERR("radiant_ble_adv_init: %d", err);
+		return err;
+	}
+
+	/* On failure the layer has already scheduled a retry. */
+	err = radiant_ble_adv_ensure();
+	if (err != 0) {
 		return err;
 	}
 
 	LOG_INF("BLE: FTMS + RSC advertising every %u ms as '%s'",
-		(unsigned)CONFIG_TREADMILL_BLE_ADV_INTERVAL_MS,
-		CONFIG_BT_DEVICE_NAME);
+		(unsigned)CONFIG_TREADMILL_BLE_ADV_INTERVAL_MS, adv_name);
 	return 0;
 }

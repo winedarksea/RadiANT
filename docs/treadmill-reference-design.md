@@ -352,10 +352,14 @@ failure this project keeps paying for.
    that a snap-to-target implementation would short-circuit.
 3. **Set the identity.** The device number comes from the identity record the
    node generates on its first boot (ADR 0020); `CONFIG_TREADMILL_DEVICE_NUMBER`
-   is only the fallback when that fails. Set
-   `CONFIG_TREADMILL_MANUFACTURER_ID`, and the four placeholder `1`s in
-   `main.c`'s `fill_common_id()` — model number, hardware revision and the two
-   software revisions all land on a head unit's device-information screen.
+   is only the fallback when that fails. Set the product record,
+   `CONFIG_RADIANT_PRODUCT_*` (`radiant_product.h`): manufacturer id, model
+   number and hardware revision (placeholder `1`s by default), the
+   manufacturer and model names, and the software revision (the repository
+   `VERSION` by default). They feed common pages 0x50/0x51 and, with BLE, the
+   Device Information Service, and all land on a head unit's or phone's
+   device-information screen. `CONFIG_RADIANT_PRODUCT_STRICT` refuses to
+   configure until they are set.
 4. **Set the ranges to match your machine.**
    `CONFIG_TREADMILL_MAX_SPEED_CENTI_KPH`,
    `CONFIG_TREADMILL_MIN_INCLINE_DECI` and
