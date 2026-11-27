@@ -1573,6 +1573,35 @@ jobs:
               CONFIG_HRM_SENSOR_CUSTOM=y
               # CONFIG_HRM_SENSOR_SIMULATED is not set
               absent:CONFIG_HRM_SENSOR_SIM_BPM
+          # The named dual-radio preset (dual.conf: BLE + DIS + strict
+          # product identity) with the checked-in TEST identity, on both SoC
+          # families, and the bare preset, which must FAIL TO CONFIGURE: the
+          # strict check is what stands between a manufacturer and an image
+          # that ships manufacturer id 255. scripts/build_all.ps1's node_dual*
+          # rows are the local mirror.
+          - name: "hrm_ble: dual preset, test identity"
+            board: nrf54l15dk/nrf54l15/cpuapp
+            image_conf: "dual.conf;../../tests/product_test.conf"
+            assert_symbols: |
+              CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL=y
+              CONFIG_HRM_BLE_HRS=y
+              CONFIG_RADIANT_PRODUCT_STRICT=y
+              CONFIG_RADIANT_BLE=y
+              CONFIG_BT_DIS=y
+              CONFIG_RADIANT_PRODUCT_MANUFACTURER_ID=65534
+          - name: "hrm_ble: dual preset, test identity (nRF52840)"
+            board: nrf52840dk/nrf52840
+            image_conf: "dual.conf;../../tests/product_test.conf"
+            assert_symbols: |
+              CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL=y
+              CONFIG_HRM_BLE_HRS=y
+              CONFIG_RADIANT_PRODUCT_STRICT=y
+              CONFIG_RADIANT_BLE=y
+              CONFIG_BT_DIS=y
+          - name: "hrm_ble: dual preset without an identity is refused"
+            board: nrf54l15dk/nrf54l15/cpuapp
+            image_conf: dual.conf
+            expect_fail: "CONFIG_RADIANT_PRODUCT_STRICT refuses this product identity"
 
     steps:
       - name: Checkout application
@@ -1603,6 +1632,7 @@ jobs:
           BOARD: ${{ matrix.board }}
           IMAGE_CONF: ${{ matrix.image_conf }}
           EXTRA_CMAKE: ${{ matrix.extra_cmake }}
+          EXPECT_FAIL: ${{ matrix.expect_fail }}
         run: |
           set -euxo pipefail
           extra=("-DRADIANT_BACKEND=nrf")
@@ -1628,6 +1658,23 @@ jobs:
           if [[ -n "${EXTRA_CMAKE}" ]]; then
             extra+=(${EXTRA_CMAKE})
           fi
+          if [[ -n "${EXPECT_FAIL}" ]]; then
+            # An expected-failure row: refused, and for the stated reason -
+            # a failure for any other reason proves nothing about the check.
+            if west build app/apps/hrm_ble -b "${BOARD}" -d build -p always \
+                 -- "${extra[@]}" > build.log 2>&1; then
+              cat build.log
+              echo "::error::configured and built, but must be refused: ${EXPECT_FAIL}"
+              exit 1
+            fi
+            if ! grep -qF "${EXPECT_FAIL}" build.log; then
+              tail -50 build.log
+              echo "::error::failed, but not with: ${EXPECT_FAIL}"
+              exit 1
+            fi
+            echo "refused as expected: ${EXPECT_FAIL}"
+            exit 0
+          fi
           west build app/apps/hrm_ble \
             -b "${BOARD}" \
             -d build \
@@ -1640,6 +1687,7 @@ jobs:
       # somewhere, which is what makes an unmet assignment a no-op rather than
       # an error.
       - name: Verify the configuration that was asked for took effect
+        if: matrix.expect_fail == ''
         uses: ./app/.github/actions/assert-kconfig
         with:
           path-filter: "*hrm_ble*"
@@ -1717,6 +1765,22 @@ jobs:
           # period of about 32 s, and this project has measured one master
           # beside BLE and eight masters beside 802.15.4 but never this mix.
           # A fallback nobody compiles is not a fallback.
+          # The named dual-radio preset with the TEST identity, and the bare
+          # preset, which must fail to configure (see build-node's rows).
+          - name: "treadmill: dual preset, test identity"
+            board: nrf54l15dk/nrf54l15/cpuapp
+            image_conf: "dual.conf;../../tests/product_test.conf"
+            assert_symbols: |
+              CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL=y
+              CONFIG_TREADMILL_BLE=y
+              CONFIG_RADIANT_PRODUCT_STRICT=y
+              CONFIG_RADIANT_BLE=y
+              CONFIG_BT_DIS=y
+              CONFIG_RADIANT_PRODUCT_MANUFACTURER_ID=65534
+          - name: "treadmill: dual preset without an identity is refused"
+            board: nrf54l15dk/nrf54l15/cpuapp
+            image_conf: dual.conf
+            expect_fail: "CONFIG_RADIANT_PRODUCT_STRICT refuses this product identity"
           - name: "treadmill: FE-C only (coexistence fallback)"
             board: nrf54l15dk/nrf54l15/cpuapp
             image_conf: fec_only.conf
@@ -1831,6 +1895,7 @@ jobs:
         env:
           BOARD: ${{ matrix.board }}
           IMAGE_CONF: ${{ matrix.image_conf }}
+          EXPECT_FAIL: ${{ matrix.expect_fail }}
         run: |
           set -euxo pipefail
           extra=("-DRADIANT_BACKEND=nrf")
@@ -1844,6 +1909,23 @@ jobs:
           # produced byte-identical .config files.
           if [[ -n "${IMAGE_CONF}" ]]; then
             extra+=("-Dtreadmill_EXTRA_CONF_FILE=${IMAGE_CONF}")
+          fi
+          if [[ -n "${EXPECT_FAIL}" ]]; then
+            # An expected-failure row: refused, and for the stated reason -
+            # a failure for any other reason proves nothing about the check.
+            if west build app/apps/treadmill -b "${BOARD}" -d build -p always \
+                 -- "${extra[@]}" > build.log 2>&1; then
+              cat build.log
+              echo "::error::configured and built, but must be refused: ${EXPECT_FAIL}"
+              exit 1
+            fi
+            if ! grep -qF "${EXPECT_FAIL}" build.log; then
+              tail -50 build.log
+              echo "::error::failed, but not with: ${EXPECT_FAIL}"
+              exit 1
+            fi
+            echo "refused as expected: ${EXPECT_FAIL}"
+            exit 0
           fi
           west build app/apps/treadmill \
             -b "${BOARD}" \
@@ -1868,6 +1950,7 @@ jobs:
       # Using the second where the third is correct passes on a tree where the
       # symbol has been renamed out of existence.
       - name: Verify the configuration that was asked for took effect
+        if: matrix.expect_fail == ''
         uses: ./app/.github/actions/assert-kconfig
         with:
           path-filter: "*treadmill*"
