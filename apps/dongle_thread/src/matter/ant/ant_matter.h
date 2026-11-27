@@ -52,7 +52,9 @@ int ant_matter_start(void);
 /*
  * A binding was added, changed or removed. `b` is NULL for an unbind.
  *
- * An unbind is the ONLY thing that removes a Matter endpoint. A sensor going
+ * An unbind is the ONLY thing that removes a live row's Matter endpoint (it
+ * also queues the purge of the sensor's unclaimed restored endpoints; the
+ * other ways a restored endpoint goes are in ant_bridge.cpp). A sensor going
  * quiet sets Reachable = false and keeps its endpoint, because Matter forbids
  * reusing an endpoint id for a different device and a controller that saw the
  * endpoint disappear would remove the entity, the automations bound to it and

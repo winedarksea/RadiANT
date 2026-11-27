@@ -1063,6 +1063,8 @@ image (§2), so disabling the entity in the controller is the runtime answer.
 is turned off in Kconfig, the endpoint restored for it from flash is removed at
 the next boot, along with its stored record. Evicting a sensor removes its
 entities too, even if the sensor has not been heard since the last reboot.
+An image built without the rules sink (`CONFIG_RADIANT_BRIDGE_RULES=n`) derives
+no outputs at all, so it retires every stored occupancy endpoint at boot.
 
 ---
 

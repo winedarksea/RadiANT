@@ -422,7 +422,7 @@ dongle**. Three reasons:
 
 **Derived outputs re-enter the bus** as ordinary `struct radiant_sample`
 records with `DERIVED` set, so they reach every sink through the same path and
-no sink needs to know a rule engine exists. All four outputs below are type
+no sink needs to know a rule engine exists. All six outputs below are type
 `0x02` occupancy.
 
 Each output can be left out at build time with
