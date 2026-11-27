@@ -48,6 +48,7 @@
 #ifndef RADIANT_RULES_H_
 #define RADIANT_RULES_H_
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -96,6 +97,29 @@ extern "C" {
  * stable once shipped (a sink keys history on them).
  */
 #define RADIANT_RULE_FIELD_ZONE3 5u
+
+/*
+ * Is this output compiled in? CONFIG_RADIANT_BRIDGE_RULES_OUT_* (radiant/Kconfig)
+ * builds a compile-time mask indexed by the RADIANT_RULE_FIELD_* ids above; a
+ * disabled output is never posted, on announce, on change or on the STALE
+ * drop, so it gets no Matter endpoint and no MQTT entity. This lets a sink
+ * (the Matter app retiring a restored endpoint) ask without knowing the
+ * Kconfig names. False for an id outside the table, and false in a bridge
+ * build without the rules sink, where no derived output exists at all.
+ *
+ * The stub is keyed on CONFIG_RADIANT_BRIDGE as well as _RULES because
+ * radiant/tests compiles radiant_rules.c directly with neither defined: that
+ * image must see the prototype, not a second definition.
+ */
+#if defined(CONFIG_RADIANT_BRIDGE) && !defined(CONFIG_RADIANT_BRIDGE_RULES)
+static inline bool radiant_rules_output_enabled(uint8_t field_id)
+{
+	(void)field_id;
+	return false;
+}
+#else
+bool radiant_rules_output_enabled(uint8_t field_id);
+#endif
 
 /* Reset every binding's rule state. Test hook. */
 void radiant_rules_reset(void);

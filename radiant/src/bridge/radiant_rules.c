@@ -267,6 +267,43 @@ static void apply_resets(void)
 	}
 }
 
+/*
+ * The outputs this build derives: BIT(RADIANT_RULE_FIELD_*) per
+ * CONFIG_RADIANT_BRIDGE_RULES_OUT_* (radiant/Kconfig). Compile-time, so a
+ * disabled output's announced bit (emit() still sets it) can never go stale
+ * against a mask that changed underneath it.
+ *
+ * Only the POST is masked. Dwell, worn gating and personalisation run as
+ * before: the zone outputs read Worn's debounced state, and the histogram is
+ * fed while worn, so turning one output off must not change any other.
+ */
+#define OUT_BIT(sym, id) (IS_ENABLED(sym) ? BIT(id) : 0u)
+#define ENABLED_OUTPUTS                                              \
+	(OUT_BIT(CONFIG_RADIANT_BRIDGE_RULES_OUT_WORN,               \
+		 RADIANT_RULE_FIELD_WORN) |                          \
+	 OUT_BIT(CONFIG_RADIANT_BRIDGE_RULES_OUT_ACTIVE,             \
+		 RADIANT_RULE_FIELD_ACTIVE) |                        \
+	 OUT_BIT(CONFIG_RADIANT_BRIDGE_RULES_OUT_AT_REST,            \
+		 RADIANT_RULE_FIELD_AT_REST) |                       \
+	 OUT_BIT(CONFIG_RADIANT_BRIDGE_RULES_OUT_ZONE2,              \
+		 RADIANT_RULE_FIELD_ZONE2) |                         \
+	 OUT_BIT(CONFIG_RADIANT_BRIDGE_RULES_OUT_ZONE3,              \
+		 RADIANT_RULE_FIELD_ZONE3) |                         \
+	 OUT_BIT(CONFIG_RADIANT_BRIDGE_RULES_OUT_IN_USE,             \
+		 RADIANT_RULE_FIELD_EQUIPMENT_IN_USE))
+
+bool radiant_rules_output_enabled(uint8_t field_id)
+{
+	return field_id <= RADIANT_RULE_FIELD_ZONE3 &&
+	       (ENABLED_OUTPUTS & BIT(field_id)) != 0u;
+}
+
+/*
+ * THE ONLY CALL TO radiant_bridge_post() IN THIS FILE, which is why the mask
+ * is applied here: emit() (announce and change) and eval_activity()'s STALE
+ * zone drop, which bypasses emit(), all end here. Keep it that way: a new
+ * derived post that skipped this function would also skip the mask.
+ */
 static void post_occupancy(uint32_t source, uint8_t field_id, bool occupied,
 			   uint64_t t_us)
 {
@@ -280,6 +317,9 @@ static void post_occupancy(uint32_t source, uint8_t field_id, bool occupied,
 		.t_us = t_us,
 	};
 
+	if (!radiant_rules_output_enabled(field_id)) {
+		return;
+	}
 	radiant_bridge_post(&s);
 }
 

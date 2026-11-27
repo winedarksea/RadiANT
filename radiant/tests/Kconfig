@@ -25,4 +25,37 @@ config RADIANT_TEST_FAKE_RNG
 	  radiant_node_ident.c. Test images only: nothing outside radiant/tests sources
 	  this file.
 
+# The rules sink's per-output switches, repeated from radiant/Kconfig.
+#
+# There they sit under `if RADIANT_BRIDGE_RULES`, which this image leaves off:
+# it compiles radiant_rules.c directly (CMakeLists.txt) instead of through the
+# module. Without these lines the symbols would not exist here, so
+# radiant_rules.c would see every output as disabled, and testcase.yaml's
+# radiant.unit.rules_outputs_off scenario could not assign them at all.
+# Same names, same default; the help text lives in radiant/Kconfig.
+
+config RADIANT_BRIDGE_RULES_OUT_WORN
+	bool "test image: derive Worn"
+	default y
+
+config RADIANT_BRIDGE_RULES_OUT_ACTIVE
+	bool "test image: derive Active"
+	default y
+
+config RADIANT_BRIDGE_RULES_OUT_AT_REST
+	bool "test image: derive At Rest"
+	default y
+
+config RADIANT_BRIDGE_RULES_OUT_ZONE2
+	bool "test image: derive Zone 2"
+	default y
+
+config RADIANT_BRIDGE_RULES_OUT_ZONE3
+	bool "test image: derive Zone 3"
+	default y
+
+config RADIANT_BRIDGE_RULES_OUT_IN_USE
+	bool "test image: derive In Use"
+	default y
+
 source "Kconfig.zephyr"
