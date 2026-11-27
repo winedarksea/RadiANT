@@ -127,7 +127,7 @@
 #include <cstdio>
 #include <cstring>
 
-/* All three carry their own `extern "C"` guards, so they are included plainly.
+/* All of them carry their own `extern "C"` guards, so they are included plainly.
  * Wrapping them in one here would put <zephyr/sys/iterable_sections.h> - which
  * radiant_bridge.h pulls in - inside C linkage, which is a way to break a C++
  * build that only shows up on an unlucky include order. */
@@ -135,6 +135,7 @@
 #include <radiant/radiant_bridge.h>
 #include <radiant/radiant_matter.h>
 #include <radiant/radiant_naming.h>
+#include <radiant/radiant_rules.h>
 
 LOG_MODULE_DECLARE(app, CONFIG_CHIP_APP_LOG_LEVEL);
 
@@ -280,6 +281,15 @@ struct RestoredDevice {
 RestoredDevice sRestored[Nrf::BridgeManager::kMaxBridgedDevices];
 
 K_MUTEX_DEFINE(sShadowLock);
+
+/*
+ * Sources unbound since the last flush, by persisted key: the flush retires
+ * their UNCLAIMED restored endpoints (bridge_storage_codec.h's
+ * RestoredToPurgeForKey and PurgeKeys, where the overflow rule is). Under
+ * sShadowLock. One slot per binding: it fills only if every binding slot
+ * unbinds a different sensor within one flush period.
+ */
+RadiantMatter::Orphans::PurgeKeys<RADIANT_BINDING_MAX> sPurgeKeys;
 
 /* Single-in-flight. The flush handler clears it FIRST, so a write that lands
  * while a flush is running arms the next one rather than being swallowed. */
@@ -520,6 +530,30 @@ void PersistIndexes()
 	if (Nrf::BridgeManager::Instance().GetDevicesIndexes(indexes, sizeof(indexes), count) != CHIP_NO_ERROR) {
 		LOG_ERR("matter: cannot read bridged device indexes; storage left stale");
 		return;
+	}
+	if (!Nrf::BridgeStorageManager::Instance().StoreBridgedDevicesIndexes(indexes, count) ||
+	    !Nrf::BridgeStorageManager::Instance().StoreBridgedDevicesCount(count)) {
+		LOG_ERR("matter: cannot persist bridged device list");
+	}
+}
+
+/*
+ * PersistIndexes() plus `extra`: stored indexes BridgeManager does not hold
+ * because this boot's restore skipped them (RestoreBridgedDevices()). They are
+ * disjoint from BridgeManager's list, so no de-duplication is needed. CHIP
+ * thread.
+ */
+void PersistIndexesKeeping(const uint8_t *extra, uint8_t extraCount)
+{
+	uint8_t indexes[Nrf::BridgeManager::kMaxBridgedDevices];
+	uint8_t count = 0;
+
+	if (Nrf::BridgeManager::Instance().GetDevicesIndexes(indexes, sizeof(indexes), count) != CHIP_NO_ERROR) {
+		LOG_ERR("matter: cannot read bridged device indexes; storage left stale");
+		return;
+	}
+	for (uint8_t k = 0; k < extraCount && count < ARRAY_SIZE(indexes); k++) {
+		indexes[count++] = extra[k];
 	}
 	if (!Nrf::BridgeStorageManager::Instance().StoreBridgedDevicesIndexes(indexes, count) ||
 	    !Nrf::BridgeStorageManager::Instance().StoreBridgedDevicesCount(count)) {
@@ -877,6 +911,56 @@ void RemoveEndpointForRow(Row &row)
 	k_mutex_unlock(&sShadowLock);
 }
 
+/*
+ * THE EVICTION PURGE. An unbind removes its source's live rows (needRemove);
+ * a sensor evicted after a reboot but before it was heard again has no rows,
+ * only restored endpoints nobody has claimed, and those used to stay -
+ * unreachable, a stale entity in the controller - until the bridge filled and
+ * CollectOrphanIfFull() picked them. ant_matter_binding_changed() records the
+ * source's key in sPurgeKeys (it runs on the self-channel thread and may not
+ * touch CHIP); this, on the CHIP thread, retires every unclaimed restored
+ * entry whose UniqueID parses to that key. A claimed entry belongs to a row,
+ * which the unbind already marked.
+ *
+ * A re-bind before this pass takes the keys cancels the key outright
+ * (binding_changed). A re-bind after it is covered only once the sensor has
+ * a row (RowWouldAdopt() spares that entry); rows appear on the first
+ * sample, so a sensor that comes back while this loop is blocked in a flash
+ * write can still lose its remaining restored entries and get new endpoint
+ * ids - the same outcome an unbind/re-bind already gives live rows. A retire that fails leaves the
+ * entry to orphan collection, like an overflowed key. CHIP thread; takes the
+ * shadow lock itself (the caller must not hold it).
+ */
+void PurgeEvictedRestored()
+{
+	RadiantMatter::Orphans::PurgeKeys<RADIANT_BINDING_MAX> owed;
+
+	k_mutex_lock(&sShadowLock, K_FOREVER);
+	owed = sPurgeKeys;
+	sPurgeKeys.count = 0;
+	sPurgeKeys.dropped = 0;
+	k_mutex_unlock(&sShadowLock);
+
+	if (owed.dropped > 0) {
+		LOG_WRN("matter: %u evicted sensor(s) not purged (purge set full); their stored endpoints "
+			"stay until adopted or collected as orphans",
+			static_cast<unsigned int>(owed.dropped));
+	}
+
+	for (uint8_t k = 0; k < owed.count; k++) {
+		size_t from = 0;
+		int i;
+
+		while ((i = RadiantMatter::Orphans::RestoredToPurgeForKey(sRestored, ARRAY_SIZE(sRestored), from,
+									     owed.keys[k])) != RadiantMatter::Orphans::kNone) {
+			from = static_cast<size_t>(i) + 1;
+			if (!RowWouldAdopt(sRestored[i])) {
+				(void)RetireRestored(sRestored[i], "sensor evicted before it was heard");
+			}
+		}
+	}
+}
+
 void FlushHandler(intptr_t)
 {
 	/* Cleared first: a write landing during this pass must arm the next
@@ -945,6 +1029,10 @@ void FlushHandler(intptr_t)
 			RemoveEndpointForRow(row);
 		}
 	}
+
+	/* Then the unbound sources' restored endpoints, beside their rows'
+	 * removal and before any creation below wants the slots. */
+	PurgeEvictedRestored();
 
 	for (Row &row : sRows) {
 		AttrCell pending[kMaxAttrsPerEndpoint];
@@ -1151,6 +1239,9 @@ bool AnythingDirty()
 			break;
 		}
 	}
+	if (!dirty && sPurgeKeys.Pending()) {
+		dirty = true;
+	}
 	if (!dirty) {
 		for (const SourceState &s : sSources) {
 			if (s.reachableDirty || s.labelDirty) {
@@ -1215,10 +1306,16 @@ CHIP_ERROR RestoreBridgedDevices()
 		return CHIP_NO_ERROR;
 	}
 
+	/* Indexes this restore leaves out of BridgeManager; see the boot
+	 * retirement below. A `continue` in the loop records the index first. */
+	uint8_t skipped[Nrf::BridgeManager::kMaxBridgedDevices];
+	uint8_t skippedCount = 0;
+
 	for (size_t i = 0; i < indexesCount && i < ARRAY_SIZE(sRestored); i++) {
 		Nrf::BridgeStorageManager::BridgedDevice stored;
 
 		if (!Nrf::BridgeStorageManager::Instance().LoadBridgedDevice(stored, indexes[i])) {
+			skipped[skippedCount++] = indexes[i];
 			/* One unreadable entry is not a reason to abandon the
 			 * rest, and it is certainly not a reason to fail
 			 * BridgeManager::Init() - which is what returning an
@@ -1232,6 +1329,7 @@ CHIP_ERROR RestoreBridgedDevices()
 			Nrf::BridgeManager::HandleUpdate, Nrf::BridgeManager::HandleCommand);
 		if (provider == nullptr) {
 			LOG_ERR("matter: out of CHIP heap restoring endpoint %u", stored.mEndpointId);
+			skipped[skippedCount++] = indexes[i];
 			continue;
 		}
 
@@ -1240,6 +1338,7 @@ CHIP_ERROR RestoreBridgedDevices()
 		if (device == nullptr) {
 			chip::Platform::Delete(provider);
 			LOG_WRN("matter: stored device type 0x%04x is not one this build serves", stored.mDeviceType);
+			skipped[skippedCount++] = indexes[i];
 			continue;
 		}
 
@@ -1256,6 +1355,7 @@ CHIP_ERROR RestoreBridgedDevices()
 		if (Nrf::BridgeManager::Instance().AddBridgedDevices(devices, provider, 1, pairIndexes, endpointIds) !=
 		    CHIP_NO_ERROR) {
 			LOG_ERR("matter: could not restore endpoint %u", stored.mEndpointId);
+			skipped[skippedCount++] = indexes[i];
 			continue;
 		}
 
@@ -1276,6 +1376,40 @@ CHIP_ERROR RestoreBridgedDevices()
 
 		LOG_INF("matter: restored endpoint %u (%s, type 0x%04x), unreachable until heard", rd.endpointId,
 			rd.uniqueID, rd.deviceType);
+	}
+
+	/*
+	 * DISABLED OUTPUTS (bridge_storage_codec.h's RestoredToRetireAtBoot). A
+	 * rule output this build does not derive - a per-output Kconfig turned
+	 * off since the record was stored, or the rules sink not built - can
+	 * never claim its endpoint, so it is retired now rather than left
+	 * unreachable until the bridge fills. RetireRestored() logs each one.
+	 *
+	 * AFTER THE LOOP, NOT IN IT. RetireRestored() persists BridgeManager's
+	 * index list, which mid-loop holds only the entries restored so far: a
+	 * retirement there would store a list missing every later record, and
+	 * the next boot would not restore them.
+	 */
+	{
+		size_t from = 0;
+		int i;
+		bool retired = false;
+
+		while ((i = RadiantMatter::Orphans::RestoredToRetireAtBoot(sRestored, ARRAY_SIZE(sRestored), from,
+									      radiant_rules_output_enabled)) !=
+		       RadiantMatter::Orphans::kNone) {
+			from = static_cast<size_t>(i) + 1;
+			retired |= RetireRestored(sRestored[i], "rule output disabled in this build");
+		}
+
+		/* RetireRestored() stored BridgeManager's list, which lacks every
+		 * record this boot SKIPPED (unreadable, out of heap, type not
+		 * served, add failed). A boot that retires nothing writes nothing
+		 * and keeps them; one that retires must keep them too, or a
+		 * transient failure on that boot loses a record for good. */
+		if (retired && skippedCount > 0) {
+			PersistIndexesKeeping(skipped, skippedCount);
+		}
 	}
 
 	return CHIP_NO_ERROR;
@@ -1458,8 +1592,31 @@ extern "C" void ant_matter_binding_changed(uint32_t source, const struct radiant
 	k_mutex_lock(&sShadowLock, K_FOREVER);
 
 	if (b == nullptr) {
-		/* UNBIND, AND THIS IS THE ONLY PATH THAT REMOVES AN ENDPOINT.
-		 * See ant_matter.h. */
+		/*
+		 * UNBIND, AND THIS IS THE ONLY PATH THAT REMOVES A LIVE ROW'S
+		 * ENDPOINT (see ant_matter.h). Restored endpoints nobody claimed
+		 * have three more ways out, all on the CHIP thread: the orphan
+		 * collector when the bridge is full, boot retirement of a
+		 * disabled rule output (RestoreBridgedDevices()), and the purge
+		 * this unbind arms below (PurgeEvictedRestored()).
+		 *
+		 * THE PURGE KEY IS READ HERE, BEFORE ANYTHING CAN OVERWRITE IT:
+		 * sSources[source].key is rewritten by the next bind of this
+		 * slot, possibly by a different sensor. Only a bound source has
+		 * a key worth purging - an unbind of a slot already unbound
+		 * would purge the previous sensor's key twice, or key 0.
+		 *
+		 * Every unbind arms it, not only a user eviction: the self
+		 * channels' host-takeover release (self_channels.c act(),
+		 * RADIANT_SELF_RELEASE -> release_binding() ->
+		 * radiant_bridge_binding_changed(source, NULL) ->
+		 * ant_matter_sink.c -> here) unbinds too, and its live rows go
+		 * the same way. A sensor that pairs again later gets the same
+		 * UniqueIDs (the key is its channel identity, TRAP 8), as new
+		 * endpoints, as its live rows would. */
+		if (sSources[source].bound) {
+			(void)sPurgeKeys.Add(sSources[source].key);
+		}
 		sSources[source].bound = false;
 		sSources[source].reachable = false;
 		sSources[source].reachableDirty = false;
@@ -1473,6 +1630,9 @@ extern "C" void ant_matter_binding_changed(uint32_t source, const struct radiant
 	} else {
 		sSources[source].bound = true;
 		sSources[source].key = StableKey(b);
+		/* The sensor is back before the flush purged it: its restored
+		 * endpoints are about to be adopted, not retired. */
+		sPurgeKeys.Cancel(sSources[source].key);
 		memset(sSources[source].label, 0, sizeof(sSources[source].label));
 		strncpy(sSources[source].label, b->label, sizeof(sSources[source].label) - 1);
 		sSources[source].reachable = true;

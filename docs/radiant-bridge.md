@@ -422,8 +422,14 @@ dongle**. Three reasons:
 
 **Derived outputs re-enter the bus** as ordinary `struct radiant_sample`
 records with `DERIVED` set, so they reach every sink through the same path and
-no sink needs to know a rule engine exists. All four outputs below are type
+no sink needs to know a rule engine exists. All six outputs below are type
 `0x02` occupancy.
+
+Each output can be left out at build time with
+`CONFIG_RADIANT_BRIDGE_RULES_OUT_{WORN,ACTIVE,AT_REST,ZONE2,ZONE3,IN_USE}`
+(default `y`); an output set to `n` is never derived, so it reaches neither
+Matter nor MQTT (`docs/matter-bringup.md` §7.1). A retained MQTT discovery
+message published before the change stays on the broker until cleared.
 
 ### 6.1 Activity: is an accumulator advancing?
 
@@ -1681,9 +1687,12 @@ cluster (free and mislabelled).
 switch is a runtime call, `radiant_matter_set_hr_passenger(bool)`; nothing calls
 it unless an image opts in, and `apps/dongle_thread` does so only with
 `CONFIG_ANT_DONGLE_MATTER_HR_PASSENGER=y` (default `n`). On, `0x26` heart rate
-gets a row: a Flow Sensor (`0x0306`) endpoint whose Flow Measurement
-`MeasuredValue` is bpm × 10 (the cluster's unit is 0.1 m³/h, so a controller
-shows the bpm figure as m³/h), with a 2 bpm deadband and a 60 s heartbeat. Heart
+gets a row: a Flow Sensor (`0x0306`) endpoint with a 2 bpm deadband and a 60 s
+heartbeat. Home Assistant displays exactly the bpm figure (unit shown: m³/h):
+72 bpm shows as 72.0. Flow Measurement `MeasuredValue` holds bpm × 10 because
+the cluster's unit is 0.1 m³/h and HA divides by 10 (`FlowSensor` in Home
+Assistant's `components/matter/sensor.py` sets `device_to_ha = x / 10`). The
+× 10 is the cluster's encoding; the user converts nothing. Heart
 rate streams, so that heartbeat really does fire, unlike the change-only
 occupancy row's. The endpoint is one more per strap out of the 16 of §8.1.
 `radiant_matter_reset()` does not turn the switch off.

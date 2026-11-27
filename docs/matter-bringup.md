@@ -1026,8 +1026,10 @@ CHIP attribute holds its last value.
 **`CONFIG_ANT_DONGLE_MATTER_HR_PASSENGER`** (default `n`, defined in
 `src/matter/Kconfig` inside `if CHIP`) makes `src/main.c` call
 `radiant_matter_set_hr_passenger(true)` before the Matter task starts. Each
-heart-rate binding then gains a Flow Sensor (`0x0306`) endpoint carrying bpm × 10
-in Flow Measurement `MeasuredValue` (deadband 2 bpm, heartbeat 60 s), served by
+heart-rate binding then gains a Flow Sensor (`0x0306`) endpoint. Home Assistant
+displays exactly the bpm figure (unit shown: m³/h). Flow Measurement
+`MeasuredValue` holds bpm × 10 because the cluster's unit is 0.1 m³/h and HA
+divides by 10 (deadband 2 bpm, heartbeat 60 s). The endpoint is served by
 `MeasurementSensorDevice`'s fourth device type. The Flow Measurement cluster has
 a ZAP server count of 0, as Occupancy Sensing and Pressure Measurement do; the
 endpoint's cluster list is dynamic. Deliberately mislabelled, which is why it is
@@ -1036,6 +1038,36 @@ off: see `docs/radiant-bridge.md` §8.3b.
 **Tests.** `radiant_matter` is 28 cases; the full `radiant/tests` application is
 **723 passing, 0 failing**, run on real hardware (nRF5340 DK) via
 `scripts/run_ztest_hw.ps1`.
+
+### 7.1 Turning sensors and outputs off
+
+There are three levels, from coarsest to finest:
+
+| Level | How | When it takes effect |
+|---|---|---|
+| A whole sensor | Evict it with a long press | At once, and it stays evicted across reboots |
+| One entity, at runtime | Disable the entity in the controller (Home Assistant) | At once; the dongle still serves it |
+| One output, at build time | `CONFIG_RADIANT_BRIDGE_RULES_OUT_{WORN,ACTIVE,AT_REST,ZONE2,ZONE3,IN_USE}`, all default `y` | The next image you flash |
+
+A Kconfig output set to `n` is never derived, so it disappears from Matter
+**and** is never announced over MQTT. On a broker that already holds its
+retained discovery message (`homeassistant/sensor/<uuid>_<key>/config`) the
+dongle does not clear it: delete the entity in Home Assistant, or publish an
+empty retained message to that topic. `ACTIVE` is "bike in use" (energy advancing);
+`IN_USE` is FE-C equipment in use. Turning one output off does not change the
+others: Zone 2 and the heart-rate profile keep working with Zone 3 off.
+
+**There is no runtime switch on the dongle.** The Matter image has no control
+channel to put one behind: `CONFIG_SHELL=n`, there is no mcumgr, and MQTT is
+only in `bridge.conf`. Adding any of them costs RAM, which is the limit on this
+image (§2), so disabling the entity in the controller is the runtime answer.
+
+**Existing entities go away rather than staying "unavailable".** When an output
+is turned off in Kconfig, the endpoint restored for it from flash is removed at
+the next boot, along with its stored record. Evicting a sensor removes its
+entities too, even if the sensor has not been heard since the last reboot.
+An image built without the rules sink (`CONFIG_RADIANT_BRIDGE_RULES=n`) derives
+no outputs at all, so it retires every stored occupancy endpoint at boot.
 
 ---
 

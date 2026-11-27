@@ -408,6 +408,24 @@ constexpr size_t kMatterMaxLength = 32;
  * 0 (and an empty string when len > 0) if it does not fit with its NUL. */
 size_t Format(char *out, size_t len, uint64_t key, uint8_t fieldId, uint8_t fieldType, bool derived);
 
+/*
+ * The inverse of Format(), for a restored record's stored UniqueID: true, with
+ * *key, *fieldId and *derived written, only for a string Format() could have
+ * produced - exactly 18 lowercase hex digits (derived), or those 18, 't' and
+ * two more lowercase hex digits (measured). Anything else - another length,
+ * an uppercase or non-hex digit, a missing or misplaced 't', a null pointer -
+ * is false and writes nothing. The form is decided by the length alone, so a
+ * measured id is never read as derived (its 18-digit prefix is not the whole
+ * string) nor a derived one as measured. The measured form's field type is
+ * checked, not returned: no caller needs it.
+ *
+ * A record from before 2026-11-24 has the 18-digit form whatever it holds -
+ * every endpoint used it then - so a stored measured endpoint of that age
+ * parses as derived. Harmless for the callers below: such a record is never
+ * claimed by a measured row (those use the 21-character form now).
+ */
+bool Parse(const char *s, uint64_t *key, uint8_t *fieldId, bool *derived);
+
 } /* namespace UniqueId */
 
 /*
@@ -484,6 +502,127 @@ template <class T> int NextDuplicate(const T *restored, size_t count, const char
 	}
 	return kNone;
 }
+
+/*
+ * RESTORED ENDPOINTS THAT CAN NEVER BE CLAIMED (2026-11-26). Waiting for the
+ * bridge to fill is right for a sensor that is only away, wrong for one that
+ * cannot come back to its endpoint. Two cases are known at once, and their
+ * entries are retired without waiting for Needed():
+ *
+ *   - a DISABLED OUTPUT: a derived (rule output) entry whose field this build
+ *     does not derive (a per-output Kconfig turned it off, or the rules sink
+ *     is not built). No row will ever have its UniqueID. Checked once, at
+ *     boot, after the restore.
+ *   - an EVICTED SENSOR: its source was unbound while the entry was still
+ *     unclaimed (evicted after a reboot, before it was heard again). Its live
+ *     rows are removed by the unbind; this is the same for its restored
+ *     entries. Matched on the parsed key, so every form and field of that
+ *     sensor goes. A claimed entry belongs to a live row and is the row's to
+ *     remove.
+ *
+ * Both return the index of the next matching entry at or after `from`, or
+ * kNone; the caller retires it and asks again from the next index, so an entry
+ * that could not be retired is not asked about forever. An entry whose
+ * UniqueID does not parse is left alone (Orphans::PickOldest still collects
+ * it when the bridge is full). T has `used`, `claimed` and a NUL-terminated
+ * `uniqueID`. `outputEnabled(fieldId)` is true when this build derives that
+ * rule output; ant_bridge.cpp passes radiant_rules_output_enabled(), the test
+ * a model, so this header needs nothing from radiant/.
+ */
+template <class T, class OutputEnabled>
+int RestoredToRetireAtBoot(const T *restored, size_t count, size_t from, OutputEnabled outputEnabled)
+{
+	if (restored == nullptr) {
+		return kNone;
+	}
+	for (size_t i = from; i < count; i++) {
+		uint64_t key;
+		uint8_t fieldId;
+		bool derived;
+
+		if (restored[i].used && !restored[i].claimed &&
+		    UniqueId::Parse(restored[i].uniqueID, &key, &fieldId, &derived) && derived &&
+		    !outputEnabled(fieldId)) {
+			return static_cast<int>(i);
+		}
+	}
+	return kNone;
+}
+
+template <class T> int RestoredToPurgeForKey(const T *restored, size_t count, size_t from, uint64_t key)
+{
+	if (restored == nullptr) {
+		return kNone;
+	}
+	for (size_t i = from; i < count; i++) {
+		uint64_t parsed;
+		uint8_t fieldId;
+		bool derived;
+
+		if (restored[i].used && !restored[i].claimed &&
+		    UniqueId::Parse(restored[i].uniqueID, &parsed, &fieldId, &derived) && parsed == key) {
+			return static_cast<int>(i);
+		}
+	}
+	return kNone;
+}
+
+/*
+ * The keys of sources unbound since the last flush, whose unclaimed restored
+ * entries the flush retires (RestoredToPurgeForKey). Written under
+ * ant_bridge.cpp's shadow lock by the unbind (self-channel thread), drained by
+ * the flush (CHIP thread): RetireRestored() is a CHIP call, so the unbind can
+ * only record what is owed.
+ *
+ * Add() ignores a key already held. A re-bind of the same sensor before the
+ * flush Cancel()s its key: the sensor is back, and a row is about to adopt
+ * those entries. OVERFLOW: a key that finds the set full is dropped and
+ * `dropped` counts it; the flush logs that and clears it. Dropping is safe -
+ * those entries are left exactly as before this purge existed, to be adopted
+ * if the sensor returns or collected as orphans when the bridge fills. A set
+ * of RADIANT_BINDING_MAX keys (ant_bridge.cpp's choice) only fills if every
+ * binding slot unbinds a different sensor within one flush period.
+ */
+template <size_t N> struct PurgeKeys {
+	uint64_t keys[N];
+	uint8_t count;
+	uint8_t dropped;
+
+	static_assert(N > 0 && N < 256, "count is a uint8_t");
+
+	/* True if `key` is held (now or already); false if dropped. */
+	bool Add(uint64_t key)
+	{
+		for (uint8_t i = 0; i < count; i++) {
+			if (keys[i] == key) {
+				return true;
+			}
+		}
+		if (count >= N) {
+			if (dropped < UINT8_MAX) {
+				dropped++;
+			}
+			return false;
+		}
+		keys[count++] = key;
+		return true;
+	}
+
+	void Cancel(uint64_t key)
+	{
+		for (uint8_t i = 0; i < count; i++) {
+			if (keys[i] == key) {
+				keys[i] = keys[--count];
+				return;
+			}
+		}
+	}
+
+	bool Pending() const
+	{
+		return count > 0 || dropped > 0;
+	}
+};
 
 } /* namespace Orphans */
 } /* namespace RadiantMatter */

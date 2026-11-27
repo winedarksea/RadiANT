@@ -289,5 +289,67 @@ size_t Format(char *out, size_t len, uint64_t key, uint8_t fieldId, uint8_t fiel
 	return want;
 }
 
+namespace
+{
+/* PutHex's inverse: `digits` lowercase hex digits at s, most significant
+ * first. False on any other character - uppercase too, which Format() never
+ * writes, so one UniqueID has exactly one spelling. */
+bool GetHex(const char *s, unsigned digits, uint64_t &v)
+{
+	uint64_t out = 0;
+
+	for (unsigned i = 0; i < digits; i++) {
+		const char c = s[i];
+		unsigned d;
+
+		if (c >= '0' && c <= '9') {
+			d = static_cast<unsigned>(c - '0');
+		} else if (c >= 'a' && c <= 'f') {
+			d = static_cast<unsigned>(c - 'a') + 10u;
+		} else {
+			return false;
+		}
+		out = (out << 4) | d;
+	}
+	v = out;
+	return true;
+}
+} /* namespace */
+
+bool Parse(const char *s, uint64_t *key, uint8_t *fieldId, bool *derived)
+{
+	uint64_t k;
+	uint64_t id;
+	uint64_t type;
+	bool isDerived;
+
+	if (s == nullptr || key == nullptr || fieldId == nullptr || derived == nullptr) {
+		return false;
+	}
+
+	/* strnlen bounded one past the longer form: a longer string is refused
+	 * without reading all of it. */
+	const size_t len = strnlen(s, kMeasuredLength + 1);
+
+	if (len == kDerivedLength) {
+		isDerived = true;
+	} else if (len == kMeasuredLength) {
+		isDerived = false;
+		if (s[kDerivedLength] != 't' || !GetHex(s + kDerivedLength + 1, 2, type)) {
+			return false;
+		}
+	} else {
+		return false;
+	}
+	if (!GetHex(s, 16, k) || !GetHex(s + 16, 2, id)) {
+		return false;
+	}
+
+	*key = k;
+	*fieldId = static_cast<uint8_t>(id);
+	*derived = isDerived;
+	return true;
+}
+
 } /* namespace UniqueId */
 } /* namespace RadiantMatter */
