@@ -113,14 +113,23 @@ $ErrorActionPreference = 'Stop'
 # preference drops to 'Continue' across the west call only, and $LASTEXITCODE
 # is the sole verdict tested. scripts/build_p4.ps1 does the same for the same
 # reason.
-function Invoke-West([string[]]$BaseArgs, [string[]]$ExtraArgs, [string]$LogPath) {
+#
+# -MergeStderr also puts stderr in the log, as plain UTF-8 text. The
+# expected-failure rows need it: CMake writes a FATAL_ERROR's text to stderr,
+# so a stdout-only log never contains the refusal those rows look for.
+function Invoke-West([string[]]$BaseArgs, [string[]]$ExtraArgs, [string]$LogPath,
+                     [switch]$MergeStderr) {
     $all = @($BaseArgs)
     if ($ExtraArgs) { $all += $ExtraArgs }
 
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        & west @all > $LogPath
+        if ($MergeStderr) {
+            & west @all 2>&1 | ForEach-Object { "$_" } | Out-File -Encoding utf8 $LogPath
+        } else {
+            & west @all > $LogPath
+        }
         return $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $prev
@@ -625,7 +634,8 @@ try {
 
             $log = Join-Path $env:TEMP "build_$($t.dir).log"
             $rc = Invoke-West @('-z', $zephyr, 'build', '-s', $nodeApp,
-                                '-d', $out, '-b', $t.board, '-p', 'always') $extra $log
+                                '-d', $out, '-b', $t.board, '-p', 'always') $extra $log `
+                              -MergeStderr:([bool]$t.expect_fail)
             # An expected-failure row: the configuration must be REFUSED, and
             # for the stated reason - a failure for any other reason proves
             # nothing about the check the row exists for.
@@ -731,7 +741,8 @@ try {
 
             $log = Join-Path $env:TEMP "build_$($t.dir).log"
             $rc = Invoke-West @('-z', $zephyr, 'build', '-s', $treadmillApp,
-                                '-d', $out, '-b', $t.board, '-p', 'always') $extra $log
+                                '-d', $out, '-b', $t.board, '-p', 'always') $extra $log `
+                              -MergeStderr:([bool]$t.expect_fail)
             # An expected-failure row, as in the node loop above.
             if ($t.expect_fail) {
                 if ($rc -eq 0) {
