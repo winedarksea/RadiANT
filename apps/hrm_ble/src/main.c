@@ -36,6 +36,7 @@
 #include <radiant/radiant_node_ident.h>
 #include <radiant/radiant_product.h>
 #include "hrm_sensor.h"
+#include "hrm_publish.h"
 
 #if defined(CONFIG_HRM_BLE_HRS)
 #include "hrm_ble.h"
@@ -132,44 +133,109 @@ static void ant_suppression_update(void)
  * work here keeps that at two contexts however the source is driven, including
  * from an ISR. hrm_sensor.h's header states the rule in full.
  *
- * The three calls are together on purpose: the ANT+ accumulator pair, the ANT+
- * computed byte and the SIG notification all come from one beat, so a receiver
- * on either radio cannot see a rate the other does not.
+ * ONE SNAPSHOT, TWO RADIOS (src/hrm_publish.h). Every report updates `pub`;
+ * ANT+ byte 7 and the BLE measurement are both read from it, so a receiver on
+ * either radio cannot see a rate the other does not - and BLE no longer
+ * depends on whether the driver reports beats, rates or both.
  */
-void hrm_node_deliver_beats(uint16_t beats, uint16_t event_time, uint8_t bpm)
+static struct hrm_publish pub;
+
+/* The last byte 7 handed to radiant_profile_hr. */
+static uint8_t applied_bpm = RADIANT_PROFILE_HR_INVALID_BPM;
+
+static uint32_t now_ms(void)
 {
+	return (uint32_t)k_uptime_get();
+}
+
+/* Byte 7 follows the snapshot: the rate, or 0 when stale or without contact. */
+static void apply_bpm(uint32_t now)
+{
+	uint8_t bpm = hrm_publish_bpm(&pub, now);
+
+	if (bpm != applied_bpm) {
+		applied_bpm = bpm;
+		radiant_profile_hr_set_computed(&hr, bpm);
+	}
+}
+
+void hrm_node_deliver_rate(uint8_t bpm)
+{
+	uint32_t now = now_ms();
+
+	hrm_publish_rate(&pub, bpm, now);
+	apply_bpm(now);
+}
+
+void hrm_node_deliver_beat(uint16_t seq, uint16_t event_time)
+{
+	uint32_t now = now_ms();
+	uint16_t beats = hrm_publish_beat(&pub, seq, event_time, now);
+
 	for (uint16_t i = 0; i < beats; i++) {
 		/*
-		 * Every beat, with the same instant when more than one is being
-		 * accounted for. radiant_profile_hr_beat() increments the event count
-		 * and stores the event time, so replaying a coalesced pair
-		 * advances the count correctly and leaves the time at the
-		 * genuine latest instant - it does not invent an interval that
-		 * never happened. The count is the field that survives a lost
-		 * packet, so that is the right way round.
+		 * More than one only after a ring overflow, with the newest
+		 * beat's instant: radiant_profile_hr_beat() increments the
+		 * event count and stores the event time, so the count advances
+		 * by the right amount and the time is a genuine instant - no
+		 * interval is invented. The count is the field that survives a
+		 * lost packet. With no beats the count and time stay frozen,
+		 * as the ANT+ HRM profile requires.
 		 */
 		radiant_profile_hr_beat(&hr, event_time);
 	}
+	apply_bpm(now);
+}
 
-	radiant_profile_hr_set_computed(&hr, bpm);
+void hrm_node_deliver_contact(bool detected)
+{
+	uint32_t now = now_ms();
+
+	hrm_publish_contact(&pub, detected, now);
+	LOG_INF("skin contact %s", detected ? "detected" : "lost");
+	apply_bpm(now);
+}
 
 #if defined(CONFIG_HRM_BLE_HRS)
-	/* One heart, two radios: the SIG service is notified from the
-	 * same beat that advances the ANT+ accumulators, so the two
-	 * sides can't disagree about the rate. */
-	if (beats != 0u) {
-		hrm_ble_notify_hr(bpm);
+/*
+ * The 1 Hz BLE notification, while a collector is subscribed: the snapshot
+ * plus every RR-Interval since the last one (the encoder keeps the newest the
+ * ATT MTU can carry). Pending RR is cleared after each notification and
+ * whenever nobody is subscribed or a link drops, so a collector never gets an
+ * interval from before it subscribed.
+ */
+static void ble_publish(uint32_t now)
+{
+	struct radiant_ble_hrs_meas m;
+
+	if (hrm_ble_take_disconnect()) {
+		hrm_publish_rr_clear(&pub);
 	}
-#endif
+	if (!hrm_publish_notify_due(&pub, now, hrm_ble_subscribed())) {
+		return;
+	}
+	hrm_publish_meas(&pub, now, &m);
+	(void)hrm_ble_notify(&m);
+	hrm_publish_rr_clear(&pub);
 }
+#endif
 
 static void node_tick_fn(struct k_work *w)
 {
+	uint32_t now = now_ms();
+
 	ARG_UNUSED(w);
 
 	/* Uptime, not a count of wake-ups: a sum of NODE_TICK_MS drifted slow
 	 * by every late wake-up and wrapped a uint32 of ms at 49.7 days. */
 	radiant_profile_hr_set_operating_time(&hr, (uint32_t)(k_uptime_get() / 1000));
+
+	/* A rate nobody refreshed within CONFIG_HRM_BPM_STALE_MS goes invalid
+	 * on both radios here. */
+	if (hrm_publish_tick(&pub, now)) {
+		LOG_INF("heart rate stale: no report for %u ms", (unsigned)CONFIG_HRM_BPM_STALE_MS);
+	}
+	apply_bpm(now);
 
 	/* Contact detection, AGC, battery - the slow, level-valued things a
 	 * source may want a thread context for. Never beats; see the seam. */
@@ -183,6 +249,7 @@ static void node_tick_fn(struct k_work *w)
 	/* The advertising watchdog (radiant_ble_adv.h): cheap unless a probe
 	 * is due, and the backstop for advertising ending unseen. */
 	hrm_ble_tick();
+	ble_publish(now);
 #endif
 
 	k_work_schedule(&node_tick, K_MSEC(NODE_TICK_MS));
@@ -350,6 +417,12 @@ int main(void)
 		LOG_ERR("radiant_profile_hr_init: %d", err);
 		return 0;
 	}
+
+	/* The snapshot both radios read, before the first report can arrive:
+	 * a source may report from its start(), and the workqueue that
+	 * delivers it preempts this thread. Contact support is the driver's
+	 * declared capability and never changes after this. */
+	hrm_publish_init(&pub, hrm_sensor_contact_supported(), CONFIG_HRM_BPM_STALE_MS);
 
 	/*
 	 * Between radiant_profile_hr_init() and ant_start(), which is the only correct

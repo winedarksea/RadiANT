@@ -7,7 +7,8 @@
  * Read src/hrm_sensor.h first - the reasoning for the shape is there, and the
  * only thing worth repeating here is the invariant this file is responsible
  * for: NOTHING in the report_* path touches radiant_profile_hr, the BLE stack, or any
- * kernel object that can block. One atomic store, one k_work_submit(), return.
+ * kernel object that can block. Atomic loads and stores, one k_work_submit(),
+ * return.
  */
 
 #include <zephyr/kernel.h>
@@ -15,6 +16,7 @@
 #include <errno.h>
 
 #include "hrm_sensor.h"
+#include "hrm_beat_ring.h"
 #include <radiant/radiant_profile_hr.h>
 
 LOG_MODULE_DECLARE(hrm, CONFIG_HRM_LOG_LEVEL);
@@ -22,34 +24,40 @@ LOG_MODULE_DECLARE(hrm, CONFIG_HRM_LOG_LEVEL);
 static const struct hrm_sensor *registered;
 
 /*
- * ── The lock-free {seq, event_time} record ─────────────────────────────────
+ * ── Beats: the SPSC ring ───────────────────────────────────────────────────
  *
- * One 32-bit word, written with a single atomic store and read with a single
- * atomic load, so it can never tear: the sequence number and the instant it
- * belongs to are always consistent with each other, which a pair of separate
- * variables could not promise without a lock the ISR must not take.
- *
- *   bits 31..16  seq, a free-running 16-bit beat counter
- *   bits 15..0   the beat's absolute time in 1/1024 s
- *
- * The consumer compares sequence numbers with modular arithmetic and never
- * with `<`, so the wrap at 65536 beats (about 5 hours at 220 bpm, about 15 at
- * 72) is not an event. It only ever needs the DIFFERENCE.
- *
- * SINGLE PRODUCER. Exactly one sensor registers, so exactly one context calls
- * hrm_sensor_report_beat(), so `producer_seq` needs no protection either. That
- * is the property hrm_sensor_register()'s -EEXIST exists to keep.
+ * src/hrm_beat_ring.h. One record per beat, each with its own instant, so a
+ * coalesced work submission still yields every interval; the record's seq
+ * keeps the count exact even when the ring is full. Single producer: exactly
+ * one sensor registers (hrm_sensor_register()'s -EEXIST).
  */
-static atomic_t beat_word;
-static uint16_t producer_seq;
+static struct hrm_beat_ring beat_ring;
 
-/* The last rate the source reported. Its own word: a rate report and a beat are
- * independent events, and a source that only ever computes a rate (no edge
- * detector of its own to expose) must still work. */
-static atomic_t reported_bpm = ATOMIC_INIT(RADIANT_PROFILE_HR_INVALID_BPM);
+/*
+ * ── Rates: {seq, bpm} in one word ──────────────────────────────────────────
+ *
+ *   bits 31..8  a report counter, so a repeat of the SAME rate is still seen
+ *               as a report (it refreshes the stale deadline)
+ *   bits  7..0  the rate
+ *
+ * Updated with a compare-and-swap so it is safe from any number of contexts.
+ */
+static atomic_t rate_word;
 
-static void beat_work_fn(struct k_work *w);
-static K_WORK_DEFINE(beat_work, beat_work_fn);
+/*
+ * ── Contact: a level and a loss counter ────────────────────────────────────
+ *
+ * The level alone would let a loss and a regain between two passes cancel
+ * out, and a loss must always clear pending RR. So every loss also bumps a
+ * counter; the worker delivers one loss per pass whenever it moved, then the
+ * current level. atomic_inc() makes it safe from several contexts (the
+ * simulator reports from a button ISR and from its own work item).
+ */
+static atomic_t contact_level = ATOMIC_INIT(1);
+static atomic_t contact_losses;
+
+static void sensor_work_fn(struct k_work *w);
+static K_WORK_DEFINE(sensor_work, sensor_work_fn);
 
 uint16_t hrm_sensor_now_1024(void)
 {
@@ -138,51 +146,83 @@ void hrm_sensor_poll(void)
 	}
 }
 
+bool hrm_sensor_contact_supported(void)
+{
+	return (registered != NULL) && registered->contact_supported;
+}
+
 void hrm_sensor_report_beat(uint16_t event_time_1024)
 {
-	uint32_t word;
+	(void)hrm_beat_ring_push(&beat_ring, event_time_1024);
 
-	producer_seq++;
-	word = ((uint32_t)producer_seq << 16) | (uint32_t)event_time_1024;
-	atomic_set(&beat_word, (atomic_val_t)word);
-
-	/* Limit-1 by construction (k_work is not delayable and re-submitting a
-	 * pending item is a no-op), so a burst of beats cannot queue work
-	 * unboundedly; the handler's modular seq difference is what makes a
-	 * coalesced submission still account for every beat. */
-	k_work_submit(&beat_work);
+	/* Limit-1 by construction (re-submitting a pending item is a no-op),
+	 * so a burst of beats cannot queue work unboundedly; the ring holds
+	 * every instant until the handler runs. */
+	k_work_submit(&sensor_work);
 }
 
 void hrm_sensor_report_rate(uint8_t bpm)
 {
-	atomic_set(&reported_bpm, (atomic_val_t)bpm);
-	k_work_submit(&beat_work);
+	uint32_t old;
+	uint32_t new;
+
+	do {
+		old = (uint32_t)atomic_get(&rate_word);
+		new = (((old >> 8) + 1u) << 8) | (uint32_t)bpm;
+	} while (!atomic_cas(&rate_word, (atomic_val_t)old, (atomic_val_t)new));
+
+	k_work_submit(&sensor_work);
 }
 
-static void beat_work_fn(struct k_work *w)
+void hrm_sensor_report_contact(bool detected)
+{
+	/* Level first: a worker that sees the new loss count reads a level at
+	 * least as new as this report. */
+	(void)atomic_set(&contact_level, detected ? 1 : 0);
+	if (!detected) {
+		(void)atomic_inc(&contact_losses);
+	}
+	k_work_submit(&sensor_work);
+}
+
+static void deliver_beat_rec(void *ctx, uint16_t seq, uint16_t event_time)
+{
+	ARG_UNUSED(ctx);
+	hrm_node_deliver_beat(seq, event_time);
+}
+
+static void sensor_work_fn(struct k_work *w)
 {
 	/* Touched only here, on the system workqueue. */
-	static uint16_t consumed_seq;
-	static uint8_t applied_bpm = RADIANT_PROFILE_HR_INVALID_BPM;
+	static uint32_t consumed_rate_seq;
+	static atomic_val_t consumed_losses;
+	static bool applied_contact = true;
 
-	uint32_t word = (uint32_t)atomic_get(&beat_word);
-	uint16_t seq = (uint16_t)(word >> 16);
-	uint16_t event_time = (uint16_t)word;
-	uint8_t bpm = (uint8_t)atomic_get(&reported_bpm);
-	uint16_t beats;
+	uint32_t rate = (uint32_t)atomic_get(&rate_word);
+	atomic_val_t losses;
+	bool level;
 
 	ARG_UNUSED(w);
 
-	/* Modular difference. `seq - consumed_seq` in uint16_t arithmetic is
-	 * the number of beats since the last pass whether or not either value
-	 * wrapped, which is the only reason the counter can be 16 bits. */
-	beats = (uint16_t)(seq - consumed_seq);
-	consumed_seq = seq;
-
-	if (beats == 0u && bpm == applied_bpm) {
-		return;
+	/* 1. The newest rate, once per pass in which any report arrived. */
+	if ((rate >> 8) != consumed_rate_seq) {
+		consumed_rate_seq = rate >> 8;
+		hrm_node_deliver_rate((uint8_t)rate);
 	}
-	applied_bpm = bpm;
 
-	hrm_node_deliver_beats(beats, event_time, bpm);
+	/* 2. Every beat, oldest first (hrm_beat_ring_drain()). */
+	(void)hrm_beat_ring_drain(&beat_ring, deliver_beat_rec, NULL);
+
+	/* 3. Contact: every loss since the last pass, then the level. */
+	losses = atomic_get(&contact_losses);
+	if (losses != consumed_losses) {
+		consumed_losses = losses;
+		applied_contact = false;
+		hrm_node_deliver_contact(false);
+	}
+	level = atomic_get(&contact_level) != 0;
+	if (level != applied_contact) {
+		applied_contact = level;
+		hrm_node_deliver_contact(level);
+	}
 }

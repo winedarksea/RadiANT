@@ -43,26 +43,30 @@
  *      radiant_profile_hr_next() - which reads them to build the next page.
  *
  * An ISR-driven sensor would make that three-way, and radiant_profile_hr has no lock.
- * So hrm_sensor_report_beat() does NOT touch radiant_profile_hr. It writes one 32-bit
- * `{seq, event_time}` word with a single atomic store and submits one work
- * item; the handler runs on the system workqueue - context 1, which already
- * existed - and does radiant_profile_hr_beat(), radiant_profile_hr_set_computed() and the BLE
- * notification together. Timestamp fidelity is preserved because the instant
- * travels in the word; the profile's context count stays at two.
+ * So hrm_sensor_report_beat() does NOT touch radiant_profile_hr. It pushes one
+ * `{seq, event_time}` record into a lock-free single-producer/single-consumer
+ * ring (src/hrm_beat_ring.h) and submits one work item; the handler runs on
+ * the system workqueue - context 1, which already existed - drains EVERY
+ * record, and hands each to the application, which updates one snapshot
+ * (src/hrm_publish.h) that both radios read: the ANT+ accumulators and byte 7,
+ * and the BLE Heart Rate Measurement with its RR-Intervals. Timestamp fidelity
+ * is preserved because each instant travels in its own record; the profile's
+ * context count stays at two.
  *
  * Two contexts with no lock is safe one way round only: the workqueue is
  * cooperative, so the event thread never interrupts a writer - but the
  * workqueue CAN preempt the event thread mid-encode. So the reader,
  * load_next_page(), wraps radiant_profile_hr_next() in k_sched_lock().
  *
- * The word is single-producer by construction: exactly one sensor is
+ * The ring is single-producer by construction: exactly one sensor is
  * registered, so exactly one context calls report_beat(). Do not call it from
- * two.
+ * two. report_rate() and report_contact() are safe from any context.
  */
 
 #ifndef HRM_SENSOR_H_
 #define HRM_SENSOR_H_
 
+#include <stdbool.h>
 #include <stdint.h>
 
 struct hrm_sensor;
@@ -104,6 +108,14 @@ struct hrm_sensor {
 	const char *name;
 	const struct hrm_sensor_api *api;
 	void *data;
+	/*
+	 * The source can detect skin contact and will call
+	 * hrm_sensor_report_contact(). A CAPABILITY, fixed at registration:
+	 * it becomes the BLE Measurement's "contact supported" bit, which a
+	 * collector expects never to change during a connection. Contact
+	 * STATUS is what report_contact() reports, live.
+	 */
+	bool contact_supported;
 };
 
 /*
@@ -112,7 +124,7 @@ struct hrm_sensor {
  *
  * EXACTLY ONE WINS. A second call returns -EEXIST and logs at error level
  * rather than replacing the first: two sources reporting beats would violate
- * the single-producer rule the {seq, event_time} word depends on.
+ * the single-producer rule the beat ring depends on.
  *
  * Returns 0, -EINVAL for a sensor with no api->start, or -EEXIST.
  */
@@ -143,22 +155,47 @@ void hrm_sensor_poll(void);
  * hrm_sensor_now_1024() if your hardware gave you no better instant, but
  * understand that doing so is what the push direction exists to avoid.
  *
- * ISR-SAFE BY CONSTRUCTION: one atomic store and one k_work_submit(). It does
- * not touch radiant_profile_hr and it does not call bt_hrs_notify(). See the header
- * comment for why that matters.
+ * ISR-SAFE BY CONSTRUCTION: one push into the lock-free beat ring and one
+ * k_work_submit(). It does not touch radiant_profile_hr or the BLE stack. See
+ * the header comment for why that matters. Every beat reaches the ANT+ event
+ * count; its interval reaches BLE as an RR-Interval unless more than
+ * HRM_BEAT_RING_LEN beats pile up before the workqueue runs, in which case
+ * those intervals are dropped (never mis-stated) and the count stays exact.
  */
 void hrm_sensor_report_beat(uint16_t event_time_1024);
 
 /*
- * The source's own computed rate - byte 7 of ANT+ pages 0x00 and 0x04.
+ * The source's own computed rate - byte 7 of ANT+ pages 0x00 and 0x04, and the
+ * BLE Heart Rate Measurement value.
  *
- * RADIANT_PROFILE_HR_INVALID_BPM (0) means "no reading", and is what a source should
- * report when it has lost contact. 0xFF IS A REAL 255 bpm ON THIS PROFILE and
- * is not a sentinel; do not use it to mean "unknown".
+ * RADIANT_PROFILE_HR_INVALID_BPM (0) means "no reading". 0xFF IS A REAL 255
+ * bpm ON THIS PROFILE and is not a sentinel; do not use it to mean "unknown".
  *
- * ISR-safe on the same terms as report_beat().
+ * A RATE GOES STALE. Each report - a repeat of the same value included - and
+ * each beat keeps it valid for CONFIG_HRM_BPM_STALE_MS; after that both radios
+ * send 0 until the next report. Report it at least that often while you have
+ * a reading.
+ *
+ * Safe from any context, ISR included.
  */
 void hrm_sensor_report_rate(uint8_t bpm);
+
+/*
+ * Skin contact STATUS, for a source that declared `contact_supported`.
+ * Report it on every change (repeats are harmless).
+ *
+ * Losing contact invalidates the rate on both radios at once and discards any
+ * RR-Intervals not yet notified; after contact returns, the rate is valid
+ * again from the next report_rate() or beat. Ignored for a source without
+ * contact support - the BLE capability bit never changes.
+ *
+ * Safe from any context, ISR included; a loss followed by a regain before the
+ * workqueue runs is still seen as a loss.
+ */
+void hrm_sensor_report_contact(bool detected);
+
+/* The registered source's `contact_supported`; false when none registered. */
+bool hrm_sensor_contact_supported(void);
 
 /*
  * The node's 1/1024 s clock, exported so a driver can timestamp against exactly
@@ -169,21 +206,25 @@ void hrm_sensor_report_rate(uint8_t bpm);
 uint16_t hrm_sensor_now_1024(void);
 
 /*
- * Implemented by the application (src/main.c), called ONLY from the beat work
- * handler on the system workqueue.
+ * Implemented by the application (src/main.c), called ONLY from the sensor
+ * work handler on the system workqueue, in this order within one pass: the
+ * latest rate (if any report arrived), every beat record, then contact.
  *
- * `beats` is how many beats the handler is accounting for in one pass - 1 in
- * steady state, and 0 when the source reported only a rate (a source with no
- * edge detector of its own is legitimate; the page still carries byte 7).
- * `event_time` is meaningless when `beats` is 0 and must be ignored.
+ *   deliver_rate     one call per pass in which report_rate() was called,
+ *                    with the newest value - repeats included, since each
+ *                    report refreshes the stale deadline;
+ *   deliver_beat     one call per ring record, oldest first, plus the newest
+ *                    beat when the ring overflowed (its seq jump says how
+ *                    many beats it stands for);
+ *   deliver_contact  false for every loss since the last pass, then true if
+ *                    contact is back.
  *
- * It can exceed 1 only if two beats landed between submissions,
- * which at the profile's 30..220 bpm range means a >=273 ms workqueue stall.
- * When it does, the count still advances by the right amount and the event time
- * is the LATEST instant: the count is the field that survives a lost packet, so
- * preserving it is what matters, and no instant is fabricated for the beats
- * whose exact time was overwritten.
+ * Contact last is deliberate: a loss that landed among the pass's beats then
+ * clears their intervals rather than letting them through - the conservative
+ * order, since a missing interval is legal and a wrong one is not.
  */
-void hrm_node_deliver_beats(uint16_t beats, uint16_t event_time, uint8_t bpm);
+void hrm_node_deliver_rate(uint8_t bpm);
+void hrm_node_deliver_beat(uint16_t seq, uint16_t event_time);
+void hrm_node_deliver_contact(bool detected);
 
 #endif /* HRM_SENSOR_H_ */

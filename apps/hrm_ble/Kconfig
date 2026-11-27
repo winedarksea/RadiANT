@@ -118,6 +118,13 @@ config BT_PERIPHERAL_PREF_TIMEOUT
 config RADIANT_BLE_CONN_MIN_INTERVAL_UNITS
 	default HRM_BLE_MIN_CONN_INTERVAL_UNITS if HRM_BLE_HRS
 
+# Heart Rate Profile 1.0: the GAP Appearance of a Heart Rate Sensor. 833 is
+# "Heart Rate Belt" (category 0x00D, sub-category 1); a wrist-worn product sets
+# its own. Same placement rule as above - Kconfig.zephyr's own `default 0`
+# would otherwise win and GAP would say "Unknown".
+config BT_DEVICE_APPEARANCE
+	default 833 if HRM_BLE_HRS
+
 source "Kconfig.zephyr"
 
 menuconfig HRM
@@ -245,10 +252,59 @@ config HRM_SENSOR_SIM_BPM
 	  clamped at 255 as a sentinel: on this profile 0 means "no reading" and
 	  0xFF is a real 255 bpm.
 
+config HRM_SENSOR_SIM_CONTACT_BUTTON
+	bool "toggle the simulator's skin contact with button 0 (sw0)"
+	depends on HRM_SENSOR_SIMULATED
+	depends on GPIO
+	depends on $(dt_alias_enabled,sw0)
+	default y if !RADIANT_NRF_LOW_POWER
+	help
+	  The bench control for contact: each press of the board's sw0 button
+	  (Button 0 on the nRF54L15 and nRF52840 DKs) toggles simulated skin
+	  contact. With contact lost the simulator stops beating and reports
+	  hrm_sensor_report_contact(false): the BLE Measurement shows "contact
+	  supported, not detected" with a rate of 0, ANT+ byte 7 goes to 0 and
+	  the ANT+ event count freezes. Press again to restore it. The log says
+	  "skin contact lost" / "skin contact detected".
+
+	  Off by default with RADIANT_NRF_LOW_POWER (lowpower.conf): an edge
+	  interrupt keeps a GPIOTE input channel armed, which is not what the
+	  power rows measure.
+
+config HRM_SENSOR_SIM_CONTACT_TOGGLE_S
+	int "toggle the simulator's skin contact every N seconds (0 = never)"
+	depends on HRM_SENSOR_SIMULATED
+	range 0 3600
+	default 0
+	help
+	  A timed pattern for a bench with no button to press, or for an
+	  unattended soak: contact alternates lost / detected every N seconds.
+	  Independent of HRM_SENSOR_SIM_CONTACT_BUTTON; both may be on.
+
+config HRM_BPM_STALE_MS
+	int "a heart rate nobody refreshes goes invalid after this many ms"
+	range 1000 60000
+	default 3000
+	help
+	  Every hrm_sensor_report_rate() - a repeat of the same value
+	  included - and every beat keeps the rate valid for this long. When
+	  it passes, both radios report "no reading": ANT+ byte 7 = 0 and a
+	  BLE Heart Rate Measurement of 0, while the ANT+ event count and
+	  time stay frozen because no beat arrived. A driver that dies, or a
+	  strap taken off without contact detection, therefore stops
+	  reporting a rate instead of repeating its last one forever.
+
+	  Also the longest beat-to-beat interval sent as an RR-Interval:
+	  anything longer is a gap, and the next beat starts a new baseline.
+	  3000 ms is 20 bpm, below the 30 bpm the profile represents.
+
 config HRM_BLE_HRS
 	bool "also advertise the SIG Heart Rate Service over BLE"
 	depends on BT && BT_PERIPHERAL
-	select BT_HRS
+	# radiant_ble_hrs, not Zephyr's BT_HRS: contact support kept apart from
+	# contact status, RR-Intervals, no Control Point (no Energy Expended),
+	# Body Sensor Location from Kconfig. See <radiant/radiant_ble_hrs.h>.
+	select RADIANT_BLE_HRS
 	# The shared BLE layer: advertising restart/backoff/watchdog, the
 	# connection-parameter policy and DIS (radiant/src/ble). It depends
 	# only on BT_PERIPHERAL, which this symbol depends on too.
