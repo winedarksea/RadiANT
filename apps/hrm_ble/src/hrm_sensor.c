@@ -17,6 +17,7 @@
 
 #include "hrm_sensor.h"
 #include "hrm_beat_ring.h"
+#include "hrm_sensor_pass.h"
 #include <radiant/radiant_profile_hr.h>
 
 LOG_MODULE_DECLARE(hrm, CONFIG_HRM_LOG_LEVEL);
@@ -49,9 +50,9 @@ static atomic_t rate_word;
  *
  * The level alone would let a loss and a regain between two passes cancel
  * out, and a loss must always clear pending RR. So every loss also bumps a
- * counter; the worker delivers one loss per pass whenever it moved, then the
- * current level. atomic_inc() makes it safe from several contexts (the
- * simulator reports from a button ISR and from its own work item).
+ * counter; the worker (src/hrm_sensor_pass.h) delivers a loss first whenever
+ * it moved, and the live level after the drain. atomic_inc() makes it safe
+ * from several contexts (the simulator reports from a button ISR and from its own work item).
  */
 static atomic_t contact_level = ATOMIC_INIT(1);
 static atomic_t contact_losses;
@@ -191,47 +192,45 @@ static void deliver_beat_rec(void *ctx, uint16_t seq, uint16_t event_time)
 	hrm_node_deliver_beat(seq, event_time);
 }
 
+/* The pass's four hooks (src/hrm_sensor_pass.h decides their order). */
+static bool pass_level(void *ctx)
+{
+	ARG_UNUSED(ctx);
+	return atomic_get(&contact_level) != 0;
+}
+
+static void pass_rate(void *ctx, uint8_t bpm)
+{
+	ARG_UNUSED(ctx);
+	hrm_node_deliver_rate(bpm);
+}
+
+static void pass_drain(void *ctx)
+{
+	ARG_UNUSED(ctx);
+	(void)hrm_beat_ring_drain(&beat_ring, deliver_beat_rec, NULL);
+}
+
+static void pass_contact(void *ctx, bool detected)
+{
+	ARG_UNUSED(ctx);
+	hrm_node_deliver_contact(detected);
+}
+
+static const struct hrm_pass_ops pass_ops = {
+	.level = pass_level,
+	.rate = pass_rate,
+	.drain = pass_drain,
+	.contact = pass_contact,
+};
+
 static void sensor_work_fn(struct k_work *w)
 {
 	/* Touched only here, on the system workqueue. */
-	static uint32_t consumed_rate_seq;
-	static atomic_val_t consumed_losses;
-	static bool applied_contact = true;
-
-	atomic_val_t losses = atomic_get(&contact_losses);
-	bool level = atomic_get(&contact_level) != 0;
-	bool lost = (losses != consumed_losses);
-	uint32_t rate = (uint32_t)atomic_get(&rate_word);
+	static struct hrm_pass_state pass = { .contact = true };
 
 	ARG_UNUSED(w);
 
-	/* 0. A regain whose loss an earlier pass already delivered goes
-	 * FIRST, so the rate and beats a driver reports with it count. */
-	if (!lost && level && !applied_contact) {
-		applied_contact = true;
-		hrm_node_deliver_contact(true);
-	}
-
-	/* 1. The newest rate, once per pass in which any report arrived. */
-	if ((rate >> 8) != consumed_rate_seq) {
-		consumed_rate_seq = rate >> 8;
-		hrm_node_deliver_rate((uint8_t)rate);
-	}
-
-	/* 2. Every beat, oldest first (hrm_beat_ring_drain()). */
-	(void)hrm_beat_ring_drain(&beat_ring, deliver_beat_rec, NULL);
-
-	/* 3. A loss in this pass goes LAST, so it clears the intervals of
-	 * the beats it landed among rather than letting them through; then
-	 * the level as it is now. */
-	if (lost) {
-		consumed_losses = losses;
-		applied_contact = false;
-		hrm_node_deliver_contact(false);
-	}
-	level = atomic_get(&contact_level) != 0;
-	if (level != applied_contact) {
-		applied_contact = level;
-		hrm_node_deliver_contact(level);
-	}
+	hrm_pass_run(&pass, (uint32_t)atomic_get(&rate_word),
+		     (uint32_t)atomic_get(&contact_losses), &pass_ops);
 }

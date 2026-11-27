@@ -118,9 +118,10 @@ config BT_PERIPHERAL_PREF_TIMEOUT
 config RADIANT_BLE_CONN_MIN_INTERVAL_UNITS
 	default HRM_BLE_MIN_CONN_INTERVAL_UNITS if HRM_BLE_HRS
 
-# Heart Rate Profile 1.0: the GAP Appearance of a Heart Rate Sensor. 833 is
-# "Heart Rate Belt" (category 0x00D, sub-category 1); a wrist-worn product sets
-# its own. Same placement rule as above - Kconfig.zephyr's own `default 0`
+# The GAP Appearance of a heart-rate sensor. Heart Rate Profile 1.0 does not
+# require it - it is good practice, so a phone shows the right icon and a
+# collector can filter on it. 833 is "Heart Rate Belt" (category 0x00D,
+# sub-category 1); a wrist-worn product sets its own. Same placement rule as above - Kconfig.zephyr's own `default 0`
 # would otherwise win and GAP would say "Unknown".
 config BT_DEVICE_APPEARANCE
 	default 833 if HRM_BLE_HRS
@@ -283,7 +284,7 @@ config HRM_SENSOR_SIM_CONTACT_TOGGLE_S
 
 config HRM_BPM_STALE_MS
 	int "a heart rate nobody refreshes goes invalid after this many ms"
-	range 1000 60000
+	range 2500 60000
 	default 3000
 	help
 	  Every hrm_sensor_report_rate() - a repeat of the same value
@@ -296,7 +297,9 @@ config HRM_BPM_STALE_MS
 
 	  Also the longest beat-to-beat interval sent as an RR-Interval:
 	  anything longer is a gap, and the next beat starts a new baseline.
-	  3000 ms is 20 bpm, below the 30 bpm the profile represents.
+	  3000 ms is 20 bpm, below the 30 bpm the profile represents. Hence
+	  the 2500 floor: 30 bpm is a 2000 ms interval, and a lower setting
+	  would silently drop every RR-Interval of a slow resting heart.
 
 config HRM_BLE_HRS
 	bool "also advertise the SIG Heart Rate Service over BLE"

@@ -207,6 +207,21 @@ bool radiant_profile_hr_toggle(const struct radiant_profile_hr *hr);
  * 65536 - the node's clock, not this module's. */
 void radiant_profile_hr_beat(struct radiant_profile_hr *hr, uint16_t event_time);
 
+/*
+ * `n` beats accounted for at once, the newest at `event_time` - what a node does
+ * when beats were coalesced and only the newest instant survives. The count
+ * advances by n (mod 256), the event time becomes `event_time`, and the
+ * previous event time (page 4) becomes the last REALLY delivered beat's time,
+ * never `event_time` again: replaying radiant_profile_hr_beat() n times would
+ * set prev == cur and page 4 would claim a 0 ms interval.
+ *
+ * So a receiver may treat page 4's (cur - prev) as one R-R interval only when
+ * the event count advanced by exactly 1 since its previous page; with a jump
+ * of more than 1 the difference spans several beats. n == 1 is
+ * radiant_profile_hr_beat(); n == 0 does nothing.
+ */
+void radiant_profile_hr_beats(struct radiant_profile_hr *hr, uint16_t n, uint16_t event_time);
+
 /* The sensor's own bpm answer, a convenience beside the accumulator pair that
  * is what actually survives a lost packet. 0 means no reading. */
 void radiant_profile_hr_set_computed(struct radiant_profile_hr *hr, uint8_t bpm);

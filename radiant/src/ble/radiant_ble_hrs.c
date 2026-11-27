@@ -65,6 +65,7 @@ struct notify_ctx {
 	const struct radiant_ble_hrs_meas *m;
 	int sent;
 	int err;
+	size_t rr_sent;
 	bool probe_only;
 };
 
@@ -84,6 +85,7 @@ static void notify_one(struct bt_conn *conn, void *user_data)
 	uint8_t buf[MEAS_BUF_MAX];
 	uint16_t mtu;
 	size_t cap;
+	size_t rr_written;
 	int len;
 	int err;
 
@@ -102,7 +104,7 @@ static void notify_one(struct bt_conn *conn, void *user_data)
 		cap = sizeof(buf);
 	}
 
-	len = radiant_ble_hrs_encode(ctx->m, buf, cap, NULL);
+	len = radiant_ble_hrs_encode(ctx->m, buf, cap, &rr_written);
 	if (len < 0) {
 		ctx->err = len;
 		return;
@@ -111,6 +113,10 @@ static void notify_one(struct bt_conn *conn, void *user_data)
 	err = bt_gatt_notify(conn, MEAS_ATTR, buf, (uint16_t)len);
 	if (err == 0) {
 		ctx->sent++;
+		/* Only an accepted notification consumes intervals. */
+		if (rr_written > ctx->rr_sent) {
+			ctx->rr_sent = rr_written;
+		}
 	} else {
 		LOG_DBG("HRS notify: %d", err);
 	}
@@ -124,13 +130,19 @@ bool radiant_ble_hrs_subscribed(void)
 	return ctx.sent > 0;
 }
 
-int radiant_ble_hrs_notify(const struct radiant_ble_hrs_meas *m)
+int radiant_ble_hrs_notify(const struct radiant_ble_hrs_meas *m, size_t *rr_sent)
 {
 	struct notify_ctx ctx = { .m = m };
 
+	if (rr_sent != NULL) {
+		*rr_sent = 0u;
+	}
 	if (m == NULL) {
 		return -EINVAL;
 	}
 	bt_conn_foreach(BT_CONN_TYPE_LE, notify_one, &ctx);
+	if (rr_sent != NULL) {
+		*rr_sent = ctx.rr_sent;
+	}
 	return (ctx.err != 0) ? ctx.err : ctx.sent;
 }

@@ -57,13 +57,23 @@ static void sim_work_fn(struct k_work *w);
 static K_WORK_DELAYABLE_DEFINE(sim_work, sim_work_fn);
 
 #if defined(CONFIG_HRM_SENSOR_SIM_CONTACT_BUTTON) || CONFIG_HRM_SENSOR_SIM_CONTACT_TOGGLE_S > 0
-/* Flip contact and report it. Safe from the button ISR: one atomic, and
- * hrm_sensor_report_contact() is ISR-safe. */
+/*
+ * Flip contact and report it, as ONE step. Two controls (the button ISR and the
+ * timed pattern on the workqueue) can toggle; without the lock, A flips, B
+ * flips and reports, then A reports its stale value, and the node is left
+ * believing the opposite of sim_contact for good. The spinlock makes flip and
+ * report atomic; hrm_sensor_report_contact() is ISR-safe and short (atomics
+ * and k_work_submit()), so it may run under it.
+ */
+static struct k_spinlock contact_lock;
+
 static void sim_contact_toggle(void)
 {
+	k_spinlock_key_t key = k_spin_lock(&contact_lock);
 	bool detected = (atomic_xor(&sim_contact, 1) & 1) == 0;
 
 	hrm_sensor_report_contact(detected);
+	k_spin_unlock(&contact_lock, key);
 }
 #endif
 
@@ -71,23 +81,33 @@ static void sim_contact_toggle(void)
 static const struct gpio_dt_spec contact_button = GPIO_DT_SPEC_GET(DT_ALIAS(sw0), gpios);
 static struct gpio_callback contact_button_cb;
 
-/* Interrupt context. A 250 ms lockout is the debounce: a DK button bounces
- * for a few ms, and nobody presses twice in a quarter second on purpose. */
+/*
+ * Interrupt context, on BOTH edges. The debounce is a 250 ms quiet period
+ * re-armed by every edge, press or release: an edge that comes less than
+ * 250 ms after the previous one is bounce and is ignored (but still re-arms
+ * the period). Only a press - an edge after quiet with the pin now active -
+ * toggles. Arming the lockout on the press edge alone let the RELEASE bounce,
+ * often more than 250 ms after a slow press, toggle contact a second time.
+ */
+#define CONTACT_BUTTON_QUIET_MS 250u
+
 static void contact_button_isr(const struct device *port, struct gpio_callback *cb,
 			       gpio_port_pins_t pins)
 {
-	static uint32_t last_ms;
+	static bool seen;
+	static uint32_t last_edge_ms;
 	uint32_t now = k_uptime_get_32();
+	bool quiet = !seen || (now - last_edge_ms) >= CONTACT_BUTTON_QUIET_MS;
 
 	ARG_UNUSED(port);
 	ARG_UNUSED(cb);
 	ARG_UNUSED(pins);
 
-	if (last_ms != 0u && (now - last_ms) < 250u) {
-		return;
+	seen = true;
+	last_edge_ms = now;
+	if (quiet && gpio_pin_get_dt(&contact_button) > 0) {
+		sim_contact_toggle();
 	}
-	last_ms = now;
-	sim_contact_toggle();
 }
 
 static int contact_button_init(void)
@@ -106,7 +126,7 @@ static int contact_button_init(void)
 	if (err != 0) {
 		return err;
 	}
-	return gpio_pin_interrupt_configure_dt(&contact_button, GPIO_INT_EDGE_TO_ACTIVE);
+	return gpio_pin_interrupt_configure_dt(&contact_button, GPIO_INT_EDGE_BOTH);
 }
 #endif /* CONFIG_HRM_SENSOR_SIM_CONTACT_BUTTON */
 

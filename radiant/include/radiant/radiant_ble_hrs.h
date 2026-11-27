@@ -13,15 +13,16 @@
  *
  *   - separates contact SUPPORT (a property of the driver, constant for the
  *     life of a connection) from contact STATUS (reported live);
- *   - carries RR-Intervals in 1/1024 s, newest kept when the ATT MTU cannot
- *     hold them all (HRS 1.0: the oldest are removed first);
+ *   - carries RR-Intervals in 1/1024 s, the oldest first; those the ATT MTU
+ *     cannot hold go in the next notification (HRS 1.0 3.1.1.5);
  *   - has no Control Point and never sets the Energy Expended flag;
  *   - takes Body Sensor Location from CONFIG_RADIANT_BLE_HRS_BODY_SENSOR_LOCATION;
  *   - uses the UINT16 rate format only when the rate needs it (> 255).
  *
  * HRP 1.0 also requires the Device Information Service (Manufacturer Name
  * at least): CONFIG_RADIANT_BLE selects it (radiant_ble_dis.h). The appearance
- * is the application's (CONFIG_BT_DEVICE_APPEARANCE, 833 = Heart Rate Belt).
+ * is the application's (CONFIG_BT_DEVICE_APPEARANCE, 833 = Heart Rate Belt) -
+ * good practice, not something HRP requires.
  *
  * The encoder is a pure function (radiant_ble_hrs_encode.c, no kernel, no
  * Bluetooth host) and is compiled unmodified by apps/hrm_ble/tests/publish on
@@ -81,9 +82,11 @@ struct radiant_ble_hrs_meas {
  * Encode one Heart Rate Measurement into buf[0..cap). Pure.
  *
  * `cap` is the notification payload available (ATT MTU - 3). When not every
- * RR-Interval fits, the NEWEST that fit are written and the oldest dropped,
- * still oldest first on the wire. The RR flag is set only if at least one
- * interval was written. *rr_written (may be NULL) receives how many were.
+ * RR-Interval fits, the OLDEST that fit are written (HRS 1.0 3.1.1.5: the
+ * rest go in the next notification). The RR flag is set only if at least one
+ * interval was written. *rr_written (may be NULL) receives how many were -
+ * rr[0..*rr_written) - which the caller removes from its pending list once
+ * the notification has gone.
  *
  * Returns the encoded length, -EINVAL for a NULL argument or rr == NULL with
  * rr_count > 0, or -ENOMEM when cap cannot hold the flags and the rate.
@@ -101,10 +104,16 @@ bool radiant_ble_hrs_subscribed(void);
 
 /*
  * Notify `m` to every subscribed connection, each encoded for its own ATT
- * MTU. Returns the number of connections notified (0 when none is
- * subscribed), or a negative errno from the encoder. Thread context only.
+ * MTU. Returns the number of connections bt_gatt_notify() accepted (0 when
+ * none is subscribed or every attempt failed), or a negative errno from the
+ * encoder. *rr_sent (may be NULL) receives how many of m->rr, from the oldest,
+ * went out: the most any accepted notification carried, 0 when none was
+ * accepted. The caller removes exactly those and keeps the rest pending; with
+ * several collectors at different MTUs, one with a smaller MTU misses the
+ * difference (a missing interval is legal; a repeated one would not be).
+ * Thread context only.
  */
-int radiant_ble_hrs_notify(const struct radiant_ble_hrs_meas *m);
+int radiant_ble_hrs_notify(const struct radiant_ble_hrs_meas *m, size_t *rr_sent);
 
 #ifdef __cplusplus
 }

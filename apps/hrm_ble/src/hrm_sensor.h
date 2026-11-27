@@ -173,8 +173,10 @@ void hrm_sensor_report_beat(uint16_t event_time_1024);
  *
  * A RATE GOES STALE. Each report - a repeat of the same value included - and
  * each beat keeps it valid for CONFIG_HRM_BPM_STALE_MS; after that both radios
- * send 0 until the next report. Report it at least that often while you have
- * a reading.
+ * send 0. Expiry is a gap: from then on the old value is never shown again;
+ * beats bring back a rate derived from their intervals, and the next report
+ * replaces that. Report it at least that often while you have a reading. A
+ * driver that never reports a rate at all gets the derived rate throughout.
  *
  * Safe from any context, ISR included.
  */
@@ -185,8 +187,10 @@ void hrm_sensor_report_rate(uint8_t bpm);
  * Report it on every change (repeats are harmless).
  *
  * Losing contact invalidates the rate on both radios at once and discards any
- * RR-Intervals not yet notified; after contact returns, the rate is valid
- * again from the next report_rate() or beat. Ignored for a source without
+ * RR-Intervals not yet notified. Beats and rates reported while contact is
+ * lost count on ANT+ (beats) and nothing else. After contact returns the old
+ * rate is NOT revived: until the next report_rate() both radios carry a rate
+ * derived from the new beat intervals, and 0 until there is one. Ignored for a source without
  * contact support - the BLE capability bit never changes.
  *
  * Safe from any context, ISR included; a loss followed by a regain before the
@@ -207,10 +211,9 @@ uint16_t hrm_sensor_now_1024(void);
 
 /*
  * Implemented by the application (src/main.c), called ONLY from the sensor
- * work handler on the system workqueue, in this order within one pass: a
- * contact regain whose loss an earlier pass delivered, the latest rate (if any
- * report arrived), every beat record, then any loss in this pass and the
- * current contact level.
+ * work handler on the system workqueue, in the order src/hrm_sensor_pass.h
+ * fixes and explains: a loss not seen before, the latest rate (if any report
+ * arrived), every beat record, then contact as it is after the drain.
  *
  *   deliver_rate     one call per pass in which report_rate() was called,
  *                    with the newest value - repeats included, since each
@@ -218,13 +221,13 @@ uint16_t hrm_sensor_now_1024(void);
  *   deliver_beat     one call per ring record, oldest first, plus the newest
  *                    beat when the ring overflowed (its seq jump says how
  *                    many beats it stands for);
- *   deliver_contact  true first for a regain alone (so the rate and beats
- *                    reported with it count); false last for a loss in this
- *                    pass, then true if contact is already back.
+ *   deliver_contact  false FIRST for a loss (so every beat drained in that
+ *                    pass goes in without contact); the live level LAST, so a
+ *                    regain never lets noise beats drained in the same pass
+ *                    produce intervals or refresh the rate.
  *
- * A loss last is deliberate: one that landed among the pass's beats then
- * clears their intervals rather than letting them through - the conservative
- * order, since a missing interval is legal and a wrong one is not.
+ * Conservative by construction: a missing interval is legal, a wrong one is
+ * not.
  */
 void hrm_node_deliver_rate(uint8_t bpm);
 void hrm_node_deliver_beat(uint16_t seq, uint16_t event_time);

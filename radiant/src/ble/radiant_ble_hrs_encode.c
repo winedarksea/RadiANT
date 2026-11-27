@@ -23,7 +23,6 @@ int radiant_ble_hrs_encode(const struct radiant_ble_hrs_meas *m, uint8_t *buf,
 	size_t len;
 	size_t room;
 	size_t n;
-	size_t first;
 
 	if (rr_written != NULL) {
 		*rr_written = 0u;
@@ -58,14 +57,15 @@ int radiant_ble_hrs_encode(const struct radiant_ble_hrs_meas *m, uint8_t *buf,
 
 	/* Bit 3, Energy Expended: never. No Control Point either. */
 
-	/* Bit 4: as many RR-Intervals as fit, the newest. */
+	/* Bit 4: as many RR-Intervals as fit, the OLDEST first. HRS 1.0
+	 * 3.1.1.5: intervals that do not fit are sent in the next
+	 * notification, so the caller keeps the rest pending. */
 	room = (cap - len) / 2u;
 	n = (m->rr_count < room) ? m->rr_count : room;
 	if (n > 0u) {
 		flags |= RADIANT_BLE_HRS_FLAG_RR;
-		first = m->rr_count - n;
 		for (size_t i = 0u; i < n; i++) {
-			put_le16(&buf[len], m->rr[first + i]);
+			put_le16(&buf[len], m->rr[i]);
 			len += 2u;
 		}
 	}

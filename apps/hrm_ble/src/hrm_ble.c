@@ -174,9 +174,9 @@ bool hrm_ble_subscribed(void)
 	return radiant_ble_hrs_subscribed();
 }
 
-int hrm_ble_notify(const struct radiant_ble_hrs_meas *m)
+int hrm_ble_notify(const struct radiant_ble_hrs_meas *m, size_t *rr_sent)
 {
-	return radiant_ble_hrs_notify(m);
+	return radiant_ble_hrs_notify(m, rr_sent);
 }
 
 bool hrm_ble_take_disconnect(void)

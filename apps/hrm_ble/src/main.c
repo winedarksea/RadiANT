@@ -172,18 +172,16 @@ void hrm_node_deliver_beat(uint16_t seq, uint16_t event_time)
 	uint32_t now = now_ms();
 	uint16_t beats = hrm_publish_beat(&pub, seq, event_time, now);
 
-	for (uint16_t i = 0; i < beats; i++) {
-		/*
-		 * More than one only after a ring overflow, with the newest
-		 * beat's instant: radiant_profile_hr_beat() increments the
-		 * event count and stores the event time, so the count advances
-		 * by the right amount and the time is a genuine instant - no
-		 * interval is invented. The count is the field that survives a
-		 * lost packet. With no beats the count and time stay frozen,
-		 * as the ANT+ HRM profile requires.
-		 */
-		radiant_profile_hr_beat(&hr, event_time);
-	}
+	/*
+	 * More than one only after a ring overflow, with the newest beat's
+	 * instant. ONE profile update for all of them: the count advances by
+	 * `beats`, the event time is the genuine newest instant, and page 4's
+	 * previous event time stays at the last beat really delivered -
+	 * replaying radiant_profile_hr_beat() would set prev == cur, a 0 ms
+	 * R-R on the air. With no beats the count and time stay frozen, as
+	 * the ANT+ HRM profile requires.
+	 */
+	radiant_profile_hr_beats(&hr, beats, event_time);
 	apply_bpm(now);
 }
 
@@ -199,24 +197,27 @@ void hrm_node_deliver_contact(bool detected)
 #if defined(CONFIG_HRM_BLE_HRS)
 /*
  * The 1 Hz BLE notification, while a collector is subscribed: the snapshot
- * plus every RR-Interval since the last one (the encoder keeps the newest the
- * ATT MTU can carry). Pending RR is cleared after each notification and
- * whenever nobody is subscribed or a link drops, so a collector never gets an
- * interval from before it subscribed.
+ * plus the pending RR-Intervals, oldest first; those the ATT MTU cannot carry
+ * stay pending for the next one. Pending RR is cleared whenever nobody is
+ * subscribed or a link drops, so a collector never gets an interval from
+ * before it subscribed.
  */
 static void ble_publish(uint32_t now)
 {
 	struct radiant_ble_hrs_meas m;
+	size_t rr_sent = 0u;
 
-	if (hrm_ble_take_disconnect()) {
-		hrm_publish_rr_clear(&pub);
-	}
-	if (!hrm_publish_notify_due(&pub, now, hrm_ble_subscribed())) {
+	/* The decision is hrm_publish_ble_step() (kernel-free, tested); this
+	 * is only the radio half. */
+	if (!hrm_publish_ble_step(&pub, now, hrm_ble_subscribed(),
+				  hrm_ble_take_disconnect(), &m)) {
 		return;
 	}
-	hrm_publish_meas(&pub, now, &m);
-	(void)hrm_ble_notify(&m);
-	hrm_publish_rr_clear(&pub);
+	/* HRS 1.0 3.1.1.5: what did not fit waits for the next notification,
+	 * and a failed notification consumes nothing. */
+	if (hrm_ble_notify(&m, &rr_sent) > 0) {
+		hrm_publish_rr_consume(&pub, rr_sent);
+	}
 }
 #endif
 

@@ -700,7 +700,7 @@ try {
             # fails while the image still runs.
             if ($t.ble) {
                 # Plus the service: radiant_ble_hrs selected in place of
-                # Zephyr's BT_HRS, and the appearance HRP asks for.
+                # Zephyr's BT_HRS, and the appearance (good practice; HRP does not require it).
                 foreach ($sym in @('CONFIG_HRM_BLE_HRS=y',
                                    'CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL=y',
                                    'CONFIG_MPSL_TIMESLOT_SESSION_COUNT=2',

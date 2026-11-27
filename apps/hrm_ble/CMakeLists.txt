@@ -103,6 +103,7 @@ target_sources(app PRIVATE
   # unmodified by apps/hrm_ble/tests/publish on native_sim.
   src/hrm_beat_ring.c
   src/hrm_publish.c
+  src/hrm_sensor_pass.c
 )
 
 # ── The heart-rate source ───────────────────────────────────────────────────

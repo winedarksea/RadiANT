@@ -3,6 +3,7 @@
 #define HRM_BLE_H_
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include <radiant/radiant_ble_hrs.h>
@@ -40,8 +41,9 @@ bool hrm_ble_connected(void);
 bool hrm_ble_subscribed(void);
 
 /* Notify one measurement to every subscribed collector. Returns the number
- * notified, or a negative errno. Thread context (the node tick). */
-int hrm_ble_notify(const struct radiant_ble_hrs_meas *m);
+ * notified, or a negative errno; *rr_sent is how many of m->rr (oldest first)
+ * an accepted notification carried. Thread context (the node tick). */
+int hrm_ble_notify(const struct radiant_ble_hrs_meas *m, size_t *rr_sent);
 
 /* True once after any link dropped since the last call: the node tick clears
  * pending RR-Intervals on it. */
