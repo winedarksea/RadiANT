@@ -80,7 +80,10 @@
 # the product record's kernel-free halves - advertising restart and backoff,
 # the connection-parameter rule, the pairing window, pages 80/81 and DIS from
 # one record, strict identity), reached through `-T app/radiant/tests`.
-min_scenarios: 32
+# 2026-11-27: 33, hrm_ble.publish (apps/hrm_ble/tests/publish: the HRS encoder,
+# the beat ring and the snapshot that drives both radios), reached through
+# `-T app/apps/hrm_ble/tests`.
+min_scenarios: 33
 
 # Total ztest cases twister executes, summed over every scenario. It equals the
 # sum of the per-scenario floors below, so the backstop and the floors cannot
@@ -313,7 +316,10 @@ min_scenarios: 32
 # 2026-11-27: +1 (bond LRU re-key from RPA to identity). mp1d: 11559.
 # 2026-11-27: +2 (spare-slot over-capacity victim, the just-paired shield).
 # mp1e: 11561.
-min_testcases: 11561
+# 2026-11-27: +19 (wip/mixed-p2): the hrm_ble.publish scenario - the HRS
+# encoder, the beat ring and the snapshot both radios read. Cassandra twister
+# mp2b: 11580.
+min_testcases: 11580
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -473,6 +479,11 @@ min_cases.radiant.backend.d2: 70
 # nRF rows (filter_wildcard_dev true). 70, the observed count (2026-11-21).
 min_cases.radiant.backend.short_match: 70
 min_cases.hrm_ble.sim_sched: 4
+# hrm_ble.publish (2026-11-27): apps/hrm_ble/tests/publish - radiant_ble_hrs_encode()
+# (flags, RR packing, MTU cap), the beat ring (N coalesced beats give N
+# intervals, overflow drops RR and never mis-states one) and hrm_publish (rate
+# expiry on both radios, contact loss, disconnect, the 1 Hz cadence).
+min_cases.hrm_ble.publish: 19
 # 2026-11-23: +4 (security review 2026-11-22 item 2: the machine range), +2
 # (review nits: conversion saturation, over-wide range narrowing).
 min_cases.treadmill.pages: 26
