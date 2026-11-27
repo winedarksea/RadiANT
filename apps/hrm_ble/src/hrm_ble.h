@@ -8,7 +8,11 @@
 /*
  * P8b: the SIG Heart Rate Service beside the ANT+ 0x78 master.
  *
- * Enables the controller and starts advertising; the beat work handler in
+ * Enables the controller, sets the Device Information Service from
+ * radiant_product and the unit's 32-bit `serial`, and starts advertising
+ * through radiant_ble_adv (which keeps it running across connections). With
+ * CONFIG_RADIANT_BLE_NAME_DEVNUM_SUFFIX the name is "<name> <devnum>".
+ * The beat work handler in
  * main.c notifies HRS at the same instants it advances the ANT+ accumulators,
  * so the two radios cannot disagree about the rate.
  *
@@ -16,7 +20,10 @@
  * SIG service only (not Garmin's proprietary Multi-Link/GFDI). See
  * docs/ble-running-dynamics-notes.md.
  */
-int hrm_ble_start(void);
+int hrm_ble_start(uint16_t devnum, uint32_t serial);
+
+/* From the node tick: the advertising watchdog. */
+void hrm_ble_tick(void);
 
 /*
  * True while a phone is connected. CONFIG_HRM_SUPPRESS_ANT_WHEN_CONNECTED reads

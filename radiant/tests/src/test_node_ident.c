@@ -2448,3 +2448,101 @@ ZTEST(node_ident, test_a_key_check_that_fails_counts_as_a_match)
 	zassert_true(radiant_sec_keys_match(&k, &k));
 	radiant_sec_key_destroy(&k);
 }
+
+/* ── The 32-bit serial ────────────────────────────────────────────────────── */
+
+/* tools/radiant_crypto.py: node_serial32(bytes(range(16)), 51235) and (.., 1).
+ * The two implementations share no code. */
+#define VECTOR_SERIAL32        0x993BC823u
+#define VECTOR_SERIAL32_DEVNUM1 0x6B090001u
+
+ZTEST(node_ident, test_serial32_matches_the_independent_vectors)
+{
+	uint32_t serial = 0u;
+
+	zassert_equal(RADIANT_NODE_IDENT_OK,
+		      radiant_node_ident_serial32_derive(k_dev, VECTOR_DEVNUM, &serial));
+	zassert_equal(VECTOR_SERIAL32, serial, "0x%08x", serial);
+	zassert_equal(RADIANT_NODE_IDENT_OK,
+		      radiant_node_ident_serial32_derive(k_dev, 1u, &serial));
+	zassert_equal(VECTOR_SERIAL32_DEVNUM1, serial, "0x%08x", serial);
+}
+
+ZTEST(node_ident, test_serial32_is_deterministic_and_carries_the_devnum)
+{
+	uint32_t a = 0u;
+	uint32_t b = 1u;
+
+	zassert_equal(RADIANT_NODE_IDENT_OK,
+		      radiant_node_ident_serial32_derive(k_dev, VECTOR_DEVNUM, &a));
+	zassert_equal(RADIANT_NODE_IDENT_OK,
+		      radiant_node_ident_serial32_derive(k_dev, VECTOR_DEVNUM, &b));
+	zassert_equal(a, b);
+	/* The heart-rate profile's page 2 rule: the lower half is the device
+	 * number, so page 2 (upper half only) and page 81 agree. */
+	zassert_equal(VECTOR_DEVNUM, a & 0xFFFFu);
+	zassert_not_equal(0xFFFFFFFFu, a); /* page 81's "no serial" */
+}
+
+/* A separate label: the serial's upper half is not the devnum label's output,
+ * and a different key gives a different serial at the same device number. */
+ZTEST(node_ident, test_serial32_is_distinct_from_the_devnum_label)
+{
+	struct radiant_sec_key root;
+	struct radiant_sec_key id;
+	uint8_t                other[RADIANT_NODE_IDENT_K_DEV_BYTES];
+	uint32_t               serial = 0u;
+	uint32_t               serial2 = 0u;
+	uint32_t               id_hi;
+
+	zassert_ok(radiant_sec_key_import(&root, k_dev, 128));
+	zassert_ok(radiant_sec_kdf(&root, RADIANT_SEC_LABEL_ID, 0u, 0u, &id));
+	id_hi = (uint32_t)id.b[0] | ((uint32_t)id.b[1] << 8);
+	radiant_sec_key_destroy(&id);
+	radiant_sec_key_destroy(&root);
+
+	zassert_equal(RADIANT_NODE_IDENT_OK,
+		      radiant_node_ident_serial32_derive(k_dev, VECTOR_DEVNUM, &serial));
+	zassert_not_equal(id_hi, serial >> 16);
+	zassert_not_equal((uint32_t)VECTOR_DEVNUM, serial);
+
+	memcpy(other, k_dev, sizeof(other));
+	other[0] ^= 0x01u;
+	zassert_equal(RADIANT_NODE_IDENT_OK,
+		      radiant_node_ident_serial32_derive(other, VECTOR_DEVNUM, &serial2));
+	zassert_not_equal(serial, serial2);
+}
+
+ZTEST(node_ident, test_serial32_refuses_bad_arguments)
+{
+	uint32_t serial;
+
+	zassert_equal(RADIANT_NODE_IDENT_EINVAL,
+		      radiant_node_ident_serial32_derive(NULL, 1u, &serial));
+	zassert_equal(RADIANT_NODE_IDENT_EINVAL,
+		      radiant_node_ident_serial32_derive(k_dev, 1u, NULL));
+	/* 0 is the ANT wildcard, never a device number. */
+	zassert_equal(RADIANT_NODE_IDENT_EINVAL,
+		      radiant_node_ident_serial32_derive(k_dev, 0u, &serial));
+	zassert_equal(RADIANT_NODE_IDENT_EINVAL, radiant_node_ident_serial32(NULL));
+}
+
+/* Before a boot there is no identity to derive from; after one, the getter
+ * is the derivation over the booted key and device number. */
+ZTEST(node_ident, test_serial32_follows_the_booted_identity)
+{
+	uint32_t serial = 0u;
+	uint16_t devnum = 0u;
+
+	zassert_equal(RADIANT_NODE_IDENT_ESTATE, radiant_node_ident_serial32(&serial));
+
+	provisioned_and_booted();
+	zassert_equal(RADIANT_NODE_IDENT_OK, radiant_node_ident_devnum(&devnum));
+	zassert_equal(VECTOR_DEVNUM, devnum);
+	zassert_equal(RADIANT_NODE_IDENT_OK, radiant_node_ident_serial32(&serial));
+	zassert_equal(VECTOR_SERIAL32, serial, "0x%08x", serial);
+
+	/* And gone again once the identity is reset (a failed later boot). */
+	radiant_node_ident_reset();
+	zassert_equal(RADIANT_NODE_IDENT_ESTATE, radiant_node_ident_serial32(&serial));
+}

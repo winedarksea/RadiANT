@@ -352,10 +352,20 @@ failure this project keeps paying for.
    that a snap-to-target implementation would short-circuit.
 3. **Set the identity.** The device number comes from the identity record the
    node generates on its first boot (ADR 0020); `CONFIG_TREADMILL_DEVICE_NUMBER`
-   is only the fallback when that fails. Set
-   `CONFIG_TREADMILL_MANUFACTURER_ID`, and the four placeholder `1`s in
-   `main.c`'s `fill_common_id()` — model number, hardware revision and the two
-   software revisions all land on a head unit's device-information screen.
+   is only the fallback when that fails. Set the product record,
+   `CONFIG_RADIANT_PRODUCT_*` (`radiant_product.h`): manufacturer id, model
+   number and hardware revision (placeholder `1`s by default), the
+   manufacturer and model names, and the software revision (the repository
+   `VERSION` by default). They feed common pages 0x50/0x51 and, with BLE, the
+   Device Information Service, and all land on a head unit's or phone's
+   device-information screen.
+   `CONFIG_RADIANT_PRODUCT_STRICT` (on in `dual.conf`) refuses to configure
+   while the manufacturer id is 255, the manufacturer or model name is empty,
+   a RadiANT placeholder or still a `product.conf.example` value (anything
+   starting `Your `), or the BLE name is a default (`Zephyr`, the app's
+   development name) or a template value. It does **not** check the model
+   number or hardware revision: their placeholder `1` cannot be told from a
+   real 1, so check those yourself.
 4. **Set the ranges to match your machine.**
    `CONFIG_TREADMILL_MAX_SPEED_CENTI_KPH`,
    `CONFIG_TREADMILL_MIN_INCLINE_DECI` and
@@ -402,7 +412,9 @@ Seven items.
    re-rolls the number; receivers re-pair once.
 2. **A real manufacturer id.** 255 is the ANT+ development id. Shipping with it
    is claiming somebody else's identity.
-3. **Real model and revision numbers** in `fill_common_id()`.
+3. **Real model and revision numbers** in the product record,
+   `CONFIG_RADIANT_PRODUCT_MODEL_NUMBER` and `CONFIG_RADIANT_PRODUCT_HW_REV` -
+   strict identity cannot tell their placeholder `1` from a real 1.
 4. **The capability bits must match the machine.** FE-C page 54 bit 2
    (Simulation mode) and FTMS's Inclination Target Setting bit are *claims*
    that page 51 and op code `0x03` will be honoured. If `set_incline()` returns

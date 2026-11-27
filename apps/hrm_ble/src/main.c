@@ -34,6 +34,7 @@
 #include <radiant/radiant_wire.h>
 #include <radiant/radiant_profile_hr.h>
 #include <radiant/radiant_node_ident.h>
+#include <radiant/radiant_product.h>
 #include "hrm_sensor.h"
 
 #if defined(CONFIG_HRM_BLE_HRS)
@@ -178,6 +179,12 @@ static void node_tick_fn(struct k_work *w)
 	ant_suppression_update();
 #endif
 
+#if defined(CONFIG_HRM_BLE_HRS)
+	/* The advertising watchdog (radiant_ble_adv.h): cheap unless a probe
+	 * is due, and the backstop for advertising ending unseen. */
+	hrm_ble_tick();
+#endif
+
 	k_work_schedule(&node_tick, K_MSEC(NODE_TICK_MS));
 }
 
@@ -286,7 +293,9 @@ static int ant_start(uint16_t devnum)
 int main(void)
 {
 	struct radiant_profile_hr_cfg cfg;
-	uint16_t devnum = CONFIG_HRM_DEVICE_NUMBER;
+	const struct radiant_product *product = radiant_product_get();
+	struct radiant_product_unit unit;
+	uint16_t devnum;
 	int err;
 
 	LOG_INF("RadiANT heart-rate node: ANT+ 0x78");
@@ -297,55 +306,43 @@ int main(void)
 	}
 
 	/*
-	 * Device number from the identity record (ADR 0009). On the first boot
-	 * of a part with no record, radiant_node_ident_boot() generates K_dev from the
-	 * on-chip TRNG and stores it first (ADR 0020,
+	 * Device number and serial from the identity record (ADR 0009). On the
+	 * first boot of a part with no record, radiant_node_ident_boot()
+	 * generates K_dev from the on-chip TRNG and stores it first (ADR 0020,
 	 * CONFIG_RADIANT_NODE_IDENT_SELF_PROVISION), so every unit flashed from
 	 * one build gets its own number with no factory step.
 	 *
-	 * Any failure - no entropy backend, a storage error, an exhausted boot
-	 * counter - falls back to the Kconfig number with no transforms, which
-	 * is what every board did before ADR 0020. It is logged as an error on
-	 * every boot because a shipped strap on that branch shares its identity
-	 * with every other unit built from the same image.
+	 * radiant_product_unit_boot() owns the failure branch. A development
+	 * build falls back to CONFIG_HRM_DEVICE_NUMBER with no transforms,
+	 * logged at error level on every boot because a strap on that branch
+	 * shares its identity with every other unit built from the same image.
+	 * A strict build (CONFIG_RADIANT_PRODUCT_STRICT) does not return until
+	 * the identity boots - no channel is open yet, so that is staying off
+	 * the air rather than transmitting on the shared number.
 	 */
-	err = radiant_node_ident_boot();
-	if (err == 0) {
-		uint16_t d;
-
-		if (radiant_node_ident_devnum(&d) == 0 && d != 0u) {
-			devnum = d;
-			LOG_INF("device number %u from the identity record", d);
-		}
-	} else {
-		LOG_ERR("identity boot failed: %s (%d); falling back to Kconfig "
-			"device number %u, no transforms",
-			radiant_node_ident_strerror(err), err, devnum);
-	}
+	(void)radiant_product_unit_boot(CONFIG_HRM_DEVICE_NUMBER, &unit);
+	devnum = unit.devnum;
 
 	/*
 	 * cfg.id is the common-page identity (0x50/0x51), not the ANT channel
 	 * id set in ant_start() - conflating them produces a strap that's
-	 * found and then misidentifies itself.
+	 * found and then misidentifies itself. It comes from radiant_product
+	 * (CONFIG_RADIANT_PRODUCT_*), the same record the BLE DIS strings come
+	 * from, and the unit's 32-bit serial.
 	 *
-	 * THE FOUR `1`s BELOW ARE PLACEHOLDERS AND A HEAD UNIT DISPLAYS THEM.
-	 * model_number, hw_revision and the two sw_revision fields are what
-	 * pages 0x50/0x51 carry to a watch's device-information screen, so a
-	 * shipped product must set them from something real. Production
-	 * checklist item 2.
+	 * Page 0x02 is the legacy manufacturer page with narrower fields: the
+	 * low bytes of the manufacturer id and model number, and the UPPER 16
+	 * bits of the serial - whose lower 16 are the device number, which
+	 * radiant_node_ident_serial32() guarantees, so pages 0x02 and 0x51
+	 * name the same serial.
 	 */
 	memset(&cfg, 0, sizeof(cfg));
-	cfg.id.hw_revision = 1u;
-	cfg.id.manufacturer_id = CONFIG_HRM_MANUFACTURER_ID;
-	cfg.id.model_number = 1u;
-	cfg.id.sw_revision_main = 1u;
-	cfg.id.sw_revision_supplemental = RADIANT_PROFILE_COMMON_INVALID_U8;
-	cfg.id.serial_number = devnum;
-	cfg.manufacturer_id_8 = CONFIG_HRM_MANUFACTURER_ID;
-	cfg.serial_upper16 = devnum;
-	cfg.model_number_8 = 1u;
-	cfg.hw_version = 1u;
-	cfg.sw_version = 1u;
+	(void)radiant_product_fill_common_id(product, unit.serial, &cfg.id);
+	cfg.manufacturer_id_8 = (uint8_t)(product->manufacturer_id & 0xFFu);
+	cfg.serial_upper16 = (uint16_t)(unit.serial >> 16);
+	cfg.model_number_8 = (uint8_t)(product->model_number & 0xFFu);
+	cfg.hw_version = product->hw_rev;
+	cfg.sw_version = product->sw_rev_main;
 	cfg.common_82_every = 0u; /* no battery page rotation on a DK */
 
 	err = radiant_profile_hr_init(&hr, &cfg);
@@ -386,7 +383,7 @@ int main(void)
 	/* P8b, started last: bringing the controller up after the ANT+
 	 * channel means a failure to advertise can't be mistaken for a
 	 * failure to transmit. */
-	(void)hrm_ble_start();
+	(void)hrm_ble_start(devnum, unit.serial);
 #endif
 
 	return 0;

@@ -206,6 +206,31 @@ int radiant_node_ident_pair_counter(uint32_t *out);
 int radiant_node_ident_devnum(uint16_t *out);
 
 /*
+ * The unit's 32-bit serial number, for ANT+ common page 81 and the Bluetooth
+ * DIS Serial Number String. Derived, not stored - the devnum's own rule, so no
+ * stored structure changes:
+ *
+ *   upper 16 = the first two bytes (LE) of KDF(K_dev, "ser", 0, devnum)
+ *   lower 16 = the device number
+ *
+ * A separate KDF label from the devnum's "id", so the two are independent
+ * outputs of one key. The lower half IS the device number because the ANT+
+ * heart-rate profile's page 2 says a serial's lower 16 bits are the device
+ * number and carries only the upper 16 - so page 2 and page 81 agree. The one
+ * all-ones result (0xFFFFFFFF is page 81's "no serial") has its upper half
+ * moved to 0xFFFE. Never 0: the device number is 1..65535.
+ *
+ * Returns RADIANT_NODE_IDENT_ESTATE before a successful boot,
+ * RADIANT_NODE_IDENT_ENOTSUP if the crypto backend refuses K_dev.
+ */
+int radiant_node_ident_serial32(uint32_t *out);
+
+/* The derivation above for an explicit key and device number, for tests and
+ * for tools/radiant_crypto.py's node_serial32() to agree with. */
+int radiant_node_ident_serial32_derive(const uint8_t k_dev[RADIANT_NODE_IDENT_K_DEV_BYTES],
+				       uint16_t devnum, uint32_t *out);
+
+/*
  * ── The epoch, and the clock this project does not have ────────────────────
  *
  * Pure, so both branches are testable without a clock or reboot.

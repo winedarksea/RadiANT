@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# The shared BLE layer's and the product record's kernel-free halves. Reached
+# by the ztest job's `-T app/radiant/tests` (twister walks subdirectories).
+tests:
+  radiant.ble:
+    tags:
+      - radiant
+      - radiant_ble
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim

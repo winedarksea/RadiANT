@@ -1,0 +1,312 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# The product identity record and the shared BLE peripheral layer.
+# Sourced from radiant/Kconfig inside `if RADIANT`. Both are opt-in and cost
+# nothing when off: no source file is compiled and no symbol below appears.
+#
+# docs: <radiant/radiant_product.h>, <radiant/radiant_ble_adv.h>,
+# <radiant/radiant_ble_conn.h>, <radiant/radiant_ble_dis.h>,
+# <radiant/radiant_ble_pairing.h>.
+
+menuconfig RADIANT_PRODUCT
+	bool "product identity record (radiant_product.h)"
+	help
+	  One record of who made this product, what model it is and which
+	  revision it runs, feeding ANT+ common pages 80/81 and, with
+	  RADIANT_BLE, the Bluetooth Device Information Service. The
+	  applications select it; it replaces their placeholder `1`s.
+
+	  The defaults are development placeholders. A shipped product sets
+	  every one of them, and RADIANT_PRODUCT_STRICT refuses to configure
+	  until it has.
+
+if RADIANT_PRODUCT
+
+config RADIANT_PRODUCT_MANUFACTURER_ID
+	int "ANT+ manufacturer id"
+	range 0 65535
+	default 255
+	help
+	  Common page 80's 16-bit manufacturer id, assigned by the ANT+
+	  Alliance. 255 is the development id; using somebody else's real one
+	  would be claiming their products. Strict mode refuses 255.
+
+	  The heart-rate profile's legacy page 2 has only 8 bits for it and
+	  carries the low byte.
+
+config RADIANT_PRODUCT_MANUFACTURER_NAME
+	string "manufacturer name (DIS)"
+	default "RadiANT development"
+	help
+	  The Device Information Service's Manufacturer Name String. At most
+	  CONFIG_BT_DIS_STR_MAX (21 by default) characters when BLE is on -
+	  checked at build time. Strict mode refuses the default and the empty
+	  string.
+
+config RADIANT_PRODUCT_MODEL_NUMBER
+	int "model number (ANT+ page 80)"
+	range 0 65535
+	default 1
+	help
+	  Common page 80's numeric model number, which a head unit displays.
+	  1 is a placeholder. The heart-rate profile's legacy page 2 carries
+	  the low byte.
+
+config RADIANT_PRODUCT_MODEL_NAME
+	string "model name (DIS Model Number String)"
+	default "RadiANT reference"
+	help
+	  The Device Information Service's Model Number String - a string,
+	  where ANT+'s model number is a number. Same length rule as the
+	  manufacturer name. Strict mode refuses the default and the empty
+	  string.
+
+config RADIANT_PRODUCT_HW_REV
+	int "hardware revision"
+	range 0 255
+	default 1
+	help
+	  Common page 80's hardware revision, and the DIS Hardware Revision
+	  String in decimal.
+
+config RADIANT_PRODUCT_SW_REV_FROM_VERSION
+	bool "software revision from the repository VERSION file"
+	default y
+	help
+	  Page 81's software revision from the build's VERSION file (the one
+	  the release tag must equal): main = MAJOR * 10 + MINOR,
+	  supplemental = PATCHLEVEL, so 1.3.0 is main 13, supplemental 0.
+	  The DIS Firmware and Software Revision Strings are "MAJOR.MINOR.PATCH"
+	  either way.
+
+	  Turn it off to state the two bytes by hand below.
+
+config RADIANT_PRODUCT_SW_REV_MAIN
+	int "software revision, main (page 81 byte 3)"
+	depends on !RADIANT_PRODUCT_SW_REV_FROM_VERSION
+	range 0 255
+	default 1
+
+config RADIANT_PRODUCT_SW_REV_SUPP
+	int "software revision, supplemental (page 81 byte 2)"
+	depends on !RADIANT_PRODUCT_SW_REV_FROM_VERSION
+	range 0 255
+	default 255
+	help
+	  255 means "not used".
+
+config RADIANT_PRODUCT_APP_UNIT_BOOT
+	bool
+	help
+	  Selected by an application whose device number comes from
+	  radiant_product_unit_boot() - the only path that honours strict
+	  identity at run time. Strict mode refuses an application without it
+	  (apps/trainer, which always transmits on its fixed fixture number).
+
+config RADIANT_PRODUCT_PRIVACY
+	bool "privacy posture: no serial number on the air"
+	help
+	  docs/radiant-security.md section 5.4 and docs/radiant-telemetry.md:
+	  a node with a privacy posture emits common page 81 with serial
+	  0xFFFFFFFF ("not supplied") and the BLE Device Information Service
+	  carries no Serial Number characteristic. A 32-bit serial in the
+	  clear is more identifying than the device number and survives any
+	  re-roll of it. Required (radiant/CMakeLists.txt) when the profile
+	  policy lets the node go private (RADIANT_PRIVATE_POLICY_PHYSICAL,
+	  _COMMAND or _ALWAYS).
+
+	  Not done here: section 5.4 also asks for a generic page 80 and a
+	  suppressed or zeroed page 82; those stay with the application.
+
+config RADIANT_PRODUCT_STRICT
+	bool "strict product identity: refuse placeholders and the shared devnum"
+	help
+	  For a shipped product (the dual.conf presets turn it on).
+
+	  AT CONFIGURE TIME radiant/CMakeLists.txt refuses the build when:
+	  - the manufacturer id is 255;
+	  - the manufacturer or model name is empty, a RadiANT placeholder, or
+	    still a product.conf.example value (anything starting "Your ");
+	  - with BLE on, CONFIG_BT_DEVICE_NAME is empty, Zephyr's "Zephyr",
+	    an application's development name ("RadiANT HR",
+	    "RadiANT Treadmill") or starts with "Your ";
+	  - the application has no node identity (CONFIG_RADIANT_NODE_IDENT)
+	    or does not take its device number from radiant_product_unit_boot()
+	    (RADIANT_PRODUCT_APP_UNIT_BOOT) - either way a shared or fixed
+	    device number is the only one there is.
+
+	  NOT ENFORCED: the model number and hardware revision. Their
+	  placeholder 1 is also a legitimate value, so nothing can tell "unset"
+	  from "set to 1"; check them yourself.
+
+	  AT RUN TIME radiant_product_unit_boot() does not fall back: if the
+	  identity fails to boot, the node stays off the air (no ANT+ channel,
+	  no BLE) and retries, 1 s doubling to an hour, logging every attempt.
+	  It never transmits on the device number every unit of the image
+	  shares. A persistent failure (dead storage, an exhausted boot
+	  counter) therefore leaves the unit off the air until it is repaired,
+	  reflashed or re-provisioned: that is the intended field-failure mode.
+	  Each retry may write the boot counter once, hence the long cap.
+
+	  Off (development builds), a failed identity boot falls back to the
+	  application's Kconfig device number as before, logged at error level,
+	  and placeholder identity is logged as a warning at boot.
+
+endif # RADIANT_PRODUCT
+
+menuconfig RADIANT_BLE
+	bool "shared BLE peripheral layer (radiant_ble_*.h)"
+	depends on BT_PERIPHERAL
+	select RADIANT_PRODUCT
+	select BT_DIS
+	select BT_DIS_SETTINGS
+	select SETTINGS_RUNTIME
+	select BT_DIS_SERIAL_NUMBER if !RADIANT_PRODUCT_PRIVACY
+	select BT_DIS_FW_REV
+	select BT_DIS_HW_REV
+	select BT_DIS_SW_REV
+	help
+	  What every RadiANT BLE peripheral needs beside its own GATT
+	  services: the advertising lifecycle (restart from `recycled`, retry
+	  with backoff, a watchdog), the connection-parameter policy that
+	  keeps BLE's demand shaped around the ANT+ slots, the Device
+	  Information Service filled from radiant_product and the unit's
+	  serial, an optional per-unit name, and (RADIANT_BLE_PAIRING_WINDOW)
+	  the equipment bonding policy.
+
+	  Replaces the advertising and connection-parameter code that
+	  apps/hrm_ble and apps/treadmill each carried as textual twins.
+
+if RADIANT_BLE
+
+config RADIANT_BLE_ADV_BACKOFF_MIN_MS
+	int "first advertising retry delay, ms"
+	range 10 60000
+	default 100
+
+config RADIANT_BLE_ADV_BACKOFF_MAX_MS
+	int "advertising retry delay cap, ms"
+	range 10 600000
+	default 5000
+	help
+	  A failed bt_le_adv_start() is retried after the first delay,
+	  doubling to this cap, until it succeeds. -EALREADY counts as
+	  success.
+
+config RADIANT_BLE_ADV_WATCHDOG_MS
+	int "advertising watchdog probe period, ms (0 = off)"
+	range 0 600000
+	default 5000
+	help
+	  radiant_ble_adv_watchdog(), called from the application's tick,
+	  re-issues bt_le_adv_start() this often while advertising is wanted
+	  and no connection holds the last slot. A running advertiser answers
+	  -EALREADY; a stopped one is started again. The backstop for any path
+	  that ends advertising without an event this layer sees.
+
+config RADIANT_BLE_CONN_POLICY
+	bool "connection-parameter policy (le_param_req rewrite)"
+	default y
+	help
+	  Registers le_param_req/le_param_updated: a peer's request below the
+	  policy interval, with latency, or with a short timeout is rewritten
+	  to RADIANT_BLE_CONN_MIN_INTERVAL_UNITS / latency 0 /
+	  max(timeout, BT_PERIPHERAL_PREF_TIMEOUT). The long interval is the
+	  MPSL arbitration policy, not a power tweak. See
+	  <radiant/radiant_ble_conn.h>.
+
+config RADIANT_BLE_CONN_MIN_INTERVAL_UNITS
+	int "shortest connection interval to accept, 1.25 ms units"
+	depends on RADIANT_BLE_CONN_POLICY
+	range 6 3200
+	default 800
+	help
+	  800 is 1 s, what nrf/samples/esb/esb_ptx_ble uses beside a timeslot
+	  user. The applications set this from their own
+	  *_MIN_CONN_INTERVAL_UNITS symbol.
+
+config RADIANT_BLE_NAME_DEVNUM_SUFFIX
+	bool "advertise \"<name> <devnum>\""
+	select BT_DEVICE_NAME_DYNAMIC
+	help
+	  Append the unit's ANT device number to the advertised name and the
+	  GAP Device Name, so two units in one room can be told apart and
+	  matched to their ANT+ side. Adds up to six characters, which each
+	  application's BUILD_ASSERT name budget accounts for.
+
+config RADIANT_BLE_PAIRING_WINDOW
+	bool "equipment bonding: pairing only inside a console-opened window"
+	depends on BT_SMP
+	select BT_SMP_APP_PAIRING_ACCEPT
+	help
+	  New pairings are refused unless a pairing window is open
+	  (radiant_ble_pairing_window_open() from a local console button, or
+	  RADIANT_BLE_PAIRING_WINDOW_AT_BOOT_S after power-on); bonded peers
+	  still connect. CAPACITY IS CONFIG_BT_MAX_PAIRED - 1 bonds: one key
+	  slot is always kept spare so a pairing inside the window always has
+	  room. A bond is evicted only after a new bond succeeds inside the
+	  window - the least recently used one, never the new one or a
+	  connected peer's - so a replaced phone always recovers through the
+	  window and a refused stranger never costs a bond. CONFIG_BT_MAX_PAIRED
+	  must be at least 2. The callbacks register themselves at boot. See
+	  <radiant/radiant_ble_pairing.h>.
+
+	  BT_KEYS_OVERWRITE_OLDEST must stay OFF with this option: Zephyr
+	  evicts under it inside the Pairing Request handler, before
+	  pairing_accept can refuse, so every refused stranger would delete a
+	  bond. radiant/CMakeLists.txt refuses the combination.
+
+config RADIANT_BLE_PAIRING_WINDOW_AT_BOOT_S
+	int "pairing window opened at power-on, seconds (0 = none)"
+	depends on RADIANT_BLE_PAIRING_WINDOW
+	range 0 600
+	default 0
+	help
+	  Opens a pairing window for this long after boot - the common
+	  "power-cycle the machine to pair a new phone" pattern, and the
+	  trigger an application has before it wires a console button.
+
+	  Opening it evicts nothing, like an explicit window: the spare key
+	  slot lets the first pairing attempt succeed, and only then is the
+	  least recently used bond deleted to restore the spare.
+
+module = RADIANT_BLE
+module-str = radiant BLE layer
+source "subsys/logging/Kconfig.template.log_config"
+
+endif # RADIANT_BLE
+
+# ── Defaults on Zephyr's DIS symbols ────────────────────────────────────────
+#
+# radiant/Kconfig is a module Kconfig, parsed before subsys/bluetooth (Zephyr's
+# Kconfig.zephyr sources modules/Kconfig first), so these defaults come first
+# and win - the same placement rule the applications' BT_PERIPHERAL_PREF_*
+# blocks rely on.
+#
+# The strings are also set at run time by radiant_ble_dis_apply(); as Kconfig
+# defaults they are what dis.c's own BUILD_ASSERTs check against
+# BT_DIS_STR_MAX, and what a phone reads should the run-time set ever fail.
+config BT_DIS_MANUF_NAME_STR
+	default RADIANT_PRODUCT_MANUFACTURER_NAME if RADIANT_BLE
+
+config BT_DIS_MODEL_NUMBER_STR
+	default RADIANT_PRODUCT_MODEL_NAME if RADIANT_BLE
+
+# The devnum suffix makes the name dynamic. Zephyr's 28-byte name store is
+# shorter than the treadmill's 29-character scan-response budget, so
+# bt_set_name() would refuse a long name with -ENOMEM; 36 covers every budget
+# here plus the 6-character suffix. And a dynamic name is writable over GATT by
+# default - any connected phone could rename the unit - which nothing here
+# wants.
+config BT_DEVICE_NAME_MAX
+	default 36 if RADIANT_BLE_NAME_DEVNUM_SUFFIX
+
+config BT_DEVICE_NAME_GATT_WRITABLE
+	default n if RADIANT_BLE_NAME_DEVNUM_SUFFIX
+
+# PnP ID's stock values are vendor-id source 1 (Bluetooth SIG), vendor 0x0000:
+# a claim to be company 0x0000, which is somebody else. PnP ID is optional in
+# DIS and no RadiANT profile needs it. A product with its own vendor id sets
+# CONFIG_BT_DIS_PNP=y and the BT_DIS_PNP_* values in its .conf.
+config BT_DIS_PNP
+	default n if RADIANT_BLE

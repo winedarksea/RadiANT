@@ -17,10 +17,17 @@
 
 struct treadmill_state;
 
-/* Bring the controller up, publish both services and start advertising.
- * Called last from main(), after both ANT+ channels are open, so a failure to
- * advertise cannot be mistaken for a failure to transmit. */
-int treadmill_ble_start(void);
+/* Bring the controller up, publish both services, set the Device Information
+ * Service from radiant_product and the unit's 32-bit `serial`, and start
+ * advertising through radiant_ble_adv (which keeps it running across
+ * connections). With CONFIG_RADIANT_BLE_NAME_DEVNUM_SUFFIX the name is
+ * "<name> <devnum>". Called last from main(), after both ANT+ channels are
+ * open, so a failure to advertise cannot be mistaken for a failure to
+ * transmit. */
+int treadmill_ble_start(uint16_t devnum, uint32_t serial);
+
+/* From the node tick: the advertising watchdog. */
+void treadmill_ble_tick(void);
 
 /* True while at least one central is connected. Exposed for the log and for a
  * future policy; NOTHING in this application suppresses ANT+ on it, and that

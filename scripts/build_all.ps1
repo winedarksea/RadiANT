@@ -113,14 +113,23 @@ $ErrorActionPreference = 'Stop'
 # preference drops to 'Continue' across the west call only, and $LASTEXITCODE
 # is the sole verdict tested. scripts/build_p4.ps1 does the same for the same
 # reason.
-function Invoke-West([string[]]$BaseArgs, [string[]]$ExtraArgs, [string]$LogPath) {
+#
+# -MergeStderr also puts stderr in the log, as plain UTF-8 text. The
+# expected-failure rows need it: CMake writes a FATAL_ERROR's text to stderr,
+# so a stdout-only log never contains the refusal those rows look for.
+function Invoke-West([string[]]$BaseArgs, [string[]]$ExtraArgs, [string]$LogPath,
+                     [switch]$MergeStderr) {
     $all = @($BaseArgs)
     if ($ExtraArgs) { $all += $ExtraArgs }
 
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        & west @all > $LogPath
+        if ($MergeStderr) {
+            & west @all 2>&1 | ForEach-Object { "$_" } | Out-File -Encoding utf8 $LogPath
+        } else {
+            & west @all > $LogPath
+        }
         return $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $prev
@@ -271,6 +280,17 @@ $nodeTargets = @(
     # the configuration G4 measured (G4 added the now-deleted
     # ble_nosuppress.conf to get dual transmission).
     @{ dir='node_ble_lp_pd';  board='nrf54l15dk/nrf54l15/cpuapp';    sensor='SIMULATED'; conf='ble.conf;lowpower.conf;power_diag.conf'; ble=$true; assert_config=@('CONFIG_RADIANT_NRF_LOW_POWER=y', 'CONFIG_RADIANT_POWER_DIAG=y', 'CONFIG_RADIANT_NRF_LP_STATS=y', 'CONFIG_LOG=y') }
+    # The named dual-radio preset (dual.conf: BLE + DIS + strict product
+    # identity) with the checked-in TEST identity, on both SoC families.
+    # Asserted: strict on, the shared BLE layer and DIS in, the identity
+    # values landed. The 52840 row is build-verified only.
+    @{ dir='node_dual';       board='nrf54l15dk/nrf54l15/cpuapp';    sensor='SIMULATED'; conf='dual.conf;../../tests/product_test.conf'; ble=$true; assert_config=@('CONFIG_RADIANT_PRODUCT_STRICT=y', 'CONFIG_RADIANT_BLE=y', 'CONFIG_BT_DIS=y', 'CONFIG_RADIANT_PRODUCT_MANUFACTURER_ID=65534', '# CONFIG_BT_DIS_PNP is not set') }
+    @{ dir='node_dual_52840'; board='nrf52840dk/nrf52840';           sensor='SIMULATED'; conf='dual.conf;../../tests/product_test.conf'; ble=$true; assert_config=@('CONFIG_RADIANT_PRODUCT_STRICT=y', 'CONFIG_RADIANT_BLE=y', 'CONFIG_BT_DIS=y') }
+    # The same preset with NO product identity must FAIL TO CONFIGURE: the
+    # strict check is the only thing between a manufacturer and a shipped
+    # image that says "manufacturer 255". The row passes when west fails and
+    # the log names the refusal.
+    @{ dir='node_dual_fail';  board='nrf54l15dk/nrf54l15/cpuapp';    sensor='SIMULATED'; conf='dual.conf'; expect_fail='CONFIG_RADIANT_PRODUCT_STRICT refuses this product identity' }
 )
 
 # ---- The treadmill -----------------------------------------------------------
@@ -306,6 +326,10 @@ $treadmillTargets = @(
     # for an unrelated reason is expensive) and report a stopped belt rather
     # than falling back to the simulator.
     @{ dir='tread_custom';   board='nrf54l15dk/nrf54l15/cpuapp'; source='CUSTOM';    conf='source_custom.conf';   sdm=$true }
+    # The named dual-radio preset with the TEST identity, and without any
+    # identity (must fail to configure) - see the node rows above.
+    @{ dir='tread_dual';       board='nrf54l15dk/nrf54l15/cpuapp'; source='SIMULATED'; conf='dual.conf;../../tests/product_test.conf'; sdm=$true; ble=$true; assert_config=@('CONFIG_RADIANT_PRODUCT_STRICT=y', 'CONFIG_RADIANT_BLE=y', 'CONFIG_BT_DIS=y', 'CONFIG_RADIANT_PRODUCT_MANUFACTURER_ID=65534') }
+    @{ dir='tread_dual_fail';  board='nrf54l15dk/nrf54l15/cpuapp'; source='SIMULATED'; conf='dual.conf'; sdm=$true; expect_fail='CONFIG_RADIANT_PRODUCT_STRICT refuses this product identity' }
 )
 
 # ---- The heart-rate transmitter sample ---------------------------------------
@@ -610,7 +634,22 @@ try {
 
             $log = Join-Path $env:TEMP "build_$($t.dir).log"
             $rc = Invoke-West @('-z', $zephyr, 'build', '-s', $nodeApp,
-                                '-d', $out, '-b', $t.board, '-p', 'always') $extra $log
+                                '-d', $out, '-b', $t.board, '-p', 'always') $extra $log `
+                              -MergeStderr:([bool]$t.expect_fail)
+            # An expected-failure row: the configuration must be REFUSED, and
+            # for the stated reason - a failure for any other reason proves
+            # nothing about the check the row exists for.
+            if ($t.expect_fail) {
+                if ($rc -eq 0) {
+                    throw "hrm_ble $($t.dir): configured and built, but must be refused ('$($t.expect_fail)')"
+                }
+                if (-not (Select-String -Path $log -SimpleMatch $t.expect_fail -Quiet)) {
+                    Get-Content $log -Tail 30
+                    throw "hrm_ble $($t.dir): failed, but not with '$($t.expect_fail)'; full log at $log"
+                }
+                Write-Host "  ok: refused as expected ('$($t.expect_fail)')"
+                continue
+            }
             if ($rc -ne 0) {
                 Get-Content $log -Tail 30
                 throw "build failed for hrm_ble $($t.dir); full log at $log"
@@ -702,7 +741,20 @@ try {
 
             $log = Join-Path $env:TEMP "build_$($t.dir).log"
             $rc = Invoke-West @('-z', $zephyr, 'build', '-s', $treadmillApp,
-                                '-d', $out, '-b', $t.board, '-p', 'always') $extra $log
+                                '-d', $out, '-b', $t.board, '-p', 'always') $extra $log `
+                              -MergeStderr:([bool]$t.expect_fail)
+            # An expected-failure row, as in the node loop above.
+            if ($t.expect_fail) {
+                if ($rc -eq 0) {
+                    throw "treadmill $($t.dir): configured and built, but must be refused ('$($t.expect_fail)')"
+                }
+                if (-not (Select-String -Path $log -SimpleMatch $t.expect_fail -Quiet)) {
+                    Get-Content $log -Tail 30
+                    throw "treadmill $($t.dir): failed, but not with '$($t.expect_fail)'; full log at $log"
+                }
+                Write-Host "  ok: refused as expected ('$($t.expect_fail)')"
+                continue
+            }
             if ($rc -ne 0) {
                 Get-Content $log -Tail 30
                 throw "build failed for treadmill $($t.dir); full log at $log"
@@ -789,6 +841,14 @@ try {
             if ($t.hr) {
                 if (-not ($cfg | Where-Object { $_ -eq 'CONFIG_TREADMILL_HR_RX=y' })) {
                     throw "treadmill $($t.dir): expected CONFIG_TREADMILL_HR_RX=y in .config"
+                }
+            }
+
+            # 6. The row's own exact .config lines (as the node rows').
+            foreach ($line in @($t.assert_config)) {
+                if (-not $line) { continue }
+                if (-not ($cfg | Where-Object { $_ -eq $line })) {
+                    throw "treadmill $($t.dir): expected '$line' in .config"
                 }
             }
 

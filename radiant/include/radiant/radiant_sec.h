@@ -646,6 +646,13 @@ void radiant_sec_nonce_block(uint8_t out[RADIANT_SEC_BLOCK_BYTES],
  */
 #define RADIANT_SEC_LABEL_PAIR "pair"
 
+/*
+ * The node's 32-bit serial number: used by radiant_node_ident_serial32() in
+ * src/node/radiant_node_ident.c, not by radiant itself. Declared here so no
+ * future label collides with it.
+ */
+#define RADIANT_SEC_LABEL_SERIAL "ser"
+
 int radiant_sec_kdf(const struct radiant_sec_key *root, const char *label,
 		    uint32_t epoch, uint16_t base_devnum,
 		    struct radiant_sec_key *out);

@@ -44,6 +44,7 @@
 #include <radiant/radiant_ant.h>
 #include <radiant/radiant_wire.h>
 #include <radiant/radiant_node_ident.h>
+#include <radiant/radiant_product.h>
 #include <radiant/radiant_profile_common.h>
 #include <radiant/radiant_profile_fec.h>
 #include <radiant/radiant_profile_fec_tx.h>
@@ -461,17 +462,6 @@ void trainer_node_print(const struct shell *sh)
 		    m.target_power_qw, m.resistance_half_pct, m.event_count);
 }
 
-static void fill_common_id(struct radiant_profile_common_id *id, uint16_t devnum)
-{
-	memset(id, 0, sizeof(*id));
-	id->hw_revision = 1u;
-	id->manufacturer_id = CONFIG_TRAINER_MANUFACTURER_ID;
-	id->model_number = 1u;
-	id->sw_revision_main = 1u;
-	id->sw_revision_supplemental = RADIANT_PROFILE_COMMON_INVALID_U8;
-	id->serial_number = devnum;
-}
-
 int main(void)
 {
 	struct radiant_profile_fec_tx_cfg fec_cfg;
@@ -508,7 +498,12 @@ int main(void)
 	trainer_model_init(&model);
 
 	memset(&fec_cfg, 0, sizeof(fec_cfg));
-	fill_common_id(&fec_cfg.id, devnum);
+	/* Pages 80/81 from the product record (CONFIG_RADIANT_PRODUCT_*). The
+	 * serial is the fixture's fixed device number, as before: this node
+	 * deliberately ignores the identity record (above), so it has no
+	 * per-unit serial to give. */
+	(void)radiant_product_fill_common_id(radiant_product_get(), devnum,
+					     &fec_cfg.id);
 	fec_cfg.equipment_type = RADIANT_PROFILE_FEC_TYPE_TRAINER;
 	/* All three, because all three are honoured: page 48 drives BASIC,
 	 * page 49 ERG, pages 50/51 SIM. Declaring a mode and refusing its

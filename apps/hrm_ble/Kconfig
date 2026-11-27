@@ -64,8 +64,10 @@ config MPSL_TIMESLOT_SESSION_COUNT
 # interval with almost no supervision margin - which is exactly the fast,
 # high-priority-to-the-controller event rate finding 1 says ANT+ can never
 # outrank. Before this block nothing tied that number to
-# HRM_BLE_MIN_CONN_INTERVAL_UNITS, the number `on_param_req()` in
-# src/hrm_ble.c actually enforces on an incoming request: the advertised
+# HRM_BLE_MIN_CONN_INTERVAL_UNITS, the number the le_param_req policy
+# (radiant/src/ble/radiant_ble_conn.c, via
+# RADIANT_BLE_CONN_MIN_INTERVAL_UNITS below) actually enforces on an
+# incoming request: the advertised
 # policy and the enforced policy were two different numbers, and
 # BT_GAP_AUTO_UPDATE_CONN_PARAMS was self-requesting the wrong one.
 #
@@ -109,11 +111,23 @@ config BT_PERIPHERAL_PREF_LATENCY
 config BT_PERIPHERAL_PREF_TIMEOUT
 	default 400 if HRM_BLE_HRS
 
+# The shared layer's connection-parameter policy (radiant/src/ble/
+# radiant_ble_conn.c) enforces the same interval PPCP advertises. Same
+# placement rule as above: before Kconfig.zephyr, which pulls in the module's
+# own definition with `default 800`.
+config RADIANT_BLE_CONN_MIN_INTERVAL_UNITS
+	default HRM_BLE_MIN_CONN_INTERVAL_UNITS if HRM_BLE_HRS
+
 source "Kconfig.zephyr"
 
 menuconfig HRM
 	bool "RadiANT heart-rate node"
 	default y
+	# Pages 80/81 (and page 2) come from the product record; the
+	# manufacturer id that used to be HRM_MANUFACTURER_ID is
+	# CONFIG_RADIANT_PRODUCT_MANUFACTURER_ID.
+	select RADIANT_PRODUCT
+	select RADIANT_PRODUCT_APP_UNIT_BOOT
 	help
 	  A RadiANT NODE: radiant driving a master channel with
 	  radiant/src/profiles/radiant_profile_hr.c on top, broadcasting ANT+ heart rate
@@ -149,14 +163,6 @@ config HRM_DEVICE_NUMBER
 	  nRF-based receivers lose up to ~5 % of their frames (ADR 0019). Check
 	  one with `tools/ant_identity.py check <number> --device-type 0x78`.
 	  The image logs a warning when it opens a channel with such a number.
-
-config HRM_MANUFACTURER_ID
-	int "manufacturer id for the common pages"
-	range 0 255
-	default 255
-	help
-	  255 is the ANT+ development id. A shipped strap needs a real one from
-	  the alliance; using it here would be claiming somebody else's.
 
 # ── The sensor seam ─────────────────────────────────────────────────────────
 #
@@ -243,6 +249,10 @@ config HRM_BLE_HRS
 	bool "also advertise the SIG Heart Rate Service over BLE"
 	depends on BT && BT_PERIPHERAL
 	select BT_HRS
+	# The shared BLE layer: advertising restart/backoff/watchdog, the
+	# connection-parameter policy and DIS (radiant/src/ble). It depends
+	# only on BT_PERIPHERAL, which this symbol depends on too.
+	select RADIANT_BLE
 	#
 	# SELECT, NOT DEPENDS, AND THE SYMBOL WAS CHECKED FIRST.
 	#
@@ -317,6 +327,9 @@ config HRM_BLE_MIN_CONN_INTERVAL_UNITS
 	  controller priority levels above anything this application can
 	  request, so that air is simply gone; refusing the update is the only
 	  place the decision can be made.
+
+	  Enforced by radiant/src/ble/radiant_ble_conn.c through
+	  RADIANT_BLE_CONN_MIN_INTERVAL_UNITS, which defaults to this.
 
 config HRM_SUPPRESS_ANT_WHEN_CONNECTED
 	bool "stop ANT+ while a BLE connection is live"
