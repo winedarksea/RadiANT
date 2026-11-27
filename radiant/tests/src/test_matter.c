@@ -786,7 +786,7 @@ ZTEST(radiant_matter, test_the_hr_passenger_is_silent_when_off)
 	zassert_is_null(radiant_matter_endpoint_for(4u, 0u, RADIANT_FIELD_HEART_RATE));
 }
 
-ZTEST(radiant_matter, test_the_hr_passenger_writes_bpm_x10_to_a_flow_sensor)
+ZTEST(radiant_matter, test_the_hr_passenger_writes_bpm_x10_so_ha_shows_bpm)
 {
 	const struct radiant_matter_endpoint *e;
 	struct radiant_sample s;
