@@ -299,8 +299,8 @@ min_scenarios: 31
 # 2026-11-26: 10067 observed (liveness 8x, +1 case in 6 scenarios).
 # 2026-11-26: +24 (per-output mask, 4 test_rules.c cases in each of 6 unit
 # scenarios), +5 matter_storage (UniqueId::Parse, boot retirement, eviction
-# purge), +1351 radiant.unit.rules_outputs_off.
-min_testcases: 11447
+# purge), +1379 radiant.unit.rules_outputs_off. Cassandra twister mo1: 11475.
+min_testcases: 11475
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
