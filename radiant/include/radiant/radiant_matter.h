@@ -182,9 +182,10 @@ const struct radiant_matter_type_map *radiant_matter_row(uint8_t field_type);
 
 /*
  * The section 8.3b raw-bpm passenger, OFF BY DEFAULT. On, RADIANT_FIELD_HEART_RATE
- * gets a row: a Flow Sensor (0x0306) endpoint whose Flow Measurement (0x0404)
- * MeasuredValue is bpm x 10, so a controller shows the bpm figure labelled
- * m^3/h. Deadband 2 bpm, 60 s heartbeat.
+ * gets a row: a Flow Sensor (0x0306) endpoint with a Flow Measurement (0x0404)
+ * cluster. Home Assistant displays exactly the bpm figure (unit shown: m^3/h).
+ * MeasuredValue holds bpm x 10 because the cluster's unit is 0.1 m^3/h and
+ * HA divides by 10. Deadband 2 bpm, 60 s heartbeat.
  *
  * Deliberately mislabelled, which is why it is off: a user who never enables
  * it is never shown a wrong unit. A runtime switch rather than a Kconfig

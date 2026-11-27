@@ -4,9 +4,11 @@
  * Package E4's other three bridged device types: Temperature Sensor (0x0302),
  * Humidity Sensor (0x0307) and Pressure Sensor (0x0305) - plus Flow Sensor
  * (0x0306), which exists only as docs/radiant-bridge.md section 8.3b's
- * default-off raw-bpm passenger (radiant_matter_set_hr_passenger()). It
- * carries heart rate x 10 in a cluster whose unit is 0.1 m^3/h, deliberately
- * mislabelled; nothing else in this product produces a flow reading.
+ * default-off raw-bpm passenger (radiant_matter_set_hr_passenger()). Home
+ * Assistant displays exactly the bpm figure (unit shown: m^3/h).
+ * MeasuredValue holds bpm x 10 because the cluster's unit is 0.1 m^3/h and
+ * HA divides by 10. Deliberately mislabelled; nothing else in this product
+ * produces a flow reading.
  *
  * ONE CLASS FOR THREE DEVICE TYPES, AND THAT IS A DELIBERATE DEPARTURE FROM
  * UPSTREAM'S ONE-FILE-PER-TYPE SHAPE. nrf/applications/matter_bridge has a
@@ -92,7 +94,8 @@ private:
 	int16_t mMinMeasuredValue = 0;
 	int16_t mMaxMeasuredValue = 0;
 
-	/* Flow only: Flow Measurement's three are int16u, and a bpm x 10 value
+	/* Flow only: Flow Measurement's three are int16u, and the stored value
+	 * (bpm x 10, the 0.1 m^3/h encoding that HA shows as plain bpm)
 	 * never reaches int16s's limit, but storing it unsigned keeps the
 	 * two bytes copied out by HandleReadFlow() honest about their type. */
 	uint16_t mFlowMeasuredValue = 0;

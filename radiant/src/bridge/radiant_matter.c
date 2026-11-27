@@ -192,9 +192,11 @@ static const struct radiant_matter_type_map type_map[] = {
  * table above so that radiant_matter_row() can decline it until an image opts
  * in; this file has no Kconfig by design, so the opt-in is a runtime switch.
  *
- * MeasuredValue is uint16 in 0.1 m^3/h (MeasuredValue = 10 x flow), so
- * bpm x 10 reads back as the bpm figure. The hr adapter posts bpm with exp 0,
- * so 72 bpm is 720.
+ * Home Assistant displays exactly the bpm figure (unit shown: m^3/h).
+ * MeasuredValue holds bpm x 10 because the cluster's unit is 0.1 m^3/h and
+ * HA divides by 10; the x 10 is the cluster's encoding, not something the
+ * user converts. The hr adapter posts bpm with exp 0, so 72 bpm is written
+ * as 720 and shown as 72.0.
  *
  * DEADBAND 2 bpm (20 in the cluster's units), 60 s HEARTBEAT. Heart rate
  * streams at ~4 Hz while a strap is worn and a 1-2 bpm wobble is beat-to-beat

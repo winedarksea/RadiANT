@@ -278,7 +278,8 @@ CHIP_ERROR MeasurementSensorDevice::HandleReadPressure(AttributeId attributeId, 
 /*
  * The passenger's three. The bounds are the range of the quantity actually
  * carried, not of any flow: ANT+ heart rate is one byte, 0-255 bpm, so 0 to
- * 2550 in MeasuredValue's units (radiant_matter.c writes bpm x 10).
+ * 2550 in MeasuredValue's units (radiant_matter.c writes bpm x 10, the
+ * cluster's 0.1 m^3/h encoding, so HA displays exactly 0-255).
  */
 CHIP_ERROR MeasurementSensorDevice::HandleReadFlow(AttributeId attributeId, uint8_t *buffer, uint16_t maxReadLength)
 {

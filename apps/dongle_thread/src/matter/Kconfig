@@ -106,9 +106,11 @@ config ANT_DONGLE_MATTER_HR_PASSENGER
 	help
 	  docs/radiant-bridge.md section 8.3b. Calls
 	  radiant_matter_set_hr_passenger(true) at init, so every heart-rate
-	  binding gains one more endpoint: a Flow Sensor (0x0306) whose Flow
-	  Measurement MeasuredValue is bpm x 10. Home Assistant then shows the
-	  bpm figure with the unit m^3/h. Deadband 2 bpm, 60 s heartbeat.
+	  binding gains one more endpoint: a Flow Sensor (0x0306). Home
+	  Assistant displays exactly the bpm figure (unit shown: m^3/h).
+	  MeasuredValue holds bpm x 10 because the cluster's unit is
+	  0.1 m^3/h and HA divides by 10; nothing to convert. Deadband 2 bpm,
+	  60 s heartbeat.
 
 	  OFF BY DEFAULT ON PURPOSE. The unit is wrong by construction, and a
 	  user who never enables this is never shown a wrong unit. The
