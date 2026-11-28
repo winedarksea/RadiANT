@@ -1,0 +1,8 @@
+23:18:15 [00:26:02.285,859] <inf> hrm: BLE connected
+23:18:16 [00:26:04.034,597] <inf> radiant_ble_adv: connection params updated: interval=11 (13 ms) latency=0 timeout=960 (9600 ms)
+23:18:16 [00:26:04.526,958] <inf> radiant_ble_adv: HRS notifications on
+23:18:18 [00:26:05.874,551] <inf> radiant_ble_adv: connection params updated: interval=35 (43 ms) latency=0 timeout=960 (9600 ms)
+23:18:20 [00:26:07.565,844] <inf> radiant_ble_adv: connection params updated: interval=800 (1000 ms) latency=0 timeout=400 (4000 ms)
+23:24:01 [00:31:48.443,389] <inf> radiant_ble_adv: HRS notifications off
+23:24:01 [00:31:48.443,408] <inf> hrm: BLE disconnected (0x13)
+23:24:01 [00:31:48.443,886] <inf> radiant_ble_adv: BLE advertising (restart)

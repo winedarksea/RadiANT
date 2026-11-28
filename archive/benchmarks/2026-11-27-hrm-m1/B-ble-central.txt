@@ -1,0 +1,12 @@
+[  0.016] looking for a device whose advertised name contains 'RadiANT Test'
+[  0.907] found 'RadiANT Test' at FD:D3:C2:A3:0C:4B (rssi -41)
+[  3.073] connection status: Connected
+[  4.998] Heart Rate service found; GATT is up, so the link is established
+[  5.143] subscribed; holding the connection for 340 s
+[  5.199] HRS notify: 72 bpm  (raw 06 48)
+[  6.194] HRS notify: 72 bpm  (raw 16 48 35 03)
+[  7.199] HRS notify: 72 bpm  (raw 16 48 9A 03)
+...
+[344.023] HRS notify: 72 bpm  (raw 16 48 9B 03)
+[345.023] HRS notify: 72 bpm  (raw 16 48 34 03)
+[345.169] 340 notification(s) in 340 s; disconnecting
