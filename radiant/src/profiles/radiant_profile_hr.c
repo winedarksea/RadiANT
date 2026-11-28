@@ -315,6 +315,17 @@ void radiant_profile_hr_beat(struct radiant_profile_hr *hr, uint16_t event_time)
 	hr->beats++; /* wraps at 256, and is MEANT to */
 }
 
+void radiant_profile_hr_beats(struct radiant_profile_hr *hr, uint16_t n, uint16_t event_time)
+{
+	if (hr == NULL || n == 0u) {
+		return;
+	}
+	/* prev is the last beat actually delivered, not one of the n. */
+	hr->previous_event_time = hr->event_time;
+	hr->event_time = event_time;
+	hr->beats = (uint8_t)(hr->beats + n);
+}
+
 void radiant_profile_hr_set_computed(struct radiant_profile_hr *hr, uint8_t bpm)
 {
 	if (hr != NULL) {

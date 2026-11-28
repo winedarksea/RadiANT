@@ -22,8 +22,14 @@
  *   3. Timestamping with hrm_sensor_now_1024() - the node's own 1/1024 s base,
  *      so no conversion and no second rounding rule sit between the detector
  *      and byte 4 of page 0x00.
- *   4. A `poll` that does the slow, level-valued work (here: nothing but a
- *      contact-state placeholder), which is what poll is FOR - never beats.
+ *   4. A `poll` that does the slow, level-valued work - here a skin-contact
+ *      reading, reported with hrm_sensor_report_contact() on change - which
+ *      is what poll is FOR, never beats. The driver declares
+ *      `contact_supported`, the capability the BLE Measurement's "contact
+ *      supported" bit carries for the life of a connection.
+ *   5. Keeping the rate fresh: the rate is reported once, and the beats keep
+ *      it valid (CONFIG_HRM_BPM_STALE_MS) - a beat refreshes it as a rate
+ *      report does.
  *
  * WHAT IT IS NOT. There is no detector in it: it fires on a timer, so on the
  * air it is indistinguishable from the simulator. Substituting a timer for an
@@ -73,7 +79,9 @@ static int example_start(const struct hrm_sensor *sensor)
 	 * The rate is reported once, from thread context, and then never again:
 	 * a driver whose detector is the source of truth reports the EDGE and
 	 * lets the receiver derive the rate from the accumulator pair. Byte 7 is
-	 * a convenience beside that pair, not a substitute for it.
+	 * a convenience beside that pair, not a substitute for it. Every beat
+	 * keeps it from going stale; if the beats stop for
+	 * CONFIG_HRM_BPM_STALE_MS, both radios report "no reading".
 	 */
 	hrm_sensor_report_rate((uint8_t)bpm);
 
@@ -89,8 +97,22 @@ static int example_stop(const struct hrm_sensor *sensor)
 	return 0;
 }
 
+/*
+ * The contact reading. A real driver reads its AFE's lead-off detector here;
+ * this one has no electrodes and always reads "on", which is the placeholder
+ * a port replaces.
+ */
+static bool example_read_contact(void)
+{
+	return true;
+}
+
 static void example_poll(const struct hrm_sensor *sensor)
 {
+	static bool reported;
+	static bool last;
+	bool contact = example_read_contact();
+
 	ARG_UNUSED(sensor);
 
 	/*
@@ -102,6 +124,15 @@ static void example_poll(const struct hrm_sensor *sensor)
 	 * That is the 72-versus-66.7 bpm bug, re-created on purpose by a driver
 	 * instead of by a scheduler.
 	 */
+
+	/* Level-valued, so report on change (and once at the first poll).
+	 * Losing contact invalidates the rate on both radios at once; after
+	 * it returns, the next beat or rate report makes it valid again. */
+	if (!reported || contact != last) {
+		reported = true;
+		last = contact;
+		hrm_sensor_report_contact(contact);
+	}
 }
 
 static const struct hrm_sensor_api example_api = {
@@ -113,6 +144,7 @@ static const struct hrm_sensor_api example_api = {
 static const struct hrm_sensor example_sensor = {
 	.name = "example (timer-driven, no front end)",
 	.api = &example_api,
+	.contact_supported = true,
 };
 
 static int example_register(void)

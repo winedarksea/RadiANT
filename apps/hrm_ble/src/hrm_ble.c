@@ -25,16 +25,22 @@
 #include <zephyr/bluetooth/conn.h>
 #include <zephyr/bluetooth/uuid.h>
 #include <zephyr/bluetooth/gatt.h>
-#include <zephyr/bluetooth/services/hrs.h>
+#include <zephyr/bluetooth/byteorder.h>
 
 #include <radiant/radiant_ble_adv.h>
 #include <radiant/radiant_ble_dis.h>
+#include <radiant/radiant_ble_hrs.h>
 
 #include "hrm_ble.h"
 
 LOG_MODULE_DECLARE(hrm, CONFIG_HRM_LOG_LEVEL);
 
 static atomic_t connected;
+
+/* Set by every disconnect, taken by the node tick (hrm_ble_take_disconnect()):
+ * the disconnect callback runs in the host's context, and pending RR belongs
+ * to the workqueue. */
+static atomic_t disconnect_seen;
 
 /* 0.625 ms units, which is what the advertising interval is expressed in. */
 #define ADV_UNITS(ms) ((uint32_t)(((uint32_t)(ms) * 1000u) / 625u))
@@ -97,6 +103,18 @@ static struct bt_data ad[] = {
 };
 
 /*
+ * The appearance (833, Heart Rate Belt - CONFIG_BT_DEVICE_APPEARANCE, defaulted
+ * in apps/hrm_ble/Kconfig) in the SCAN RESPONSE, not the advertising payload:
+ * the payload's 22-character name budget above stays as it was, and an active
+ * scanner - nRF Connect, a phone's pairing screen - still sees the icon before
+ * connecting. GAP's Appearance characteristic carries it after.
+ */
+static const struct bt_data sd[] = {
+	BT_DATA_BYTES(BT_DATA_GAP_APPEARANCE,
+		      BT_BYTES_LIST_LE16(CONFIG_BT_DEVICE_APPEARANCE)),
+};
+
+/*
  * ONE definition of what "advertising" means for this node, registered with
  * radiant_ble_adv at start-up and used by it for every restart. The interval
  * is not cosmetic - it IS this application's share of the MPSL arbitration
@@ -136,6 +154,7 @@ static void on_disconnected(struct bt_conn *conn, uint8_t reason)
 {
 	ARG_UNUSED(conn);
 	atomic_set(&connected, 0);
+	atomic_set(&disconnect_seen, 1);
 	LOG_INF("BLE disconnected (0x%02x)", reason);
 	/* No restart here: radiant_ble_adv restarts from `recycled`. */
 }
@@ -150,12 +169,19 @@ bool hrm_ble_connected(void)
 	return atomic_get(&connected) != 0;
 }
 
-void hrm_ble_notify_hr(uint8_t bpm)
+bool hrm_ble_subscribed(void)
 {
-	if (atomic_get(&connected) == 0) {
-		return;
-	}
-	(void)bt_hrs_notify(bpm);
+	return radiant_ble_hrs_subscribed();
+}
+
+int hrm_ble_notify(const struct radiant_ble_hrs_meas *m, size_t *rr_sent)
+{
+	return radiant_ble_hrs_notify(m, rr_sent);
+}
+
+bool hrm_ble_take_disconnect(void)
+{
+	return atomic_set(&disconnect_seen, 0) != 0;
 }
 
 void hrm_ble_tick(void)
@@ -198,7 +224,7 @@ int hrm_ble_start(uint16_t devnum, uint32_t serial)
 	adv_param.interval_min = ADV_UNITS(CONFIG_HRM_BLE_ADV_INTERVAL_MS);
 	adv_param.interval_max = ADV_UNITS(CONFIG_HRM_BLE_ADV_INTERVAL_MS) + 16u;
 
-	err = radiant_ble_adv_init(&adv_param, ad, ARRAY_SIZE(ad), NULL, 0);
+	err = radiant_ble_adv_init(&adv_param, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
 	if (err != 0) {
 		LOG_ERR("radiant_ble_adv_init: %d", err);
 		return err;

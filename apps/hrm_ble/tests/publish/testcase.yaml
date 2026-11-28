@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# The heart-rate node's publish path: beat ring, snapshot, HRS encoder. Reached
+# by the ztest job's `-T app/apps/hrm_ble/tests` (twister walks
+# subdirectories).
+#
+# On Windows there is no native_sim (no host C compiler):
+#
+#   .\scripts\run_ztest_hw.ps1 -App apps\hrm_ble\tests\publish -NcsVersion v3.4.0
+tests:
+  hrm_ble.publish:
+    tags:
+      - radiant
+      - hrm_ble
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim

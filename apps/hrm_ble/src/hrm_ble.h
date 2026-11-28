@@ -3,7 +3,10 @@
 #define HRM_BLE_H_
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
+
+#include <radiant/radiant_ble_hrs.h>
 
 /*
  * P8b: the SIG Heart Rate Service beside the ANT+ 0x78 master.
@@ -12,9 +15,10 @@
  * radiant_product and the unit's 32-bit `serial`, and starts advertising
  * through radiant_ble_adv (which keeps it running across connections). With
  * CONFIG_RADIANT_BLE_NAME_DEVNUM_SUFFIX the name is "<name> <devnum>".
- * The beat work handler in
- * main.c notifies HRS at the same instants it advances the ANT+ accumulators,
- * so the two radios cannot disagree about the rate.
+ * The service itself is radiant_ble_hrs (CONFIG_RADIANT_BLE_HRS): contact
+ * support kept apart from status, RR-Intervals, no Control Point. main.c
+ * notifies it at 1 Hz from the same snapshot that feeds ANT+ byte 7
+ * (src/hrm_publish.h), so the two radios cannot disagree about the rate.
  *
  * Not Garmin-protocol-compatible and no running dynamics - this is the standard
  * SIG service only (not Garmin's proprietary Multi-Link/GFDI). See
@@ -32,7 +36,17 @@ void hrm_ble_tick(void);
  */
 bool hrm_ble_connected(void);
 
-/* Push a heart rate to the SIG service. No-op when nothing is connected. */
-void hrm_ble_notify_hr(uint8_t bpm);
+/* True while a connected collector has Heart Rate Measurement notifications
+ * enabled. */
+bool hrm_ble_subscribed(void);
+
+/* Notify one measurement to every subscribed collector. Returns the number
+ * notified, or a negative errno; *rr_sent is how many of m->rr (oldest first)
+ * an accepted notification carried. Thread context (the node tick). */
+int hrm_ble_notify(const struct radiant_ble_hrs_meas *m, size_t *rr_sent);
+
+/* True once after any link dropped since the last call: the node tick clears
+ * pending RR-Intervals on it. */
+bool hrm_ble_take_disconnect(void);
 
 #endif /* HRM_BLE_H_ */

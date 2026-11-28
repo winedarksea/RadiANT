@@ -23,7 +23,7 @@ repository where RadiANT transmits as a **master** with a profile on top.
 
 **What it is not.**
 
-- **It is not a product.** §5's checklist has nine items, and several of them
+- **It is not a product.** §5's checklist has fourteen items, and several of them
   (the manufacturer ID, the placeholder revisions, signing) are yours to do.
 - **It is not a bench instrument any more, but it was one.** It began as
   `strap/`, written to give the BLE coexistence work (P8/P9) a node whose ANT+
@@ -61,7 +61,8 @@ through the manifest.
 | Fragment | What it adds |
 |---|---|
 | *(none)* | ANT+ only. The baseline, and where a port starts |
-| `ble.conf` | SIG HRS over BLE, plus the MPSL gate. ANT+ keeps transmitting while a phone is connected, which is also the arm that actually stresses the arbiter |
+| `ble.conf` | SIG HRS over BLE (`radiant_ble_hrs`, DIS, appearance 833), plus the MPSL gate. ANT+ keeps transmitting while a phone is connected, which is also the arm that actually stresses the arbiter |
+| `dual.conf;product.conf` | the shippable dual-radio preset: `ble.conf`'s contents plus strict product identity (`product.conf` is your copy of `product.conf.example`; without it the configure is refused) |
 | `ble.conf;ble_suppress.conf` | …but ANT+ stops for the duration of a BLE connection |
 | `sensor_example.conf` | the seam's second implementation instead of the simulator |
 | `sensor_custom.conf` | no implementation of the seam at all — the integrator's starting point |
@@ -118,9 +119,28 @@ struct hrm_sensor_api {
 
 int  hrm_sensor_register(const struct hrm_sensor *sensor);
 void hrm_sensor_report_beat(uint16_t event_time_1024);
-void hrm_sensor_report_rate(uint8_t bpm);
+void hrm_sensor_report_rate(uint8_t bpm);               /* any context */
+void hrm_sensor_report_contact(bool detected);          /* any context */
 uint16_t hrm_sensor_now_1024(void);
+
+/* struct hrm_sensor also carries `bool contact_supported`: a capability,
+ * fixed at registration. */
 ```
+
+A driver may report beats, rates or both; both radios work either way. A rate
+**goes stale**: each report (a repeat of the same value included) and each beat
+keeps it valid for `CONFIG_HRM_BPM_STALE_MS` (3000 by default, at least 2500),
+after which ANT+ byte 7 and the BLE rate are both 0. A driver that can sense
+skin contact sets `contact_supported` and calls `hrm_sensor_report_contact()` on
+every change; losing contact invalidates the rate on both radios at once and
+discards RR-Intervals not yet sent. Beats and rates reported while contact is
+lost count on ANT+ (beats) and nothing else.
+
+**A gap never revives an old rate.** After contact loss or expiry the last
+reported value is not shown again: until a fresh `hrm_sensor_report_rate()`,
+both radios carry a rate derived from the snapshot's own recent valid
+RR-Intervals (60·1024 / their mean), and 0 until there is at least one. A
+driver that never reports a rate gets the derived rate throughout.
 
 ### Why it is push, and why not the two obvious alternatives
 
@@ -155,17 +175,41 @@ workqueue, which advances the accumulators, and the radiant callback path
 (`radiant_ant_on_message()` → `load_next_page()` → `radiant_profile_hr_next()`), which reads
 them. An ISR-driven sensor would make that three-way.
 
-So `hrm_sensor_report_beat()` does not touch `radiant_profile_hr` at all. It writes one
-32-bit `{seq, event_time}` word with a single atomic store — one word so the
-sequence number and the instant it belongs to can never tear apart — and submits
-one work item. The handler runs on the workqueue (context 1, which already
-existed) and does `radiant_profile_hr_beat()`, `radiant_profile_hr_set_computed()` and
-`hrm_ble_notify_hr()` together, so a receiver on either radio cannot see a rate
-the other does not.
+So `hrm_sensor_report_beat()` does not touch `radiant_profile_hr` at all. It pushes
+one `{seq, event_time}` record into a lock-free single-producer/single-consumer
+ring (`src/hrm_beat_ring.h`, 8 entries, Zephyr atomics so the slot store is
+ordered before the index that publishes it) and submits one work item. The
+handler runs on the workqueue (context 1, which already existed) and drains
+**every** record, so a coalesced submission still yields every beat-to-beat
+interval. A beat that finds the ring full is not stored but still advances the
+sequence number, so the ANT+ event count stays exact and the intervals across
+the overflow are dropped — a missing RR-Interval is legal, a wrong one is not.
+
+Each record updates **one snapshot** (`src/hrm_publish.h`):
+`{bpm, stale deadline, contact, RR baseline, pending RR}`. ANT+ byte 7 and the
+BLE Heart Rate Measurement are both read from it, so a receiver on either radio
+cannot see a rate the other does not. BLE notifies at **1 Hz** while a collector
+is subscribed — the snapshot plus the pending RR-Intervals, oldest first; those
+the ATT MTU cannot carry wait for the next notification (HRS 1.0 §3.1.1.5), and
+only what a successful notification carried is removed — so BLE no longer
+depends on whether the driver reports beats, rates or both. The pending buffer
+(16) drops its oldest entry when full, the one legal loss.
+
+The worker's pass order is its own kernel-free, tested function
+(`src/hrm_sensor_pass.h`): a new contact loss first, then the rate, then the
+beats, then contact as it is **after** the drain. So beats drained in a pass
+that starts with contact lost — noise while off the skin, even if the regain
+arrived before the pass ran — count on ANT+ and produce no interval and no rate.
+
+When the ring overflowed, ANT+ gets one profile update for the coalesced beats
+(`radiant_profile_hr_beats()`): the count advances by n and page 4's previous
+event time stays at the last beat really delivered. **A receiver may treat page
+4's (current − previous) as an R-R interval only when the event count advanced
+by exactly 1**; a larger jump spans several beats.
 
 The consumer compares sequence numbers with modular arithmetic, never with `<`,
-which is why 16 bits suffice. The word is **single-producer by construction**:
-exactly one sensor registers, so exactly one context reports. That is what
+which is why 16 bits suffice. The ring is **single-producer by construction**:
+exactly one sensor registers, so exactly one context reports beats. That is what
 `hrm_sensor_register()`'s `-EEXIST` exists to keep.
 
 ### The Kconfig is a `choice`, and that is the safety property
@@ -283,7 +327,7 @@ build as a working node.
 
 ## 5. The production checklist
 
-Nine items. Items 3 and 4 are met by the firmware since ADR 0020 — see §5.1 for
+Fourteen items. Items 3 and 4 are met by the firmware since ADR 0020 — see §5.1 for
 what you still check.
 
 1. **Manufacturer ID ≠ 255.** `CONFIG_RADIANT_PRODUCT_MANUFACTURER_ID`
@@ -321,7 +365,9 @@ what you still check.
    `main.c` calls `(void)hrm_ble_start()` — so an over-long product name ships a
    node that transmits ANT+ perfectly and **never advertises**, with the only
    evidence a log line on a board with no console attached. There is now a
-   `BUILD_ASSERT`.
+   `BUILD_ASSERT`. The appearance (833) goes in the scan response, so it costs
+   this budget nothing. HRP does not require an appearance; it is good practice
+   (the phone shows a heart-rate icon, a collector can filter on it).
 6. **Beat-schedule drift.** See §6 — this is the item with the history.
 7. **The suppression policy.** `CONFIG_HRM_SUPPRESS_ANT_WHEN_CONNECTED` defaults
    off: the strap keeps transmitting ANT+ while a phone is connected, so a watch
@@ -348,6 +394,40 @@ what you still check.
      A watchdog added as a hygiene checkbox here is worse than none.
    - Version: there is no `VERSION` file in this repository yet, so
      `APP_VERSION_STRING` is unavailable.
+10. **The Device Information Service strings.** The Heart Rate Profile requires
+    DIS, and a phone's device screen shows it. Manufacturer Name and Model
+    Number come from `CONFIG_RADIANT_PRODUCT_MANUFACTURER_NAME` /
+    `_MODEL_NAME`, the revisions from the product record, and the Serial Number
+    from the unit's 32-bit serial (absent under `RADIANT_PRODUCT_PRIVACY`).
+    Check them in nRF Connect on a real unit; strict mode refuses only the
+    placeholders it can recognise.
+11. **Contact support and contact status.** Set `contact_supported` in your
+    `struct hrm_sensor` only if your front end has a lead-off detector, and call
+    `hrm_sensor_report_contact()` on every change. Support is the BLE
+    Measurement's "contact supported" bit and never changes during a
+    connection; status is the "detected" bit, live. Claiming support without
+    reporting status shows a strap permanently "on the chest"; Zephyr's stock
+    HRS did exactly that, which is one reason this application no longer uses
+    it.
+12. **RR-Intervals.** They are derived from the instants you pass to
+    `hrm_sensor_report_beat()`, in 1/1024 s, so their quality is your
+    timestamp's quality: pass the AFE's captured edge, not
+    `hrm_sensor_now_1024()` read late in a thread. A collector computing HRV
+    sees every jitter you add. A driver that reports only a rate sends no
+    RR-Intervals, which is legal.
+13. **Rate expiry.** `CONFIG_HRM_BPM_STALE_MS` (3000) is how long a rate stays
+    valid without a report or a beat. Report your rate at least that often while
+    you have one; when your detector loses the signal, stop reporting (or report
+    0) and both radios show "no reading" instead of the last value forever. After
+    that gap the old value never returns: beats bring back a rate derived from
+    their intervals until you report a fresh one. The same number is the longest
+    RR-Interval sent, which is why it cannot go below 2500 ms (30 bpm is a
+    2000 ms interval).
+14. **Reconnect.** Advertising restarts from `recycled`, retries with backoff and
+    has a watchdog (`radiant_ble_adv`), so a dropped link or a failed restart
+    does not leave the unit undiscoverable. Verify it on your hardware: force a
+    link drop and power-cycle, and check that the collector reconnects and the
+    ANT+ side never paused (§7).
 
 ### 5.1 Identity: closed by ADR 0020
 
@@ -403,8 +483,9 @@ Three checks, deliberately at three different costs:
    merely agreeing with whatever the code currently does. The suite runs because
    the `ztest` job passes `-T app/apps/hrm_ble/tests`; `tests/expected_counts.yaml`'s
    scenario floor is what says so if that argument is ever dropped.
-2. **A 60 s bench hold counting HRS notifications** — the measurement that found
-   it. §7.
+2. **A 60 s bench hold counting beats over BLE** — the measurement that found
+   it (by counting notifications, when they were per beat; now by counting
+   RR-Intervals, since notifications are 1 Hz). §7.
 3. **A debug-build runtime self-check** that byte 7 agrees with `61440·n/Σdt`
    within 5 %. *Not implemented.*
 
@@ -435,8 +516,25 @@ re-measures them.
   advertisements in 120 s**, and a 12 s scan and a 40 s scan **both found
   nothing** while the node was demonstrably on the air. A short scan finding
   nothing is not evidence of a problem.
-- **The beat-count hold.** 60 s connected, count HRS notifications, expect 72 at
-  the default rate. This is check 2 of §6 and is what found the drift bug.
+- **The beat-count hold.** 60 s connected, count the RR-Intervals the HRS
+  notifications carry: expect 72 at the default rate, in 60 notifications (one a
+  second). This is check 2 of §6; it found the drift bug when notifications were
+  per beat and were counted directly (the 2026-11-22 run below predates the 1 Hz
+  notification and counted 72 notifications a minute).
+- **Contact toggle (the simulator).** Press **Button 0** (`sw0`) on the DK: the
+  log says `skin contact lost`, the next Measurement's flags read `0x04`
+  (contact supported, not detected) with a rate of 0 and no RR-Intervals, and
+  ANT+ byte 7 reads 0 with the event count frozen. Press again: `skin contact
+  detected`, then flags `0x06` with the rate back within a second (the simulator
+  reports a fresh rate with its first beat) and `0x16` (RR present) from the
+  second beat on. `CONFIG_HRM_SENSOR_SIM_CONTACT_TOGGLE_S=<n>`
+  toggles it on a timer instead, for a bench with nobody at the button.
+- **What nRF Connect should show** on the dual build: the Device Information
+  Service, appearance 833 (Heart Rate Belt) in the scan response and in the GAP
+  Appearance characteristic, and a Heart Rate Service with exactly two
+  characteristics — Heart Rate Measurement (notify) and Body Sensor Location
+  (read, 1 = Chest) — and **no Heart Rate Control Point**.
+
 - **ANT+ and BLE together, 2026-11-22** (`archive/benchmarks/2026-11-22-hrm-dual/`).
   The default `ble.conf` image, A/B/A of 600 s legs (advertising / connected /
   advertising) against a same-window control on a second receiver: ANT+ loss
@@ -459,9 +557,11 @@ is delivered by *shaping the other stack's demand*, which is exactly what
 
 A phone will ask for far less — iOS asks for tens of milliseconds — and accepting
 hands the controller a recurring high-priority event for the life of the
-connection. `src/hrm_ble.c` refuses the update in `le_param_req` and logs it, so
-a degraded node is traceable to a phone connection rather than looking like a
-radio fault.
+connection. The shared connection-parameter policy
+(`radiant/src/ble/radiant_ble_conn.c`, configured from
+`CONFIG_HRM_BLE_MIN_CONN_INTERVAL_UNITS`) rewrites the request in `le_param_req`
+and logs it, so a degraded node is traceable to a phone connection rather than
+looking like a radio fault.
 
 The cost of the long interval is discovery latency, and that cost is the ≥ 90 s
 floor above. It is a real trade, made deliberately, in one direction.
@@ -477,8 +577,10 @@ floor above. It is a real trade, made deliberately, in one direction.
   ramp-up and turnaround figures are from the datasheet, and the two `t_sync`
   calibration constants are seeded from Zephyr's per-SoC BLE chain delays rather
   than measured.
-- **The BLE half has never been compiled, let alone run, on an nRF52.** SDC,
-  MPSL and the gate together on that family is untested.
+- **The BLE half has been compiled on an nRF52 but never run there.** The
+  `node_dual_52840` row (`scripts/build_all.ps1`, and the matching `build-node`
+  row) builds SDC, MPSL and the gate together on the nRF52840; no nRF52 bench
+  session has run it.
 - **A full flash erase re-rolls the device number** — §5.1, ADR 0020.
 - **No signing, watchdog or version string** — §5, item 9.
 - **The MPSL gate's BLE arm is the less-measured one.** `radiant-bridge.md`

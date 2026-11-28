@@ -250,6 +250,21 @@ if ($Backend -eq 'core') {
 # the symbol's own definition, and only a .config read-back catches it.
 #
 # Only under -Backend core: this application has no ANT_RADIO axis at all.
+#
+# What the dual-radio preset must contain to be a Heart Rate Profile sensor
+# beside the ANT+ HRM, asserted on both dual success rows (and mirrored in
+# release.yml's build-node rows): radiant's own Heart Rate Service and NOT
+# Zephyr's (which always claims contact and exposes a Control Point with no
+# Energy Expended), the ANT+ heart-rate node, DIS (HRP requires it), strict
+# identity, and the Heart Rate Belt appearance.
+$hrmDualAsserts = @(
+    'CONFIG_RADIANT_BLE_HRS=y',
+    'CONFIG_HRM=y',
+    '# CONFIG_BT_HRS is not set',
+    'CONFIG_BT_DIS=y',
+    'CONFIG_RADIANT_PRODUCT_STRICT=y',
+    'CONFIG_BT_DEVICE_APPEARANCE=833'
+)
 $nodeTargets = @(
     @{ dir='node_l15';        board='nrf54l15dk/nrf54l15/cpuapp';    sensor='SIMULATED'; conf=$null }
     # The other half of radiant/Kconfig's `SOC_COMPATIBLE_NRF52X ||
@@ -284,8 +299,8 @@ $nodeTargets = @(
     # identity) with the checked-in TEST identity, on both SoC families.
     # Asserted: strict on, the shared BLE layer and DIS in, the identity
     # values landed. The 52840 row is build-verified only.
-    @{ dir='node_dual';       board='nrf54l15dk/nrf54l15/cpuapp';    sensor='SIMULATED'; conf='dual.conf;../../tests/product_test.conf'; ble=$true; assert_config=@('CONFIG_RADIANT_PRODUCT_STRICT=y', 'CONFIG_RADIANT_BLE=y', 'CONFIG_BT_DIS=y', 'CONFIG_RADIANT_PRODUCT_MANUFACTURER_ID=65534', '# CONFIG_BT_DIS_PNP is not set') }
-    @{ dir='node_dual_52840'; board='nrf52840dk/nrf52840';           sensor='SIMULATED'; conf='dual.conf;../../tests/product_test.conf'; ble=$true; assert_config=@('CONFIG_RADIANT_PRODUCT_STRICT=y', 'CONFIG_RADIANT_BLE=y', 'CONFIG_BT_DIS=y') }
+    @{ dir='node_dual';       board='nrf54l15dk/nrf54l15/cpuapp';    sensor='SIMULATED'; conf='dual.conf;../../tests/product_test.conf'; ble=$true; assert_config=@('CONFIG_RADIANT_PRODUCT_STRICT=y', 'CONFIG_RADIANT_BLE=y', 'CONFIG_BT_DIS=y', 'CONFIG_RADIANT_PRODUCT_MANUFACTURER_ID=65534', '# CONFIG_BT_DIS_PNP is not set', 'CONFIG_HRM_SENSOR_SIM_CONTACT_BUTTON=y') + $hrmDualAsserts }
+    @{ dir='node_dual_52840'; board='nrf52840dk/nrf52840';           sensor='SIMULATED'; conf='dual.conf;../../tests/product_test.conf'; ble=$true; assert_config=@('CONFIG_RADIANT_PRODUCT_STRICT=y', 'CONFIG_RADIANT_BLE=y', 'CONFIG_BT_DIS=y') + $hrmDualAsserts }
     # The same preset with NO product identity must FAIL TO CONFIGURE: the
     # strict check is the only thing between a manufacturer and a shipped
     # image that says "manufacturer 255". The row passes when west fails and
@@ -684,9 +699,16 @@ try {
             # with the gate but session count 0, every timeslot session_open()
             # fails while the image still runs.
             if ($t.ble) {
+                # Plus the service: radiant_ble_hrs selected in place of
+                # Zephyr's BT_HRS, and the appearance (good practice; HRP does not require it).
                 foreach ($sym in @('CONFIG_HRM_BLE_HRS=y',
                                    'CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL=y',
-                                   'CONFIG_MPSL_TIMESLOT_SESSION_COUNT=2')) {
+                                   'CONFIG_MPSL_TIMESLOT_SESSION_COUNT=2',
+                                   'CONFIG_RADIANT_BLE=y',
+                                   'CONFIG_BT_DIS=y',
+                                   'CONFIG_RADIANT_BLE_HRS=y',
+                                   '# CONFIG_BT_HRS is not set',
+                                   'CONFIG_BT_DEVICE_APPEARANCE=833')) {
                     if (-not ($cfg | Where-Object { $_ -eq $sym })) {
                         throw "hrm_ble $($t.dir): expected $sym in .config"
                     }

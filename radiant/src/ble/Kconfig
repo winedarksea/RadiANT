@@ -270,6 +270,30 @@ config RADIANT_BLE_PAIRING_WINDOW_AT_BOOT_S
 	  slot lets the first pairing attempt succeed, and only then is the
 	  least recently used bond deleted to restore the spare.
 
+config RADIANT_BLE_HRS
+	bool "SIG Heart Rate Service (radiant_ble_hrs.h)"
+	depends on !BT_HRS
+	help
+	  The Heart Rate Service for a sensor that also broadcasts ANT+
+	  heart rate: Measurement notifications with contact support kept
+	  apart from contact status, RR-Intervals in 1/1024 s (newest kept
+	  when the ATT MTU cannot hold them all), Body Sensor Location from
+	  RADIANT_BLE_HRS_BODY_SENSOR_LOCATION, and no Control Point (no
+	  Energy Expended). The Measurement bytes come from a pure encoder,
+	  radiant_ble_hrs_encode(). See <radiant/radiant_ble_hrs.h>.
+
+	  Excludes Zephyr's BT_HRS: two Heart Rate Services in one GATT
+	  database would leave a collector to pick one at random.
+
+config RADIANT_BLE_HRS_BODY_SENSOR_LOCATION
+	int "Body Sensor Location (0 Other, 1 Chest, 2 Wrist, 3 Finger, 4 Hand, 5 Ear Lobe, 6 Foot)"
+	depends on RADIANT_BLE_HRS
+	range 0 6
+	default 1
+	help
+	  The value of the read-only Body Sensor Location characteristic.
+	  A chest strap is 1. Values 7..255 are reserved.
+
 module = RADIANT_BLE
 module-str = radiant BLE layer
 source "subsys/logging/Kconfig.template.log_config"

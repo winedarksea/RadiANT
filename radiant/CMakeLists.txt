@@ -356,6 +356,12 @@ if(CONFIG_RADIANT_BLE)
   )
   zephyr_library_sources_ifdef(CONFIG_RADIANT_BLE_CONN_POLICY src/ble/radiant_ble_conn.c)
   zephyr_library_sources_ifdef(CONFIG_RADIANT_BLE_PAIRING_WINDOW src/ble/radiant_ble_pairing.c)
+  # The Heart Rate Service. radiant_ble_hrs_encode.c is kernel-free and is
+  # also compiled, unmodified, by apps/hrm_ble/tests/publish on native_sim.
+  zephyr_library_sources_ifdef(CONFIG_RADIANT_BLE_HRS
+    src/ble/radiant_ble_hrs_encode.c
+    src/ble/radiant_ble_hrs.c
+  )
 endif()
 
 # X25519, under its own symbol and in src/ext/ because it is a standard
