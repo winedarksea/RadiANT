@@ -11,9 +11,10 @@
  * return.
  *
  * The control path is the other direction and has the opposite rule: it is
- * called from thread context on both radios and it calls straight into the
- * source, because moving an actuator is exactly the kind of work that may
- * block and the caller is already somewhere it can.
+ * called on the system workqueue, from treadmill_cmd.c only and behind the
+ * motion rule, and it calls straight into the source, because moving an
+ * actuator is exactly the kind of work that may block and the caller is
+ * already somewhere it can.
  */
 
 #include <errno.h>
@@ -21,6 +22,7 @@
 #include <zephyr/logging/log.h>
 
 #include "treadmill_source.h"
+#include "treadmill_source_ctrl.h"
 #include "treadmill_state.h"
 
 LOG_MODULE_DECLARE(treadmill, CONFIG_TREADMILL_LOG_LEVEL);
@@ -59,6 +61,16 @@ static uint16_t producer_strides;
 
 static void report_work_fn(struct k_work *w);
 static K_WORK_DEFINE(report_work, report_work_fn);
+
+/* EVENTS, unlike levels, must not coalesce: two button presses are two
+ * presses. A message queue is ISR-safe with K_NO_WAIT and keeps them in
+ * order; its own work item drains it on the system workqueue. */
+#define EVENT_QUEUE_DEPTH 8
+K_MSGQ_DEFINE(event_q, sizeof(uint8_t), EVENT_QUEUE_DEPTH, 1);
+static atomic_t events_dropped;
+
+static void event_work_fn(struct k_work *w);
+static K_WORK_DEFINE(event_work, event_work_fn);
 
 int treadmill_source_register(const struct treadmill_source *src)
 {
@@ -153,6 +165,71 @@ int treadmill_source_set_speed(uint32_t mm_s)
 	return registered->api->set_speed(registered, mm_s);
 }
 
+/* The workout hooks. Reached only from treadmill_cmd.c, behind the motion
+ * rule (treadmill_source_ctrl.h). */
+static int call_hook(int (*fn)(const struct treadmill_source *src))
+{
+	if (registered == NULL) {
+		return -ENODEV;
+	}
+	if (fn == NULL) {
+		return -ENOTSUP;
+	}
+	return fn(registered);
+}
+
+int treadmill_source_workout_start(void)
+{
+	return call_hook((registered != NULL) ? registered->api->workout_start : NULL);
+}
+
+int treadmill_source_workout_pause(void)
+{
+	return call_hook((registered != NULL) ? registered->api->workout_pause : NULL);
+}
+
+int treadmill_source_workout_resume(void)
+{
+	return call_hook((registered != NULL) ? registered->api->workout_resume : NULL);
+}
+
+int treadmill_source_workout_stop(void)
+{
+	if (registered != NULL && registered->api->workout_stop == NULL) {
+		/* A Stop must never be "not supported" on a machine that can be
+		 * told a speed: fall back to speed 0. */
+		return treadmill_source_set_speed(0u);
+	}
+	return call_hook((registered != NULL) ? registered->api->workout_stop : NULL);
+}
+
+bool treadmill_source_remote_motion_allowed(void)
+{
+	/* No source, or no answer: NO. See the api's remote_motion_allowed. */
+	if (registered == NULL || registered->api->remote_motion_allowed == NULL) {
+		return false;
+	}
+	return registered->api->remote_motion_allowed(registered);
+}
+
+void treadmill_source_get_caps(struct treadmill_source_caps *out)
+{
+	const struct treadmill_source_api *api =
+		(registered != NULL) ? registered->api : NULL;
+
+	*out = (struct treadmill_source_caps){ 0 };
+	if (api == NULL) {
+		return;
+	}
+	out->set_speed = (api->set_speed != NULL);
+	out->set_incline = (api->set_incline != NULL);
+	out->workout_start = (api->workout_start != NULL);
+	out->workout_pause = (api->workout_pause != NULL);
+	out->workout_resume = (api->workout_resume != NULL);
+	out->workout_stop = (api->workout_stop != NULL);
+	out->remote_motion_allowed = (api->remote_motion_allowed != NULL);
+}
+
 /* ── The report path ────────────────────────────────────────────────────── */
 
 void treadmill_source_report_speed(uint32_t mm_s)
@@ -215,6 +292,37 @@ static void report_work_fn(struct k_work *w)
 	consumed_strides = seq;
 
 	treadmill_node_deliver(strides);
+}
+
+int treadmill_source_report_event(enum treadmill_source_event evt)
+{
+	uint8_t e = (uint8_t)evt;
+
+	if (k_msgq_put(&event_q, &e, K_NO_WAIT) != 0) {
+		/* Not LOG_*: this may be an ISR. Counted, and the handler
+		 * reports the count on its next pass. */
+		atomic_inc(&events_dropped);
+		(void)k_work_submit(&event_work);
+		return -ENOSPC;
+	}
+	(void)k_work_submit(&event_work);
+	return 0;
+}
+
+static void event_work_fn(struct k_work *w)
+{
+	uint8_t e;
+	atomic_val_t dropped = atomic_set(&events_dropped, 0);
+
+	ARG_UNUSED(w);
+
+	if (dropped != 0) {
+		LOG_ERR("treadmill_source: %ld event(s) lost, the queue was full",
+			(long)dropped);
+	}
+	while (k_msgq_get(&event_q, &e, K_NO_WAIT) == 0) {
+		treadmill_node_event((enum treadmill_source_event)e);
+	}
 }
 
 /* ---------------------------------------------------------------------------

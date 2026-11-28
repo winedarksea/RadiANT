@@ -210,6 +210,78 @@ config TREADMILL_SOURCE_CUSTOM
 
 endchoice
 
+config TREADMILL_SIM_REMOTE_ENABLED
+	bool "simulator: remote control enabled at boot"
+	depends on TREADMILL_SOURCE_SIMULATED
+	default y
+	help
+	  The simulated console's remote-enable switch at power-on, which is
+	  half of the source's remote_motion_allowed() (the other half is the
+	  safety key). With it off, every remote motion command - FTMS
+	  Start, speed, incline, FE-C page 51 - is refused until the switch
+	  is toggled (TREADMILL_SIM_BUTTONS: sw1). Stopping always works.
+
+config TREADMILL_SIM_BUTTONS
+	bool "simulator: the DK's four buttons are the console"
+	depends on TREADMILL_SOURCE_SIMULATED
+	depends on GPIO
+	depends on $(dt_alias_enabled,sw0) && $(dt_alias_enabled,sw1)
+	depends on $(dt_alias_enabled,sw2) && $(dt_alias_enabled,sw3)
+	default y if !RADIANT_NRF_LOW_POWER
+	help
+	  sw0 pulls/replaces the safety key, sw1 toggles remote control,
+	  sw2 is the console's Start/Pause (hold 1.5 s for Stop), sw3 opens
+	  the BLE pairing window (hold 5 s to forget every bond). See
+	  src/treadmill_sim.c.
+
+# ── Remote motion ───────────────────────────────────────────────────────────
+#
+# THE MOTION RULE (src/treadmill_session.h). Every path that can start the
+# belt, raise its speed or move the deck goes through treadmill_motion_permitted()
+# and nothing else: FTMS Start/Resume, Set Target Speed, Set Target Inclination,
+# the incline half of FTMS Reset, FE-C page 51 and the BLE grade provider.
+# Stopping always passes.
+
+config TREADMILL_REMOTE_START
+	bool "allow a remote controller to START the belt"
+	help
+	  Off by default, and the default is the safety decision. With it off
+	  a remote controller - an FTMS client or an FE-C head unit - can
+	  change speed and grade only while the belt is ALREADY RUNNING
+	  (started at the console), and can always stop it. FTMS Start/Resume
+	  and a Set Target Speed above 0 from Idle, Paused or Stopped answer
+	  0x05 Control Not Permitted.
+
+	  Turn it on only for a machine whose own design makes a remotely
+	  started belt safe (a standing-detection deck, an attendant), and
+	  say so in the product's documentation. The source's
+	  remote_motion_allowed() (safety key present, remote enabled at the
+	  console) and the safety-key latch still apply either way.
+
+# ── What the machine advertises ─────────────────────────────────────────────
+#
+# DERIVED, NOT DECLARED. The FTMS Target Setting bits and FE-C page 54's
+# Simulation bit come from which source entry points are non-NULL
+# (src/treadmill_caps.c); these switches can only take a capability AWAY, for a
+# machine whose driver can move something the product does not want remote
+# controllers to touch. A switch on for a NULL setter advertises nothing.
+
+config TREADMILL_CAP_SPEED_TARGET
+	bool "advertise speed control (FTMS Speed Target Setting) if the source can"
+	default y
+	help
+	  FTMS Target Setting bit 0 and op code 0x02. Both go together: a
+	  declared bit with a refused op code, or the reverse, makes a client
+	  report the machine as broken.
+
+config TREADMILL_CAP_INCLINE_TARGET
+	bool "advertise incline control (FTMS Inclination Target, FE-C Simulation) if the source can"
+	default y
+	help
+	  FTMS Target Setting bit 1 with op code 0x03, and FE-C page 54's
+	  Simulation mode bit with page 51. With it off (or a NULL
+	  set_incline) page 51 answers NOT_SUPPORTED and 0x03 answers 0x02.
+
 # ── The machine's range ─────────────────────────────────────────────────────
 #
 # TRANSPORT-NEUTRAL, and that is the fix these exist for. Every command path is
@@ -359,6 +431,17 @@ config TREADMILL_BLE_MIN_CONN_INTERVAL_UNITS
 
 	  Enforced by radiant/src/ble/radiant_ble_conn.c through
 	  RADIANT_BLE_CONN_MIN_INTERVAL_UNITS, which defaults to this.
+
+config TREADMILL_PAIRING_WINDOW_S
+	int "pairing window opened by the console's pairing control, seconds"
+	depends on TREADMILL_BLE && RADIANT_BLE_PAIRING_WINDOW
+	range 10 600
+	default 120
+	help
+	  How long radiant_ble_pairing_window_open() runs when the source
+	  reports TREADMILL_EVT_PAIRING_WINDOW (the simulator: sw3). New
+	  phones can bond only inside the window; bonded ones always
+	  reconnect. TREADMILL_EVT_FORGET_BONDS clears every bond.
 
 config TREADMILL_BLE_NOTIFY_INTERVAL_MS
 	int "Treadmill Data notification interval, milliseconds"

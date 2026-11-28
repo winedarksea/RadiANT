@@ -59,6 +59,8 @@
 #include <radiant/radiant_profile_fec_tx.h>
 #include <radiant/radiant_profile_sdm.h>
 #include "treadmill_source.h"
+/* TEMPORARY until treadmill_cmd.c owns every actuating call. */
+#include "treadmill_source_ctrl.h"
 #include "treadmill_state.h"
 
 #if defined(CONFIG_TREADMILL_CTRL_POLICY_EXCLUSIVE)
@@ -250,6 +252,12 @@ void treadmill_node_deliver(uint32_t strides)
 	treadmill_state_add_strides(&state, strides);
 
 	publish();
+}
+
+/* The source's events. Wired to the session in a following change. */
+void treadmill_node_event(enum treadmill_source_event evt)
+{
+	LOG_DBG("source event %u", (unsigned)evt);
 }
 
 /* ---------------------------------------------------------------------------
