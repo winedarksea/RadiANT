@@ -1995,6 +1995,156 @@ jobs:
           path-filter: "*treadmill*"
           expect: ${{ matrix.assert_symbols }}
 
+  # apps/smart_trainer - the FE-C + FTMS Indoor Bike reference design (Phase 4).
+  # A clone of build-treadmill for the reason that job gives (its own source
+  # choice and BLE symbol set), image-scoped conf flags for the reason it gives
+  # (a plain -DEXTRA_CONF_FILE never reaches a sysbuild image). Not apps/trainer,
+  # the ACK-fault simulator below, which refuses BLE by construction.
+  build-smart-trainer:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: "smart_trainer: ANT+ FE-C"
+            board: nrf54l15dk/nrf54l15/cpuapp
+            assert_symbols: |
+              CONFIG_RADIANT_BACKEND_NRF=y
+              CONFIG_SMART_TRAINER_SOURCE_SIMULATED=y
+              CONFIG_RADIANT_NODE_IDENT_SELF_PROVISION=y
+              # CONFIG_BT is not set
+              absent:CONFIG_SMART_TRAINER_BLE
+          - name: "smart_trainer: ANT+ FE-C (nRF52840)"
+            board: nrf52840dk/nrf52840
+            assert_symbols: |
+              CONFIG_RADIANT_BACKEND_NRF=y
+              CONFIG_SMART_TRAINER_SOURCE_SIMULATED=y
+              # CONFIG_BT is not set
+          # The named dual-radio preset with the TEST identity on both SoC
+          # families, and the bare preset, which must fail to configure.
+          - name: "smart_trainer: dual preset, test identity"
+            board: nrf54l15dk/nrf54l15/cpuapp
+            image_conf: "dual.conf;../../tests/product_test.conf"
+            assert_symbols: |
+              CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL=y
+              CONFIG_MPSL_TIMESLOT_SESSION_COUNT=2
+              CONFIG_SMART_TRAINER_BLE=y
+              CONFIG_BT_SMP=y
+              CONFIG_BT_LL_SOFTDEVICE=y
+              CONFIG_RADIANT_PRODUCT_STRICT=y
+              CONFIG_RADIANT_BLE=y
+              CONFIG_BT_DIS=y
+              CONFIG_RADIANT_PRODUCT_MANUFACTURER_ID=65534
+              CONFIG_RADIANT_BLE_FTMS=y
+              CONFIG_RADIANT_BLE_FTMS_INDOOR_BIKE=y
+              CONFIG_SMART_TRAINER=y
+              CONFIG_RADIANT_CTRL_ARBITER=y
+              CONFIG_SMART_TRAINER_CAP_ERG=y
+              CONFIG_SMART_TRAINER_CAP_RESISTANCE=y
+              CONFIG_SMART_TRAINER_CAP_SIM=y
+              CONFIG_RADIANT_BLE_PAIRING_WINDOW=y
+          - name: "smart_trainer: dual preset, test identity (nRF52840)"
+            board: nrf52840dk/nrf52840
+            image_conf: "dual.conf;../../tests/product_test.conf"
+            assert_symbols: |
+              CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL=y
+              CONFIG_MPSL_TIMESLOT_SESSION_COUNT=2
+              CONFIG_SMART_TRAINER_BLE=y
+              CONFIG_BT_SMP=y
+              CONFIG_BT_LL_SOFTDEVICE=y
+              CONFIG_RADIANT_PRODUCT_STRICT=y
+              CONFIG_RADIANT_BLE=y
+              CONFIG_BT_DIS=y
+              CONFIG_RADIANT_PRODUCT_MANUFACTURER_ID=65534
+              CONFIG_RADIANT_BLE_FTMS=y
+              CONFIG_RADIANT_BLE_FTMS_INDOOR_BIKE=y
+              CONFIG_SMART_TRAINER=y
+              CONFIG_RADIANT_CTRL_ARBITER=y
+              CONFIG_SMART_TRAINER_CAP_ERG=y
+              CONFIG_SMART_TRAINER_CAP_RESISTANCE=y
+              CONFIG_SMART_TRAINER_CAP_SIM=y
+              CONFIG_RADIANT_BLE_PAIRING_WINDOW=y
+          - name: "smart_trainer: dual preset without an identity is refused"
+            board: nrf54l15dk/nrf54l15/cpuapp
+            image_conf: dual.conf
+            expect_fail: "CONFIG_RADIANT_PRODUCT_STRICT refuses this product identity"
+          - name: "smart_trainer: custom source (nothing registered)"
+            board: nrf54l15dk/nrf54l15/cpuapp
+            image_conf: source_custom.conf
+            assert_symbols: |
+              CONFIG_SMART_TRAINER_SOURCE_CUSTOM=y
+              # CONFIG_SMART_TRAINER_SOURCE_SIMULATED is not set
+
+    steps:
+      - name: Checkout application
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          path: app
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up Zephyr workspace and toolchain
+        uses: zephyrproject-rtos/action-zephyr-setup@cc223fe61661d8573c1cd3f95f72f90cce729ae9 # v1.0.16
+        with:
+          app-path: app
+          toolchains: arm-zephyr-eabi
+
+      - name: Cache ccache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cache/ccache
+          key: ccache-smart-trainer-${{ strategy.job-index }}-${{ github.sha }}
+          restore-keys: |
+            ccache-smart-trainer-${{ strategy.job-index }}-
+
+      - name: Build
+        env:
+          BOARD: ${{ matrix.board }}
+          IMAGE_CONF: ${{ matrix.image_conf }}
+          EXPECT_FAIL: ${{ matrix.expect_fail }}
+        run: |
+          set -euxo pipefail
+          extra=("-DRADIANT_BACKEND=nrf")
+          # IMAGE-SCOPED: the prefix is the application directory's basename.
+          if [[ -n "${IMAGE_CONF}" ]]; then
+            extra+=("-Dsmart_trainer_EXTRA_CONF_FILE=${IMAGE_CONF}")
+          fi
+          if [[ -n "${EXPECT_FAIL}" ]]; then
+            if west build app/apps/smart_trainer -b "${BOARD}" -d build -p always \
+                 -- "${extra[@]}" > build.log 2>&1; then
+              cat build.log
+              echo "::error::configured and built, but must be refused: ${EXPECT_FAIL}"
+              exit 1
+            fi
+            if ! grep -qF "${EXPECT_FAIL}" build.log; then
+              tail -50 build.log
+              echo "::error::failed, but not with: ${EXPECT_FAIL}"
+              exit 1
+            fi
+            echo "refused as expected: ${EXPECT_FAIL}"
+            exit 0
+          fi
+          west build app/apps/smart_trainer \
+            -b "${BOARD}" \
+            -d build \
+            -p always \
+            -- "${extra[@]}"
+
+      - name: Verify the configuration that was asked for took effect
+        if: matrix.expect_fail == ''
+        uses: ./app/.github/actions/assert-kconfig
+        with:
+          path-filter: "*smart_trainer*"
+          expect: ${{ matrix.assert_symbols }}
+
   # apps/trainer: an FE-C bike trainer SIMULATOR with programmable ACK faults,
   # for measuring a dongle's ACK window against known, injected behaviour. It
   # is the one image in this tree that MUST carry CONFIG_RADIANT_ACK_FAULTS -
@@ -2995,6 +3145,7 @@ jobs:
       - build-new-apps
       - build-node
       - build-treadmill
+      - build-smart-trainer
       - build-trainer
       - zero-cost
     runs-on: ubuntu-24.04

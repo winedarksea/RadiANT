@@ -6,15 +6,12 @@
  * row is what keeps the nRF52 half of that compiled - on the family most
  * existing ANT+ silicon actually is.
  *
- * BUILD-VERIFIED ONLY, AND ANT+ ONLY. Nothing here has been on a bench, and
- * this application's BLE arm is deliberately NOT built on this part: it would
- * be the first time SDC, MPSL, the gate, two hand-written GATT services and
- * SMP were compiled together on the nRF52 family, which makes it valuable and
- * also makes it the configuration most likely to fail for a reason nobody here
- * can reproduce - there is no nRF52 bench slot for this application.
- * docs/radiant-bridge.md section 11 already rates the part "very tight" for a
- * full build, and this application is heavier than that one. It lands with the
- * first nRF52 bench session, not before it.
+ * BUILD-VERIFIED ONLY. Nothing here has been on a bench. Unlike apps/treadmill,
+ * the BLE arm IS built on this part (scripts/build_all.ps1 trainer_dual_52840:
+ * dual.conf, FTMS Indoor Bike, SDC + MPSL + the gate, 2026-11-28: 276.9 kB flash,
+ * 84.0 kB RAM) - one ANT+ master and one GATT service is lighter than the
+ * treadmill. Built is not measured: there is no nRF52 bench slot for this
+ * application yet.
  *
  * radiant/Kconfig's own help records that this part's on-air behaviour is
  * predicted from the nRF54L15 measurements rather than confirmed. Do not read a
