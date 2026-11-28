@@ -448,7 +448,6 @@ static void apply_control_page(const uint8_t *body, uint32_t rx_epoch)
 	 * FTMS Request Control and is answered REJECTED.
 	 */
 	switch (page) {
-	case RADIANT_PROFILE_FEC_PAGE_TRACK_RESISTANCE: {	switch (page) {
 	case RADIANT_PROFILE_FEC_PAGE_TRACK_RESISTANCE: {
 		struct radiant_profile_fec_cmd_track_resistance cmd;
 
