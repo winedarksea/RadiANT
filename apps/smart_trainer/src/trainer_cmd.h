@@ -120,7 +120,7 @@ struct trainer_fec_answer trainer_cmd_fec(const uint8_t *body, uint32_t rx_epoch
  * A request received before the epoch moved, or while the BLE side does not
  * hold the arbiter token, is -ECANCELED / -EACCES (0x04).
  */
-int trainer_cmd_ftms_set_target(const struct radiant_ble_ftms_target *t, uint32_t epoch,
+int trainer_cmd_ftms_set_target(struct radiant_ble_ftms_target *t, uint32_t epoch,
 				void *ctx);
 int trainer_cmd_ftms_workout(enum radiant_ble_ftms_workout w, uint32_t epoch, void *ctx);
 int trainer_cmd_ftms_reset(bool motion_ok, uint32_t epoch, void *ctx);

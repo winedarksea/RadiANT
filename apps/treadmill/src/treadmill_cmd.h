@@ -92,7 +92,7 @@ int treadmill_cmd_grade_provider(int32_t grade_centi);
 
 /* The FTMS machine hooks (struct radiant_ble_ftms_ops / _auth). `epoch` is the
  * session epoch at receipt; `ctx` is unused. */
-int treadmill_cmd_ftms_set_target(const struct radiant_ble_ftms_target *t, uint32_t epoch,
+int treadmill_cmd_ftms_set_target(struct radiant_ble_ftms_target *t, uint32_t epoch,
 				  void *ctx);
 int treadmill_cmd_ftms_workout(enum radiant_ble_ftms_workout w, uint32_t epoch, void *ctx);
 int treadmill_cmd_ftms_reset(bool motion_ok, uint32_t epoch, void *ctx);

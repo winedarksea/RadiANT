@@ -365,12 +365,18 @@ static bool last_reset_motion_ok;
 
 static uint32_t last_epoch;
 
-static int fake_set_target(const struct radiant_ble_ftms_target *t, uint32_t epoch, void *ctx)
+/* When set, the hook reports this grade as the one it applied. */
+static bool clamp_grade_to_set;
+static int16_t clamp_grade_to;
+
+static int fake_set_target(struct radiant_ble_ftms_target *t, uint32_t epoch, void *ctx)
 {
-	ARG_UNUSED(t);
 	ARG_UNUSED(ctx);
 	last_epoch = epoch;
 	set_target_calls++;
+	if (clamp_grade_to_set && t->op == RADIANT_BLE_FTMS_OP_SET_BIKE_SIM) {
+		t->v.sim.grade_centi = clamp_grade_to;
+	}
 	return set_target_rc;
 }
 
@@ -661,6 +667,55 @@ ZTEST(radiant_ftms_core, test_feature_range_and_service_data_bytes)
 					    RADIANT_BLE_FTMS_TYPE_INDOOR_BIKE);
 	zassert_equal(sd[3], 0x20, "indoor bike is bit 5");
 	zassert_equal(radiant_ble_ftms_service_data(sd, 4, true, 1), 0u, NULL);
+}
+
+ZTEST(radiant_ftms_core, test_status_carries_the_value_the_hook_applied)
+{
+	struct radiant_ble_ftms_cp_decision d = {
+		.op = 0x11, .action = RADIANT_BLE_FTMS_ACT_SET_TARGET,
+		.target = { .op = 0x11, .v.sim = { .grade_centi = 30000, .crr_e4 = 40,
+						    .cw_centi = 51 } },
+	};
+	struct radiant_ble_ftms_cp_outcome o;
+
+	exec_reset();
+	clamp_grade_to_set = true;
+	clamp_grade_to = 20000; /* the machine clamped +300 % to +200 % */
+	o = radiant_ble_ftms_cp_execute(&d, &ops);
+	clamp_grade_to_set = false;
+	zassert_equal(o.result, RADIANT_BLE_FTMS_RESULT_SUCCESS);
+	zassert_equal(o.status[0], 0x12);
+	zassert_equal(o.status[3] | (o.status[4] << 8), 20000, "the applied grade");
+	zassert_equal(d.target.v.sim.grade_centi, 30000, "the decision is not modified");
+}
+
+ZTEST(radiant_ftms_core, test_start_while_running_is_a_no_op_on_a_passive_machine)
+{
+	static const uint8_t start[] = { 0x07 };
+	struct radiant_ble_ftms_caps bike = bike_caps();
+	struct radiant_ble_ftms_caps tm = treadmill_caps();
+	struct radiant_ble_ftms_cp_decision d;
+	struct radiant_ble_ftms_cp_outcome o;
+
+	bike.passive = true;
+	d = decide(start, 1u, RADIANT_BLE_FTMS_RUN_RUNNING, &bike, RADIANT_BLE_FTMS_OWNER_SELF);
+	zassert_equal(d.action, RADIANT_BLE_FTMS_ACT_NONE);
+	zassert_equal(d.result, RADIANT_BLE_FTMS_RESULT_SUCCESS);
+	exec_reset();
+	o = radiant_ble_ftms_cp_execute(&d, &ops);
+	zassert_equal(o.result, RADIANT_BLE_FTMS_RESULT_SUCCESS);
+	zassert_equal(workout_calls, 0, "a no-op reaches no hook");
+	zassert_equal(o.status_len, 0u);
+
+	/* Still subject to control, and not RUNNING behaves as before. */
+	d = decide(start, 1u, RADIANT_BLE_FTMS_RUN_RUNNING, &bike, RADIANT_BLE_FTMS_OWNER_NONE);
+	zassert_equal(d.result, RADIANT_BLE_FTMS_RESULT_CONTROL_NOT_PERMITTED);
+	d = decide(start, 1u, RADIANT_BLE_FTMS_RUN_IDLE, &bike, RADIANT_BLE_FTMS_OWNER_SELF);
+	zassert_equal(d.action, RADIANT_BLE_FTMS_ACT_START);
+
+	/* A treadmill (passive false) is unchanged: 0x04. */
+	d = decide(start, 1u, RADIANT_BLE_FTMS_RUN_RUNNING, &tm, RADIANT_BLE_FTMS_OWNER_SELF);
+	zassert_equal(d.result, RADIANT_BLE_FTMS_RESULT_OPERATION_FAILED);
 }
 
 ZTEST_SUITE(radiant_ftms_core, NULL, NULL, core_reset, NULL, NULL);

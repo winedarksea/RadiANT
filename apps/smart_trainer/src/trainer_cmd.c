@@ -98,6 +98,9 @@ void trainer_cmd_ftms_caps(struct radiant_ble_ftms_caps *out)
 	out->power = (struct radiant_ble_ftms_range){
 		.min = cfg.min_power_w, .max = cfg.max_power_w, .step = 1u, .valid = true,
 	};
+	/* A trainer moves nothing by itself; its session starts when the rider
+	 * pedals, so FTMS Start while RUNNING is a 0x01 no-op. */
+	out->passive = true;
 }
 
 int32_t trainer_wind_mm_s_from_kph(int32_t kph)
@@ -378,7 +381,7 @@ static int ftms_gate(uint32_t epoch)
 	return 0;
 }
 
-int trainer_cmd_ftms_set_target(const struct radiant_ble_ftms_target *t, uint32_t epoch,
+int trainer_cmd_ftms_set_target(struct radiant_ble_ftms_target *t, uint32_t epoch,
 				void *ctx)
 {
 	struct trainer_equip *e = cfg.equip;
@@ -445,6 +448,8 @@ int trainer_cmd_ftms_set_target(const struct radiant_ble_ftms_target *t, uint32_
 		if (rc == 0) {
 			e->mode = TRAINER_EQUIP_SIM;
 			e->sim = next;
+			/* The 0x12 status carries what was applied (R9). */
+			t->v.sim.grade_centi = (int16_t)next.grade_centi_pct;
 		}
 		return rc;
 	}

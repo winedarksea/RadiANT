@@ -54,6 +54,9 @@
  *     Start is still spinning the belt up must be able to stop it even though
  *     the session has not reported RUNNING yet.
  *   - Start while RUNNING is 0x04 (Table 4.24's "not possible in the current
+ *     state") - except on a PASSIVE machine (caps.passive, an indoor bike),
+ *     whose session starts when the rider pedals: there Start while RUNNING
+ *     is 0x01 and does nothing, because the client's goal is already met;
  *     state"); Start while PAUSED is a resume.
  *   - Start/Resume and Stop/Pause are mandatory op codes (Table 4.15), so a
  *     machine whose workout hook answers -ENOTSUP gets 0x04, never 0x02.
@@ -193,6 +196,11 @@ struct radiant_ble_ftms_caps {
 	struct radiant_ble_ftms_range incline;    /* 0.1 % */
 	struct radiant_ble_ftms_range resistance; /* 0.1, unitless */
 	struct radiant_ble_ftms_range power;      /* W */
+	/* A passive machine (an indoor bike): nothing moves unless the user
+	 * moves it, and its session may start without a Start. Start/Resume
+	 * while RUNNING is then a 0x01 no-op instead of 0x04. false (the
+	 * zero value) for a treadmill. */
+	bool passive;
 };
 
 /* ── A request, decided ─────────────────────────────────────────────────── */
@@ -291,7 +299,7 @@ struct radiant_ble_ftms_cp_decision {
  *      clear, or one not in Table 4.15's set handled here): 0x02.
  *   4. Wrong parameter length, a Stop/Pause parameter other than 1 or 2, a
  *      target outside caps' valid range: 0x03.
- *   5. Start while RUNNING: 0x04.
+ *   5. Start while RUNNING: 0x04, or a 0x01 no-op if caps->passive.
  *   6. Motion check for target ops and Start/Resume: DENY 0x05, STALE 0x04.
  *      Reset asks for its non-stop half and records the verdict.
  *   7. Otherwise the action, for execute.
@@ -319,6 +327,10 @@ enum radiant_ble_ftms_workout {
  * machine's epoch at receipt of the request.
  *
  *   set_target  a target op the decision has range-checked and authorised.
+ *               The hook MAY rewrite *t to the value it actually applied
+ *               (e.g. a clamped simulation grade): the status notification
+ *               that follows a success carries *t as the hook left it, so
+ *               subscribers hear what the machine did, not what was asked.
  *   workout     Start/Resume (authorised) and Stop/Pause (never gated).
  *   reset       §4.16.2 Reset. `motion_ok` false: perform only the stop half
  *               (e.g. a treadmill's speed 0) - the core answers 0x04 whatever
@@ -326,7 +338,7 @@ enum radiant_ble_ftms_workout {
  *               was accepted.
  */
 struct radiant_ble_ftms_ops {
-	int (*set_target)(const struct radiant_ble_ftms_target *t, uint32_t epoch, void *ctx);
+	int (*set_target)(struct radiant_ble_ftms_target *t, uint32_t epoch, void *ctx);
 	int (*workout)(enum radiant_ble_ftms_workout w, uint32_t epoch, void *ctx);
 	int (*reset)(bool motion_ok, uint32_t epoch, void *ctx);
 	void *ctx;
