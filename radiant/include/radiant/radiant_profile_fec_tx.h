@@ -574,6 +574,9 @@ struct radiant_profile_fec_tx {
 	/* The user configuration in use, echoed by page 55 on request.
 	 * Store-only, like the two above; every field starts invalid. */
 	struct radiant_profile_fec_cmd_user_config      user;
+	/* radiant_profile_fec_tx_set_user() has been called: only then is
+	 * page 55 served on request. */
+	bool user_set;
 
 	/* Transmitted messages, and the position within the five-message
 	 * group. Advanced once per emitted message by radiant_profile_fec_tx_next(),
@@ -655,11 +658,19 @@ void radiant_profile_fec_tx_command_answered(struct radiant_profile_fec_tx *tx,
  * A page 70 arrived. Deliver `page` in the next `count` data slots.
  *
  * Returns 0, or -ENOTSUP for a page this master cannot produce on request.
- * Supported: 17, 50, 51, 54, 55, 71, 80 and 81. Page 17 is in the rotation too,
+ * Supported: 17, 50, 51, 54, 71, 80 and 81, and 55 once the node has called
+ * radiant_profile_fec_tx_set_user() (before that, -ENOTSUP as for any page the
+ * node does not keep). Page 17 is in the rotation too,
  * but SS10.1.3.1 has the general settings page answer a request on any
  * controllable FE; 50 and 51 are the simulation settings, which are
  * available on request and never broadcast; 55 is the user configuration
  * in use (radiant_profile_fec_tx_set_user()). `count` 0 is treated as 1.
+ *
+ * THERE IS ONE ON-REQUEST SLOT. A request that arrives before the previous one
+ * has been fully served replaces it (the earlier page's remaining copies are
+ * dropped). A controller that asks for two pages back to back gets the second;
+ * it retries the first, as Common Pages SS6.2 expects of a requester that saw
+ * no answer.
  *
  * A PAGE 70 IS NOT A CONTROL PAGE, and neither outcome is answered with a
  * page 71: SS8.12.3.1 [MD_FEC_001] says page 71's command ID "shall NOT be

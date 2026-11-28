@@ -1042,6 +1042,11 @@ ZTEST(radiant_profile_fec_tx, test_requests_for_17_50_51_are_served_and_others_r
 	zassert_equal(radiant_profile_fec_tx_request(&tx, RADIANT_PROFILE_FEC_PAGE_TRAINER, 1u), -ENOTSUP);
 	zassert_equal(radiant_profile_fec_tx_request(&tx, RADIANT_PROFILE_FEC_PAGE_GENERAL, 1u),
 		      -ENOTSUP, NULL);
+	/* A node that never called radiant_profile_fec_tx_set_user() (apps/trainer,
+	 * apps/treadmill) has no page 55 to give: unchanged, -ENOTSUP. */
+	zassert_equal(radiant_profile_fec_tx_request(&tx, RADIANT_PROFILE_FEC_PAGE_USER_CONFIG,
+					     1u),
+		      -ENOTSUP, NULL);
 	zassert_equal(radiant_profile_fec_tx_request(&tx, 0x01u, 1u), -ENOTSUP);
 }
 
@@ -1255,10 +1260,16 @@ ZTEST(radiant_profile_fec_tx, test_page_55_is_served_on_request_with_the_config_
 
 	init_trainer_master(&tx);
 
-	/* Before anything is set: every field's own sentinel, so a controller
-	 * reads "unknown" and never a 0 kg rider. */
+	/* Before radiant_profile_fec_tx_set_user(): not a page this node keeps. */
 	page70(req, RADIANT_PROFILE_FEC_PAGE_USER_CONFIG, 1u,
 	       RADIANT_PROFILE_FEC_REQUEST_CMD_DATA_PAGE);
+	zassert_equal(radiant_profile_fec_tx_handle_request(&tx, req), -ENOTSUP);
+	zassert_equal(count_page(&tx, RADIANT_PROFILE_FEC_PAGE_USER_CONFIG, 20u, got), 0u);
+
+	/* Set with every field invalid: each field's own sentinel, never a
+	 * 0 kg rider. */
+	memset(&u, 0, sizeof(u));
+	radiant_profile_fec_tx_set_user(&tx, &u);
 	zassert_equal(radiant_profile_fec_tx_handle_request(&tx, req), 0);
 	zassert_equal(count_page(&tx, RADIANT_PROFILE_FEC_PAGE_USER_CONFIG, 20u, got), 1u);
 	zassert_equal(got[1], 0xFFu);

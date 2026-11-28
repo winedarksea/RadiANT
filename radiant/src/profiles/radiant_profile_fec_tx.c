@@ -972,6 +972,7 @@ void radiant_profile_fec_tx_set_user(struct radiant_profile_fec_tx *tx,
 	}
 
 	tx->user = *u;
+	tx->user_set = true;
 	if (tx->user.bike_weight_50g >= RADIANT_PROFILE_FEC_BIKE_WEIGHT_INVALID) {
 		tx->user.bike_weight_valid = false;
 	}
@@ -1012,10 +1013,18 @@ int radiant_profile_fec_tx_request(struct radiant_profile_fec_tx *tx, uint8_t pa
 	case RADIANT_PROFILE_FEC_PAGE_WIND_RESISTANCE:
 	case RADIANT_PROFILE_FEC_PAGE_TRACK_RESISTANCE:
 	case RADIANT_PROFILE_FEC_PAGE_CAPABILITIES:
-	case RADIANT_PROFILE_FEC_PAGE_USER_CONFIG:
 	case RADIANT_PROFILE_FEC_PAGE_CMD_STATUS:
 	case RADIANT_PROFILE_COMMON_PAGE_80:
 	case RADIANT_PROFILE_COMMON_PAGE_81:
+		break;
+	case RADIANT_PROFILE_FEC_PAGE_USER_CONFIG:
+		/* Only for a node that keeps a user configuration and says so:
+		 * a page 55 of nothing but sentinels would claim a capability
+		 * the node does not have. Unchanged (-ENOTSUP) for the nodes
+		 * that never call radiant_profile_fec_tx_set_user(). */
+		if (!tx->user_set) {
+			return -ENOTSUP;
+		}
 		break;
 	default:
 		/* Everything else is in the rotation or is not a page this
@@ -1027,6 +1036,8 @@ int radiant_profile_fec_tx_request(struct radiant_profile_fec_tx *tx, uint8_t pa
 		return -ENOTSUP;
 	}
 
+	/* ONE on-request slot: a second request before the first has been
+	 * served replaces it (radiant_profile_fec_tx.h). */
 	tx->on_request_page = page;
 	tx->on_request_left = (count == 0u) ? 1u : count;
 	return 0;
