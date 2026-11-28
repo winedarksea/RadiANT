@@ -83,7 +83,10 @@
 # 2026-11-27: 33, hrm_ble.publish (apps/hrm_ble/tests/publish: the HRS encoder,
 # the beat ring and the snapshot that drives both radios), reached through
 # `-T app/apps/hrm_ble/tests`.
-min_scenarios: 33
+# 2026-11-27: 34, radiant.ftms (radiant/tests/ftms: the FE-C/FTMS control
+# arbiter, moved from apps/treadmill, and the shared FTMS core's Control Point
+# decision table, execution and builders), reached through `-T app/radiant/tests`.
+min_scenarios: 34
 
 # Total ztest cases twister executes, summed over every scenario. It equals the
 # sum of the per-scenario floors below, so the backstop and the floors cannot
@@ -325,7 +328,9 @@ min_scenarios: 33
 # each of the seven unit scenarios. Cassandra twister mp2d: 11597.
 # 2026-11-27: +2 (re-review: expiry without a tick, a stall past the
 # deadline). Cassandra twister mp2g.
-min_testcases: 11599
+# 2026-11-27: Phase 3 (treadmill FTMS core): radiant.ftms 23 new, treadmill.pages
+# 26 -> 55.
+min_testcases: 11651
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -498,7 +503,12 @@ min_cases.hrm_ble.sim_sched: 4
 min_cases.hrm_ble.publish: 31
 # 2026-11-23: +4 (security review 2026-11-22 item 2: the machine range), +2
 # (review nits: conversion saturation, over-wide range narrowing).
-min_cases.treadmill.pages: 26
+# 2026-11-27: 55, observed (cassandra mp3d). The arbiter cases moved to
+# radiant.ftms and the ftms_actuate cases folded into treadmill_cmd; the
+# treadmill_session (14) and treadmill_cmd (23) suites were added: every motion
+# path's negative case, queued-request refusals, stop/pause, Reset,
+# capabilities and the Reset baseline.
+min_cases.treadmill.pages: 55
 min_cases.treadmill.hr_rx: 3
 # 2026-11-20: +3 (HAL drift item 5, as radiant.unit).
 # 2026-11-20: +1 (the ETIME retry re-read, as radiant.unit).
@@ -626,3 +636,7 @@ min_cases.radiant.unit.rules_outputs_off: 1357
 # 2026-11-27: 49 (+1, the LRU re-key case).
 # 2026-11-27: 51 (+2, the spare-slot over-capacity cases).
 min_cases.radiant.ble: 51
+# radiant.ftms (2026-11-27): 8 arbiter cases (6 moved from treadmill.pages)
+# and 15 FTMS core cases (the decision-table sweep, explicit rows, execution,
+# Training Status, status and Service Data bytes).
+min_cases.radiant.ftms: 23

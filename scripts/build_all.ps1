@@ -343,7 +343,15 @@ $treadmillTargets = @(
     @{ dir='tread_custom';   board='nrf54l15dk/nrf54l15/cpuapp'; source='CUSTOM';    conf='source_custom.conf';   sdm=$true }
     # The named dual-radio preset with the TEST identity, and without any
     # identity (must fail to configure) - see the node rows above.
-    @{ dir='tread_dual';       board='nrf54l15dk/nrf54l15/cpuapp'; source='SIMULATED'; conf='dual.conf;../../tests/product_test.conf'; sdm=$true; ble=$true; assert_config=@('CONFIG_RADIANT_PRODUCT_STRICT=y', 'CONFIG_RADIANT_BLE=y', 'CONFIG_BT_DIS=y', 'CONFIG_RADIANT_PRODUCT_MANUFACTURER_ID=65534') }
+    @{ dir='tread_dual';       board='nrf54l15dk/nrf54l15/cpuapp'; source='SIMULATED'; conf='dual.conf;../../tests/product_test.conf'; sdm=$true; ble=$true; assert_config=@('CONFIG_RADIANT_PRODUCT_STRICT=y', 'CONFIG_RADIANT_BLE=y', 'CONFIG_BT_DIS=y', 'CONFIG_RADIANT_PRODUCT_MANUFACTURER_ID=65534',
+        # The enabled profiles: FTMS (the shared core, treadmill machine type), RSC, FE-C (always
+        # built into CONFIG_TREADMILL; the arbiter gates its control pages) and SDM.
+        'CONFIG_RADIANT_BLE_FTMS=y', 'CONFIG_RADIANT_BLE_FTMS_TREADMILL=y', 'CONFIG_BT_RSCS=y', 'CONFIG_TREADMILL=y',
+        'CONFIG_RADIANT_CTRL_ARBITER=y', 'CONFIG_TREADMILL_ANT_SDM=y',
+        # The advertised capabilities, and the safety default that remote start stays off.
+        'CONFIG_TREADMILL_CAP_SPEED_TARGET=y', 'CONFIG_TREADMILL_CAP_INCLINE_TARGET=y', '# CONFIG_TREADMILL_REMOTE_START is not set',
+        # Equipment bonding.
+        'CONFIG_RADIANT_BLE_PAIRING_WINDOW=y') }
     @{ dir='tread_dual_fail';  board='nrf54l15dk/nrf54l15/cpuapp'; source='SIMULATED'; conf='dual.conf'; sdm=$true; expect_fail='CONFIG_RADIANT_PRODUCT_STRICT refuses this product identity' }
 )
 
