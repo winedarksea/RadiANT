@@ -328,9 +328,9 @@ min_scenarios: 34
 # each of the seven unit scenarios. Cassandra twister mp2d: 11597.
 # 2026-11-27: +2 (re-review: expiry without a tick, a stall past the
 # deadline). Cassandra twister mp2g.
-# 2026-11-27: Phase 3 (treadmill FTMS core): radiant.ftms 23 new, treadmill.pages
-# 26 -> 55.
-min_testcases: 11651
+# 2026-11-27: 11644, Phase 3 (treadmill FTMS core), cassandra mp3e: radiant.ftms 23 new,
+# treadmill.pages 33 observed (floor was 26) -> 55.
+min_testcases: 11644
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
