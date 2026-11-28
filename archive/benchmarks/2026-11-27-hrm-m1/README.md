@@ -36,7 +36,14 @@ First on-air run of the mixed ANT+/BLE HRM reference design: the shared radiant 
 
 - **Device (console):** 43 connections. Every `BLE disconnected (0x13)` was followed by `BLE advertising (restart)` within **0.49 ms** (43/43). HRS data arrived 0.96-1.2 s after every connect that completed (n=40), inside the 10 s criterion.
 - **Host (tool verdict FAIL):** 32/50 cycles clean. Windows confirmed Disconnected on only 9 cycles, needed a median of 6 s (max 27 s) to connect, and failed to connect within 30 s 8 times. From the device's disconnect to its next connection took 3-78 s (median 17 s). The tool reports the scanner floor as n/a, and its re-advertise bound (median 10 s) measures the Windows scanner and connection teardown, not the device.
-- **Verdict:** the firmware meets re-advertise ≤ 2 s and data ≤ 10 s. Before the soak counts as a host-independent gate, the tool is being changed to report INCONCLUSIVE when its floor is unknown and to take the device log as the authoritative re-advertise figure. Re-run it then, or with a phone/nRF central.
+- **Verdict:** the firmware meets re-advertise ≤ 2 s and data ≤ 10 s.
+
+**Re-run (tool e9b5d3a, `-DeviceLog`):** 50 cycles; 43 connected, 7 Windows connect timeouts.
+- **Re-advertise (device log, authoritative): PASS.** 0.471 / 0.478 / 0.493 ms (n=42).
+- **Data after connect: PASS.** 952 / 1050 / 1262 ms (n=43).
+- **"Every cycle clean": INCONCLUSIVE,** from host-side problems only: connect timeouts, and the Windows scanner never sighting re-advertising. Its 15 s calibration window saw 0 sightings, although `-Mode scan` sees the device. That is open in the tool.
+
+**M1 step 5 PASS.**
 
 ## Rig
 

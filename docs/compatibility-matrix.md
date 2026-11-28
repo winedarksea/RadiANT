@@ -116,21 +116,21 @@ plus one line of evidence, e.g. `PASS 6.1 s worst of 3`.
 
 | Row | Device / app | Radio | Device firmware / app version | Board | Image hash | RadiANT commit |
 |---|---|---|---|---|---|---|
-| HRM-1 | Garmin Forerunner 965, External HR sensor | ANT+ (0x78) | | | | |
-| HRM-2 | Pixel 10 XL + nRF Connect for Mobile | BLE HRS (0x180D) | | | | |
+| HRM-1 | Garmin Forerunner 965, External HR sensor | ANT+ (0x78) | not recorded | nRF54L15 DK | `7d99c4ab…` | a899c1c |
+| HRM-2 | Pixel 10 XL + nRF Connect for Mobile | BLE HRS (0x180D) | not recorded | nRF54L15 DK | `7d99c4ab…` | a899c1c |
 | HRM-3 | Zwift on Windows | BLE HRS (0x180D) | | | | |
 
 | Check | HRM-1 off | HRM-1 on | HRM-2 off | HRM-2 on | HRM-3 off | HRM-3 on |
 |---|---|---|---|---|---|---|
-| C1 discovery ≤ 10 s | | | | | | |
-| C2 first pairing | | | | | | |
+| C1 discovery ≤ 10 s | | found, not timed (M1) | | found, not timed (M1) | | |
+| C2 first pairing | | PASS (M1 step 1) | | PASS, connect (M1 step 1) | | |
 | C3 bonded reconnect | | | | | | |
-| C4a link drop | | | | | | |
+| C4a link drop | | PASS, undisturbed (M1 step 4) | | PASS (M1 step 4) | | |
 | C4b out of range | | | | | | |
-| C4c power cycle | | | | | | |
+| C4c power cycle | | PASS (M1 step 4) | | PASS (M1 step 4) | | |
 | C5 bonds full / replaced phone | N/A | N/A | N/A | N/A | N/A | N/A |
-| C6 data in saved activity | | | | | | |
-| C7 ANT+ loss (abs %, Δ pp) | — | | — | | — | |
+| C6 data in saved activity | | PASS (M1 step 2) | | | | |
+| C7 ANT+ loss (abs %, Δ pp) | — | PASS 1.14 %, −0.04 pp (M1 step 6, Garmin USB-m receiver) | — | | — | |
 
 Notes for HRM: ANT+ has no pairing or bond, so for HRM-1, C2 means the watch's
 sensor pairing (device number lock) and C3 means the watch re-finding the paired
@@ -267,7 +267,7 @@ Windows and how it brackets the re-advertise time.
 
 | App | Image hash | Re-advertise, device log (median / max) | Re-advertise, Windows ub (median / max) | Data (median / max) | Clean cycles | Scanner gap | Result |
 |---|---|---|---|---|---|---|---|
-| HRM | | | | | | | |
+| HRM | `7d99c4ab…` | 0.478 / 0.493 ms | 21.9 / 28.7 s | 1.05 / 1.26 s | 43/50 connected | n/a (0 sightings) | PASS (re-advertise, data); clean INCONCLUSIVE (host) |
 | Treadmill | | | | | | | |
 | Smart trainer | | | | | | | |
 
@@ -310,3 +310,6 @@ matrix does them:
   the product claims.
 - **Regulatory testing** (FCC, ISED, CE/RED, and the rest) for the product's
   radio, antenna and enclosure.
+
+
+HRM evidence: `archive/benchmarks/2026-11-27-hrm-m1/README.md` (M1, 2026-11-27). Image hash in full: `7d99c4abd1b971f87c830e0ad6e6e2d5ba922d26ae07fdbdaa7bc158297f80d1`. In M1 the ANT+ and BLE radios were always on together, so only the "on" columns are filled.
