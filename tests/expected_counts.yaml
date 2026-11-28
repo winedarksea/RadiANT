@@ -337,7 +337,9 @@ min_scenarios: 35
 # 2026-11-28: 11664 (cassandra mp3h): safety review round 3, +3 treadmill.pages.
 # 2026-11-28: 11727 (cassandra mp4c): Phase 4, +42 (six FE-C TX cases in seven
 # unit scenarios) and +21 smart_trainer.glue.
-min_testcases: 11727
+# 2026-11-28: 11738 (cassandra mp4e): round-1 fixes, +2 radiant.ftms (passive
+# Start, applied-value status) and smart_trainer.glue 21 -> 30.
+min_testcases: 11738
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -664,7 +666,11 @@ min_cases.radiant.ble: 51
 # and 15 FTMS core cases (the decision-table sweep, explicit rows, execution,
 # Training Status, status and Service Data bytes).
 # 2026-11-28: 25 (mp3g), the receipt epoch and over-long writes.
-min_cases.radiant.ftms: 25
+# 2026-11-28: 27 (mp4e), passive Start and the applied-value status.
+min_cases.radiant.ftms: 27
 # smart_trainer.glue (2026-11-28, mp4): 6 equipment-state, 3 seam<->model glue
 # and 12 command-path cases (cassandra mp4c).
-min_cases.smart_trainer.glue: 21
+# 2026-11-28: 30 (mp4e): reset per source shape, clamped grade status,
+# passive Start, and the trainer_logic suite (round trips, sequence, drop
+# path, console and FTMS resets, inbox ordering, Service Data bytes).
+min_cases.smart_trainer.glue: 30
