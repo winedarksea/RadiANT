@@ -30,7 +30,7 @@ two simultaneous controllers *last-writer-wins with no signal to either*: a head
 unit running a simulated climb and a phone running an interval workout are both
 told their command succeeded while the deck oscillates between two setpoints,
 and neither end can see it. So there is a **control-owner token**
-(`src/treadmill_control.h`), and the policy is
+(`<radiant/radiant_ctrl_arbiter.h>`), and the policy is
 [§4a](#4a-who-is-allowed-to-command).
 
 **It is not a suppression rule, and the distinction is load-bearing.** Nothing
@@ -147,19 +147,80 @@ the part worth getting right:
 | other negative | `FAIL` | `0x04` Operation Failed |
 
 `-ENOTSUP` is a first-class answer and not a failure. A manual treadmill with a
-fixed deck is a legitimate product: it returns `-ENOTSUP`, **and** clears FE-C
-page 54's Simulation-mode bit **and** clears FTMS's Inclination Target Setting
-bit. Doing one without the others is what makes a controller report the machine
-as broken rather than as fixed-incline.
+fixed deck is a legitimate product: it leaves `set_incline` NULL, and the
+application then clears FE-C page 54's Simulation-mode bit **and** FTMS's
+Inclination Target Setting bit by itself (`src/treadmill_caps.c` derives every
+capability bit from the non-NULL entry points; `CONFIG_TREADMILL_CAP_*_TARGET`
+can only take one away). A declared bit with a refused command is what makes a
+controller report the machine as broken rather than as fixed-incline.
 
 Returning `0` and doing nothing is the worst of the three: a controller that
 sees Success and then watches page 17 report an unchanged incline concludes the
 machine is faulty.
 
+### Workout hooks, remote control and console events
+
+```c
+int  (*workout_start)(const struct treadmill_source *src);   /* FTMS 0x07 */
+int  (*workout_pause)(const struct treadmill_source *src);   /* FTMS 0x08/0x02 */
+int  (*workout_resume)(const struct treadmill_source *src);  /* FTMS 0x07 from pause */
+int  (*workout_stop)(const struct treadmill_source *src);    /* FTMS 0x08/0x01 */
+bool (*remote_motion_allowed)(const struct treadmill_source *src);
+int  treadmill_source_report_event(enum treadmill_source_event evt);
+```
+
+- The workout hooks are optional. Start/Resume and Stop/Pause are mandatory FTMS
+  op codes, so a missing hook is never `0x02`: without `workout_start`/`_resume`
+  FTMS answers `0x04` Operation Failed, and without `workout_stop`/`_pause` the
+  machine falls back to `set_speed(0)` (a stop) and succeeds if the driver
+  accepts it.
+- **Report FINISHED or READY promptly after an accepted `set_speed(0)` or
+  `workout_stop`.** The application stops counting the belt as moving the moment
+  the stop is accepted, but the session, Training Status and page 16 stay
+  RUNNING until the report arrives.
+- **Pause calls the source, and the source decides** whether the belt stops or
+  slows to a walk. Once it *is* paused it reports `TREADMILL_EVT_PAUSED` (and
+  `TREADMILL_EVT_RESUMED` after a resume).
+- `remote_motion_allowed()` is condition (a) of the motion rule (§4b): true
+  only while the safety key is present and remote control is enabled at the
+  console. **NULL means no**: such a machine can be watched and stopped from
+  either radio, and never started, sped up or tilted remotely.
+- Events, delivered once each and in order (a queue, ISR-safe): console
+  Start/Stop/Pause, the paused/resumed echoes and the console's pairing control
+  (open the BLE pairing window, or forget every bond).
+- **The safety key is not a queued event.** `TREADMILL_EVT_SAFETY_KEY_OUT`/`_IN`
+  set a level and a pull counter directly, so a full queue cannot lose a pull and
+  an out-then-in between two handler passes still latches. **Report the key once
+  at start** (a machine without one reports IN): until then it is UNKNOWN and
+  nothing moves remotely.
+- The actuating wrappers (`treadmill_source_set_*`, `treadmill_source_workout_*`)
+  are declared in `src/treadmill_source_ctrl.h`, which only `src/treadmill_cmd.c`
+  includes. A radio cannot call the source around the motion rule.
+
+### What "success" means
+
+**A command result reports that the driver accepted the command** — the setter
+or workout hook returned 0. It is not a completion and not a state.
+
+**Training Status, the FTMS machine-status notifications and FE-C page 16's
+state follow the source's state reports and events, never the command.** A
+machine that accepts Start and never starts the belt stays Idle on both radios,
+which is the truth. The seam header says this too. The one exception is an
+accepted FTMS Reset, which returns the session to Idle because §4.16.2 says so
+of Training Status.
+
+**Stopping needs FTMS control.** FTMS Stop, Pause and Set Target Speed 0 are
+Control Point procedures, and every procedure except Request Control needs
+control (§4.16.2), so a client without it gets `0x05`. That is conformant, and it
+is not a safety gap: the console's Stop and the safety key always work locally,
+and with `CONFIG_BT_MAX_CONN=1` Request Control always succeeds for the one
+client. What a stop never needs is *authorisation* under the motion rule.
+
 ### The one call that is easy to leave out
 
-`treadmill_source_report_state()`. It sets the FE state — `READY`, `IN_USE`,
-`FINISHED` — that FE-C page 16 byte 7 carries. **That field is the entire basis
+`treadmill_source_report_state()`. It reports the FE state — `READY`, `IN_USE`,
+`FINISHED` — which drives the session (§4b) that FE-C page 16 byte 7 is derived
+from. **That field is the entire basis
 of §8's gym occupancy signal.** A source that never calls it reports `READY`
 forever and every dashboard downstream reads zero.
 
@@ -224,8 +285,12 @@ calibration problem rather than as a bug.
 
 ## 4a. Who is allowed to command
 
-`src/treadmill_control.{h,c}`, `CONFIG_TREADMILL_CTRL_POLICY_EXCLUSIVE`
-(default), `CONFIG_TREADMILL_CTRL_ANT_TIMEOUT_MS` (default 30000).
+`radiant/include/radiant/radiant_ctrl_arbiter.h` and
+`radiant/src/ble/radiant_ctrl_arbiter.c` (moved from `src/treadmill_control.*`
+so a smart trainer shares the policy; `CONFIG_RADIANT_CTRL_ARBITER`, selected by
+`CONFIG_TREADMILL_CTRL_POLICY_EXCLUSIVE`, the default), and
+`CONFIG_TREADMILL_CTRL_ANT_TIMEOUT_MS` (default 30000). The treadmill gates FE-C
+pages 50 and 51; a trainer passes all four command pages to `radiant_ctrl_init()`.
 
 ### The policy: explicit beats implicit
 
@@ -244,6 +309,7 @@ needed to say no.
 | FE-C page 50/51, owner `BLE` | **Refused: page 71 status `RADIANT_PROFILE_FEC_CMD_STATUS_REJECTED` (3).** |
 | FTMS command with no `Request Control` | `CONTROL_NOT_PERMITTED` (`0x05`), which this file already did. |
 | ANT owner idle > `TREADMILL_CTRL_ANT_TIMEOUT_MS` | Released. |
+| Safety key out | **Revoked from either owner** (`radiant_ctrl_revoke()`); an FTMS controller is told `0xFF` Control Permission Lost. |
 
 **A disconnect leaves Training Status alone, by design** (review 2026-11-06,
 O5 R-2, decided against the change). A dropped link must not stop the belt
@@ -283,15 +349,15 @@ a controller decides simulation mode is broken and stops sending page 51 too.
 
 ### Why it lives in its own kernel-free module
 
-`treadmill_control.c` includes no Zephyr header, takes no lock and reads no
+`radiant_ctrl_arbiter.c` includes no Zephyr header, takes no lock and reads no
 clock — it is *told* what time it is, exactly like `treadmill_state.c`. That is
 not a stylistic echo. **Nothing anywhere tests `src/treadmill_ble.c`:** there is
 no ztest for the GATT service, for `write_cp()` or for the advertising payload,
 which are covered only by `BUILD_ASSERT`s and the bench procedure in §7. Putting
 the policy where it first seemed to belong — inside `treadmill_ble.c` — would
 have put it somewhere nothing could reach. In its own module,
-`apps/treadmill/tests/pages` compiles it directly and drives the whole policy
-with no radio and no stack.
+`radiant/tests/ftms` compiles it directly and drives the whole policy with no
+radio and no stack.
 
 ### The lock that is not there
 
@@ -327,13 +393,113 @@ reason to prefer this over a mutex.
 ### Turning it off
 
 `CONFIG_TREADMILL_CTRL_POLICY_NONE` restores last-writer-wins and compiles
-`treadmill_control.c` out entirely, so the "none" build really is the old
+`radiant_ctrl_arbiter.c` out entirely, so the "none" build really is the old
 behaviour rather than a token that always says yes. It is a legitimate choice
 when something outside this node already guarantees a single commander, and it
 is not a safe default. The `choice` arm is asserted from the generated
 `.config` by both `build_all.ps1` and the `build-treadmill` CI job, because a
 `choice` always has *some* arm set and silently shipping the wrong one is the
 failure this project keeps paying for.
+
+## 4b. The session, the motion rule, and FTMS
+
+**The FTMS service is shared.** `radiant/src/ble/radiant_ble_ftms.c`
+(`<radiant/radiant_ble_ftms.h>`, `CONFIG_RADIANT_BLE_FTMS`) is the service, the
+Control Point (Request Control, ATT `0xFE` Procedure Already In Progress, ATT
+`0xFD` CCC Improperly Configured), Training Status, the Fitness Machine Status
+and the Service Data. Its Control Point decision is a pure function,
+`radiant_ble_ftms_cp_decide(request, session, caps, owner, auth)`, and
+`radiant/tests/ftms` drives the whole decision table. `src/treadmill_ble.c` plugs
+the treadmill in: capabilities, ranges, the Treadmill Data record
+(`src/treadmill_ftms_data.c`), and the actuators and authorisation, which are
+`src/treadmill_cmd.c`. The Fitness Machine Status now reaches **every**
+subscriber, the initiating client included; machine-originated changes are
+notified too (`0x02` stopped/paused, `0x03` safety key, `0x04` started/resumed,
+`0xFF` control lost).
+
+**The session** (`src/treadmill_session.{h,c}`, kernel-free): IDLE, RUNNING,
+PAUSED, STOPPED and a latched SAFETY_STOP, driven only by what the machine
+reports — FE state edges and the source's events. FTMS Training Status (Idle,
+Manual Mode, Post-Workout) and FE-C page 16 (READY, IN_USE, FINISHED for
+paused/stopped/safety — FE state 4 is "FINISHED (PAUSED)") are both derived from
+it. Every local Stop or Pause, every safety-key event and every accepted FTMS
+Reset **increments the epoch**. A safety-key pull latches SAFETY_STOP and
+revokes every remote controller; only a local key-in **plus** a console Start or
+Stop clears it. The key is UNKNOWN until the source first reports it.
+
+**Moving is not RUNNING.** The belt can sit at 0 inside a RUNNING session (a
+console session started at 0, or a remote Stop the machine has not yet turned
+into a FINISHED report). The motion rule's "moving" is RUNNING **and** a reported
+belt speed above 0 **and** no remote stop, speed 0 or pause accepted since.
+
+**The motion rule.** A motion command is anything that can start the belt, raise
+its speed or move the deck. Every path calls `treadmill_motion_permitted(cmd,
+session)` — FTMS Start/Resume, Set Target Speed, Set Target Inclination, the
+incline half of FTMS Reset, FE-C page 51 and the BLE grade provider — and it
+requires all of:
+
+| | Condition |
+|---|---|
+| (a) | the source's `remote_motion_allowed()`: key present, remote enabled at the console |
+| (b) | not in SAFETY_STOP, and the key reported IN |
+| (c) | for Start, Resume, a speed above 0, **or any incline change** (FTMS incline, Reset's incline half, FE-C page 51, the grade provider) while the belt is not **moving**: `CONFIG_TREADMILL_REMOTE_START=y` (**default n**). The Set-Speed auto-start is this rule, not a separate one. |
+| (d) | the control token, as in §4a: for FTMS **and the grade provider**, the arbiter's owner is BLE (the grade provider gets no weaker token than FTMS); for FE-C, the implicit claim, made only after the page passes its epoch check |
+
+A refusal answers FTMS `0x05` Control Not Permitted or FE-C `REJECTED`; a
+refused grade-provider value is dropped. **Stopping always passes**: speed 0,
+FTMS Stop and Pause, and Reset's speed half need no authorisation. Reset stops
+the belt **first**, then levels the deck. A Reset whose incline half is needed
+(an incline capability and a target that is not already 0) and refused still
+stops the belt and answers `0x04`; with no incline half to run it succeeds.
+**Watch for this with apps:** many FTMS apps send Reset straight after Request
+Control. On a machine at rest with the deck inclined and
+`CONFIG_TREADMILL_REMOTE_START=n`, that Reset needs an incline move the rule
+refuses, so it stops the (already stopped) belt and answers `0x04`. Level the
+deck at the console, or accept the `0x04`. A Reset while SAFETY_STOP is
+latched also runs only its stop half and answers `0x04`, leaving Training
+Status and page 16 on the safety stop. A stop the driver refuses still ends
+"moving" at once. A refused FE-C page never takes the ANT token: the order is
+capability, epoch, motion rule, then the claim.
+
+**The grade provider needs an FTMS controller.** Under exclusive arbitration its
+token is the same as FTMS's (owner == BLE), so it acts only while a BLE client
+has run Request Control and holds the machine.
+
+**Queued requests cannot outlive a local stop.** The FTMS pending procedure and
+the FE-C control-page ring record the epoch on receipt; a changed epoch at
+dequeue refuses an actuating request (`0x04` / `REJECTED`) without reaching the
+driver. Stops are not refused for it.
+
+`src/treadmill_cmd.c` is the only file that includes `treadmill_source_ctrl.h`,
+and each of its calls into the source sits in one of four doors
+(`treadmill_cmd_drive_speed/_incline/_start/_stop`) that call the gate on their
+first line; each door has its own test. The FTMS hooks gate again with the epoch
+recorded at receipt, even though the core has already asked, so no future
+caller can reach the source around the rule. A target incline set over FE-C
+page 51 or by the grade provider is notified to FTMS subscribers as `0x06`
+Target Incline Changed, like one set over FTMS.
+
+**FTMS Reset follows §4.16.2 without disturbing ANT+.** It sets target speed
+and incline to 0 (the incline half under the motion rule), revokes control, and
+zeroes the FTMS view's elapsed time, distance and elevation gains through a
+baseline held in the Treadmill Data encoder (`src/treadmill_ftms_data.c`). The
+ANT+ accumulators are untouched, so a head unit tracking the same run never
+sees its distance go backwards. One baseline, not one per client: Reset is a
+machine procedure whose status goes to every client, and `CONFIG_BT_MAX_CONN`
+is 1. **Training Status goes to Idle** (§4.16.2): an accepted Reset returns the
+session to IDLE (page 16 READY) and bumps the epoch. The old deviation is
+resolved for both the time fields and Training Status.
+
+**FTMS choices where the spec is not explicit:** parameter lengths must be
+exact (`0x03` otherwise, including a write longer than the Control Point buffer,
+which gets a Response Code rather than an ATT error); Stop and Pause always
+reach the machine in every state; Start while RUNNING is `0x04`; a Resume from
+PAUSED is under rule (c). FTMS Table 4.15 lists Start/Resume and Stop/Pause as
+mandatory, so a missing workout hook is `0x04` for Start/Resume and a
+`set_speed(0)` fallback for Stop/Pause, never `0x02`. FE-C pages 50 and 51 are
+gated by the arbiter only when page 54 declares Simulation mode; otherwise they
+answer NOT_SUPPORTED. The lap toggle flips only on the source's own FINISHED,
+not when PAUSED or SAFETY_STOP read FINISHED on page 16.
 
 ---
 
@@ -398,7 +564,8 @@ failure this project keeps paying for.
 
 ## 6. The production checklist
 
-Seven items.
+Nine items. Items 4 and 5 are now met by the firmware; they stay listed so the
+reason is recorded.
 
 1. **A per-unit device number.** Met by the firmware since
    [ADR 0020](decisions/0020-k-dev-is-generated-on-first-boot.md): the node
@@ -408,28 +575,41 @@ Seven items.
    the boot log says `device number N from the identity record`. If it says
    `identity boot failed ... falling back to Kconfig device number`, every
    machine built from that image shares one number — **for a gym that is
-   fatal**, twenty treadmills a receiver cannot tell apart. A full flash erase
-   re-rolls the number; receivers re-pair once.
+   fatal**. `dual.conf`'s strict identity refuses that fallback.
 2. **A real manufacturer id.** 255 is the ANT+ development id. Shipping with it
    is claiming somebody else's identity.
 3. **Real model and revision numbers** in the product record,
    `CONFIG_RADIANT_PRODUCT_MODEL_NUMBER` and `CONFIG_RADIANT_PRODUCT_HW_REV` -
    strict identity cannot tell their placeholder `1` from a real 1.
-4. **The capability bits must match the machine.** FE-C page 54 bit 2
-   (Simulation mode) and FTMS's Inclination Target Setting bit are *claims*
-   that page 51 and op code `0x03` will be honoured. If `set_incline()` returns
-   `-ENOTSUP`, clear both.
-5. **The advertised ranges must match the machine.** See §5 item 4.
-6. **A pairing UX.** FTMS's control point requires encryption, so a client must
-   bond before it can command anything. This build accepts pairing from any
-   central with no user confirmation, which is right for a bench and wrong for
-   a gym floor where anybody's phone is in range. Decide what "pairing mode"
-   means on your console.
-7. **Decide what happens when a second client asks for control.** FTMS §4.16.2
+4. **The capability bits match the machine — automatic.** FE-C page 54's
+   Simulation bit and FTMS's Target Setting bits are derived from the source's
+   non-NULL entry points (`src/treadmill_caps.c`). Leave a setter NULL if the
+   machine cannot do it; use `CONFIG_TREADMILL_CAP_*_TARGET` to withhold one it
+   can.
+5. **The advertised ranges match the machine — automatic,** provided §5 item 4's
+   Kconfig range is the machine's: the same values bound every command path and
+   fill FTMS's Supported Range characteristics.
+6. **Remote motion authorisation.** Implement `remote_motion_allowed()` from the
+   real safety key and a console "remote control" setting, and report
+   FINISHED/READY promptly after an accepted stop. Leave
+   `CONFIG_TREADMILL_REMOTE_START` off unless the machine's own design makes a
+   remotely started belt safe, and document it if you turn it on.
+7. **The safety key reaches the firmware.** Report its state once at start, and
+   `TREADMILL_EVT_SAFETY_KEY_OUT` and `_IN` on every change, even if the key cuts
+   the motor in hardware: that is what latches
+   SAFETY_STOP, revokes remote control and cancels queued commands.
+8. **Bonds and pairing UX.** The control point requires encryption, so a client
+   must bond. `dual.conf` enables `CONFIG_RADIANT_BLE_PAIRING_WINDOW`: new phones
+   pair only inside a window the console opens (`TREADMILL_EVT_PAIRING_WINDOW`,
+   `CONFIG_TREADMILL_PAIRING_WINDOW_S`), bonded ones always reconnect, the least
+   recently used bond is evicted only after a new one succeeds, and
+   `TREADMILL_EVT_FORGET_BONDS` clears them all. Wire both to a console control;
+   then drop `CONFIG_RADIANT_BLE_PAIRING_WINDOW_AT_BOOT_S`, the power-cycle
+   stand-in.
+9. **Decide what happens when a second client asks for control.** FTMS §4.16.2
    gives control permission to one client at a time; this build's
-   `CONFIG_BT_MAX_CONN` is 1, so the branch that would revoke a previous
-   holder's permission exists and is unreachable. Raising the connection count
-   is what makes it reachable.
+   `CONFIG_BT_MAX_CONN` is 1, so the branch that would refuse a second client
+   exists and is unreachable. Raising the connection count makes it reachable.
 
 ---
 
@@ -1114,11 +1294,14 @@ biometric data about a person.
   2026-08-17 (§7.8, §7.9), so the FE-C control loop and §4a's arbitration
   refusal path can both be exercised. What remains untested here is the loop
   against a real machine rather than against our own second board.
-- **Nothing tests `src/treadmill_ble.c`.** There is no ztest for the FTMS GATT
-  service, for `write_cp()` or for the advertising payload; they are covered
-  only by `BUILD_ASSERT`s and §7's bench procedure. That is why the arbitration
-  policy was put in a kernel-free module of its own (§4a) instead of inside
-  that file, and it is the largest remaining coverage gap in this application.
+- **The FTMS GATT glue is untested by ztest.** The decisions are not: the
+  Control Point decision table, procedure execution, the status builder,
+  Training Status, Service Data (`radiant/tests/ftms`), every motion path, the
+  session, capability derivation and the Reset baseline
+  (`apps/treadmill/tests/pages`). What remains is `radiant_ble_ftms.c` and
+  `treadmill_ble.c` themselves — attribute tables, `write_cp()`'s ATT errors,
+  indications — covered by `BUILD_ASSERT`s, the build rows and §7's bench
+  procedure.
 - **The workqueue conversion is not covered by a test either.** §4a's marshalling
   is what makes the lock-free state and the lock-free token sound, and no ztest
   can see it — `test_both_control_paths_land_on_one_target` drives both paths
@@ -1149,8 +1332,7 @@ biometric data about a person.
 - **No procedure timeout on the FTMS control point.** FTMS v1.0 §4.16.4 is
   titled "Procedure Timeout" and gives none. The commonly-assumed 30 s is not in
   the spec, and this implementation does not invent one.
-- **`Reset` does not zero the session.** FTMS §4.16.2 specifies Reset as target
-  speed and inclination to 0, time fields to 0, Training Status Idle. This build
-  does the first and the third and deliberately not the second: a BLE client
-  resetting its own view must not silently discard the ANT+ side's accumulators
-  mid-run.
+- **Grade from the provider seam obeys the motion rule.** A registered grade
+  provider's value is a simulation grade like FE-C page 51: clamped to the
+  machine range, and dropped when `treadmill_motion_permitted()` refuses it
+  (and, under exclusive arbitration, while an FE-C controller holds the token).

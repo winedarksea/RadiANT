@@ -11,9 +11,10 @@
  * return.
  *
  * The control path is the other direction and has the opposite rule: it is
- * called from thread context on both radios and it calls straight into the
- * source, because moving an actuator is exactly the kind of work that may
- * block and the caller is already somewhere it can.
+ * called on the system workqueue, from treadmill_cmd.c only and behind the
+ * motion rule, and it calls straight into the source, because moving an
+ * actuator is exactly the kind of work that may block and the caller is
+ * already somewhere it can.
  */
 
 #include <errno.h>
@@ -21,6 +22,7 @@
 #include <zephyr/logging/log.h>
 
 #include "treadmill_source.h"
+#include "treadmill_source_ctrl.h"
 #include "treadmill_state.h"
 
 LOG_MODULE_DECLARE(treadmill, CONFIG_TREADMILL_LOG_LEVEL);
@@ -59,6 +61,31 @@ static uint16_t producer_strides;
 
 static void report_work_fn(struct k_work *w);
 static K_WORK_DEFINE(report_work, report_work_fn);
+
+/* EVENTS, unlike levels, must not coalesce: two button presses are two
+ * presses. A message queue is ISR-safe with K_NO_WAIT and keeps them in
+ * order; its own work item drains it on the system workqueue. */
+#define EVENT_QUEUE_DEPTH 8
+K_MSGQ_DEFINE(event_q, sizeof(uint8_t), EVENT_QUEUE_DEPTH, 1);
+static atomic_t events_dropped;
+
+/*
+ * THE SAFETY KEY DOES NOT RIDE THE QUEUE. A full queue may drop a button
+ * press; it must never drop a key pull. So the key is a LEVEL (unknown, in,
+ * out) plus a count of pulls, both set directly by report_event() and read by
+ * the handler: a pull is delivered even if the key went back in before the
+ * handler ran, and the level is delivered whatever happened to the queue.
+ */
+#define KEY_LEVEL_UNKNOWN 0
+#define KEY_LEVEL_IN      1
+#define KEY_LEVEL_OUT     2
+static atomic_t key_level = ATOMIC_INIT(KEY_LEVEL_UNKNOWN);
+static atomic_t key_out_count;
+/* Set by treadmill_source_key_resync(): deliver the level again. */
+static atomic_t key_resync;
+
+static void event_work_fn(struct k_work *w);
+static K_WORK_DEFINE(event_work, event_work_fn);
 
 int treadmill_source_register(const struct treadmill_source *src)
 {
@@ -153,6 +180,76 @@ int treadmill_source_set_speed(uint32_t mm_s)
 	return registered->api->set_speed(registered, mm_s);
 }
 
+/* The workout hooks. Reached only from treadmill_cmd.c, behind the motion
+ * rule (treadmill_source_ctrl.h). */
+static int call_hook(int (*fn)(const struct treadmill_source *src))
+{
+	if (registered == NULL) {
+		return -ENODEV;
+	}
+	if (fn == NULL) {
+		return -ENOTSUP;
+	}
+	return fn(registered);
+}
+
+int treadmill_source_workout_start(void)
+{
+	return call_hook((registered != NULL) ? registered->api->workout_start : NULL);
+}
+
+int treadmill_source_workout_pause(void)
+{
+	if (registered != NULL && registered->api->workout_pause == NULL) {
+		/* Pause is a mandatory FTMS op code and a stop: without the
+		 * hook, the machine stops the belt instead. */
+		return treadmill_source_set_speed(0u);
+	}
+	return call_hook((registered != NULL) ? registered->api->workout_pause : NULL);
+}
+
+int treadmill_source_workout_resume(void)
+{
+	return call_hook((registered != NULL) ? registered->api->workout_resume : NULL);
+}
+
+int treadmill_source_workout_stop(void)
+{
+	if (registered != NULL && registered->api->workout_stop == NULL) {
+		/* A Stop must never be "not supported" on a machine that can be
+		 * told a speed: fall back to speed 0. */
+		return treadmill_source_set_speed(0u);
+	}
+	return call_hook((registered != NULL) ? registered->api->workout_stop : NULL);
+}
+
+bool treadmill_source_remote_motion_allowed(void)
+{
+	/* No source, or no answer: NO. See the api's remote_motion_allowed. */
+	if (registered == NULL || registered->api->remote_motion_allowed == NULL) {
+		return false;
+	}
+	return registered->api->remote_motion_allowed(registered);
+}
+
+void treadmill_source_get_caps(struct treadmill_source_caps *out)
+{
+	const struct treadmill_source_api *api =
+		(registered != NULL) ? registered->api : NULL;
+
+	*out = (struct treadmill_source_caps){ 0 };
+	if (api == NULL) {
+		return;
+	}
+	out->set_speed = (api->set_speed != NULL);
+	out->set_incline = (api->set_incline != NULL);
+	out->workout_start = (api->workout_start != NULL);
+	out->workout_pause = (api->workout_pause != NULL);
+	out->workout_resume = (api->workout_resume != NULL);
+	out->workout_stop = (api->workout_stop != NULL);
+	out->remote_motion_allowed = (api->remote_motion_allowed != NULL);
+}
+
 /* ── The report path ────────────────────────────────────────────────────── */
 
 void treadmill_source_report_speed(uint32_t mm_s)
@@ -217,12 +314,113 @@ static void report_work_fn(struct k_work *w)
 	treadmill_node_deliver(strides);
 }
 
+int treadmill_source_report_event(enum treadmill_source_event evt)
+{
+	uint8_t e = (uint8_t)evt;
+
+	if (evt == TREADMILL_EVT_SAFETY_KEY_OUT || evt == TREADMILL_EVT_SAFETY_KEY_IN) {
+		/* Not droppable: a level and a counter, then a wake-up. */
+		if (evt == TREADMILL_EVT_SAFETY_KEY_OUT) {
+			atomic_set(&key_level, KEY_LEVEL_OUT);
+			atomic_inc(&key_out_count);
+		} else {
+			atomic_set(&key_level, KEY_LEVEL_IN);
+		}
+		(void)k_work_submit(&event_work);
+		return 0;
+	}
+
+	if (k_msgq_put(&event_q, &e, K_NO_WAIT) != 0) {
+		/* Not LOG_*: this may be an ISR. Counted, and the handler
+		 * reports the count on its next pass. */
+		atomic_inc(&events_dropped);
+		(void)k_work_submit(&event_work);
+		return -ENOSPC;
+	}
+	(void)k_work_submit(&event_work);
+	return 0;
+}
+
+static void event_work_fn(struct k_work *w)
+{
+	/* Touched only here, on the system workqueue. */
+	static atomic_val_t consumed_outs;
+	static atomic_val_t delivered_level = KEY_LEVEL_UNKNOWN;
+	uint8_t e;
+	atomic_val_t dropped = atomic_set(&events_dropped, 0);
+	atomic_val_t outs = atomic_get(&key_out_count);
+	atomic_val_t level = atomic_get(&key_level);
+
+	ARG_UNUSED(w);
+
+	/* The key first: safety before buttons. A pull that happened since the
+	 * last pass is delivered even if the key is back in now, and then the
+	 * level it is at. */
+	if (atomic_cas(&key_resync, 1, 0)) {
+		delivered_level = KEY_LEVEL_UNKNOWN;
+	}
+	if (outs != consumed_outs ||
+	    (level == KEY_LEVEL_OUT && delivered_level != KEY_LEVEL_OUT)) {
+		bool pulled = (outs != consumed_outs);
+		unsigned int discarded = 0u;
+
+		consumed_outs = outs;
+		delivered_level = KEY_LEVEL_OUT;
+		treadmill_node_event(TREADMILL_EVT_SAFETY_KEY_OUT);
+
+		/*
+		 * The key overtakes the queue, so a console Start or Stop that
+		 * was queued BEFORE the pull would otherwise land after it -
+		 * and after an IN delivered just below - and clear the latch
+		 * with no console action after key-in. Console events queued
+		 * before this pull are therefore discarded; the user presses
+		 * again. Other events (the paused/resumed echoes, the pairing
+		 * control) are still delivered, in order.
+		 */
+		if (pulled) {
+			while (k_msgq_get(&event_q, &e, K_NO_WAIT) == 0) {
+				if (e == TREADMILL_EVT_CONSOLE_START ||
+				    e == TREADMILL_EVT_CONSOLE_STOP ||
+				    e == TREADMILL_EVT_CONSOLE_PAUSE) {
+					discarded++;
+					continue;
+				}
+				treadmill_node_event((enum treadmill_source_event)e);
+			}
+			if (discarded != 0u) {
+				LOG_WRN("treadmill_source: %u console event(s) queued before a "
+					"safety-key pull discarded", discarded);
+			}
+		}
+	}
+	if (level == KEY_LEVEL_IN && delivered_level != KEY_LEVEL_IN) {
+		delivered_level = KEY_LEVEL_IN;
+		treadmill_node_event(TREADMILL_EVT_SAFETY_KEY_IN);
+	}
+
+	if (dropped != 0) {
+		LOG_ERR("treadmill_source: %ld event(s) lost, the queue was full",
+			(long)dropped);
+	}
+	while (k_msgq_get(&event_q, &e, K_NO_WAIT) == 0) {
+		treadmill_node_event((enum treadmill_source_event)e);
+	}
+}
+
 /* ---------------------------------------------------------------------------
  * Accessors for the levels, read by the application's deliver function. Not in
  * the public header: they exist so treadmill_node_deliver() can sample the
  * report words on the workqueue without every caller learning the atomics.
  * ---------------------------------------------------------------------------
  */
+
+void treadmill_source_key_resync(void)
+{
+	/* A key report made before the session existed was delivered into a
+	 * session that init then reset to UNKNOWN: deliver the level again. */
+	atomic_set(&key_resync, 1);
+	(void)k_work_submit(&event_work);
+}
 
 uint32_t treadmill_source_last_speed(void)
 {

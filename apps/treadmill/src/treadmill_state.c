@@ -218,6 +218,20 @@ void treadmill_state_set_state(struct treadmill_state *s, uint8_t fe_state)
 	s->state = fe_state;
 }
 
+void treadmill_state_set_derived_state(struct treadmill_state *s, uint8_t fe_state)
+{
+	if (s != NULL) {
+		s->state = fe_state;
+	}
+}
+
+void treadmill_state_lap(struct treadmill_state *s)
+{
+	if (s != NULL) {
+		s->lap_toggle = !s->lap_toggle;
+	}
+}
+
 void treadmill_state_set_user_mass(struct treadmill_state *s, uint16_t mass_10g)
 {
 	if (s != NULL) {

@@ -38,15 +38,20 @@ project(treadmill_pages_test)
 target_sources(app PRIVATE
   src/main.c
   ../../src/treadmill_state.c
-  # The control-owner token. Kernel-free for the same reason treadmill_state.c
-  # is, and that is not a stylistic echo - it is what makes the policy testable
-  # at all. There is no ztest anywhere for src/treadmill_ble.c, so arbitration
-  # implemented inside that file would have been arbitration nothing could
-  # reach; it lives in its own module so this image can drive it.
-  ../../src/treadmill_control.c
-  # FTMS Stop/Reset's actuator decisions, pulled out of treadmill_ble.c for
-  # the same reason; src/ftms_actuate.c drives them with a failing fake.
-  src/ftms_actuate.c
-  ../../src/treadmill_ftms_actuate.c
+  # The session state machine and the motion rule - kernel-free like the
+  # state module, so every transition and every gate condition is a case.
+  src/session.c
+  ../../src/treadmill_session.c
+  # Every motion path (treadmill_cmd.c) against a fake source, the
+  # capability derivation, the Treadmill Data record's Reset baseline, and
+  # the FTMS core driven through the treadmill's hooks.
+  src/cmd.c
+  src/fake_source.c
+  ../../src/treadmill_cmd.c
+  ../../src/treadmill_caps.c
+  ../../src/treadmill_ftms_data.c
+  ../../../../radiant/src/ble/radiant_ble_ftms_core.c
+  # The real FE-C/FTMS arbiter, so the token paths are exercised for real.
+  ../../../../radiant/src/ble/radiant_ctrl_arbiter.c
 )
-target_include_directories(app PRIVATE ../../src)
+target_include_directories(app PRIVATE ../../src ../../../../radiant/include)

@@ -33,11 +33,14 @@
  * hardware:
  *
  *   1. A `struct treadmill_source_api` with `start` (required), and
- *      `set_incline` / `set_speed` if your machine can move. Return -ENOTSUP
- *      from either if it cannot, and clear the matching capability bit -
- *      FE-C page 54 bit 2 and FTMS's Inclination Target Setting bit. Doing one
- *      without the other is what makes a controller report your machine as
- *      broken rather than as fixed-incline.
+ *      `set_incline` / `set_speed` if your machine can move - leave either
+ *      NULL if it cannot, and the application clears the matching capability
+ *      bits itself (FE-C page 54 bit 2, FTMS's Target Setting bits:
+ *      src/treadmill_caps.c). Add the workout hooks if the console has a
+ *      Start/Pause/Stop, and remote_motion_allowed() from the real safety key
+ *      and remote-enable setting - WITHOUT IT NO REMOTE CONTROLLER CAN MOVE
+ *      THE MACHINE (src/treadmill_session.h). Report the safety key and the
+ *      console buttons with treadmill_source_report_event().
  *   2. A `struct treadmill_source` naming it. The name is logged at boot,
  *      verbatim, so it should be your machine's and not "custom".
  *   3. A SYS_INIT() at APPLICATION level calling

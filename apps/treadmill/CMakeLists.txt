@@ -80,6 +80,11 @@ target_sources(app PRIVATE
   src/main.c
   src/treadmill_source.c
   src/treadmill_state.c
+  src/treadmill_session.c
+  # Every path that can move the machine, behind the one motion rule, and
+  # the capability derivation. Kernel-free; tests/pages compiles both.
+  src/treadmill_cmd.c
+  src/treadmill_caps.c
 )
 
 # ── The treadmill source ────────────────────────────────────────────────────
@@ -96,22 +101,7 @@ endif()
 
 if(CONFIG_TREADMILL_BLE)
   target_sources(app PRIVATE src/treadmill_ble.c
-                             src/treadmill_ftms_actuate.c)
-endif()
-
-# ── The control-owner token ─────────────────────────────────────────────────
-#
-# Compiled only under the EXCLUSIVE arm, so TREADMILL_CTRL_POLICY_NONE really is
-# the old last-writer-wins build and not a token that always says yes. The arm
-# is only reachable with TREADMILL_BLE anyway - an FE-C-only build has one
-# command surface and nothing to arbitrate.
-#
-# apps/treadmill/tests/pages compiles this file directly, which is the whole
-# reason the policy lives here rather than inside treadmill_ble.c: there is no
-# ztest for that file at all, so arbitration inside it would be arbitration
-# nothing can reach.
-if(CONFIG_TREADMILL_CTRL_POLICY_EXCLUSIVE)
-  target_sources(app PRIVATE src/treadmill_control.c)
+                             src/treadmill_ftms_data.c)
 endif()
 
 if(CONFIG_TREADMILL_HR_RX)
