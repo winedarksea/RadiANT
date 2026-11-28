@@ -1,0 +1,40 @@
+sample:
+  name: RadiANT smart trainer
+  description: >
+    Controllable bike trainer reference design: ANT+ FE-C with FTMS Indoor
+    Bike over BLE, one equipment state, the shared FE-C/FTMS control arbiter.
+
+common:
+  build_only: true
+  sysbuild: true
+  tags:
+    - radiant
+    - smart_trainer
+
+tests:
+  smart_trainer.ant:
+    platform_allow:
+      - nrf54l15dk/nrf54l15/cpuapp
+    extra_args:
+      - RADIANT_BACKEND=nrf
+
+  smart_trainer.ant_nrf52840:
+    platform_allow:
+      - nrf52840dk/nrf52840
+    extra_args:
+      - RADIANT_BACKEND=nrf
+
+  smart_trainer.ble:
+    platform_allow:
+      - nrf54l15dk/nrf54l15/cpuapp
+    extra_args:
+      - RADIANT_BACKEND=nrf
+      - smart_trainer_EXTRA_CONF_FILE=ble.conf
+
+  smart_trainer.dual:
+    platform_allow:
+      - nrf54l15dk/nrf54l15/cpuapp
+      - nrf52840dk/nrf52840
+    extra_args:
+      - RADIANT_BACKEND=nrf
+      - smart_trainer_EXTRA_CONF_FILE="dual.conf;../../tests/product_test.conf"
