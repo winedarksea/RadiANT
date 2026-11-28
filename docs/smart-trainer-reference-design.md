@@ -68,13 +68,19 @@ trainer accepts Start and nobody pedals, the session does not change.
 
 **The session.** States are IDLE, RUNNING, PAUSED and STOPPED (`trainer_equip.h`):
 
-- A report with `pedalling` set starts the session.
+- A report with `pedalling` set starts the session, **from IDLE only**.
+  PAUSED and STOPPED are left only by FTMS Start/Resume, a STARTED event or
+  a console action (the treadmill's rule).
 - The STARTED, PAUSED and STOPPED events move it.
-- FTMS Reset returns it to IDLE.
+- FTMS Reset and a console reset return it to IDLE.
+- FTMS Start while RUNNING answers 0x01 and does nothing: the core's
+  `caps.passive` flag, set by the trainer.
+- An event drops a driver report still pending from before it
+  (`trainer_inbox.h`), so a stale pedalling report cannot undo a Pause.
 
 **The epoch.** A trainer is passive, so there is no motion authorisation. The
 session epoch still applies: a **local** stop or reset (CONSOLE_STOP,
-CONSOLE_RESET) bumps it. An FE-C page or FTMS procedure received before the
+CONSOLE_RESET) and a successful FTMS Reset bump it. An FE-C page or FTMS procedure received before the
 bump is refused (FE-C REJECTED, FTMS 0x04) without reaching a hook. Stop and
 Pause are never refused for this.
 
@@ -92,7 +98,7 @@ control pages gated:
 | FTMS op | Hook | Status on success |
 |---|---|---|
 | 0x00 Request Control | (arbiter claim, BLE) | — |
-| 0x01 Reset | `set_sim(flat)` (or `set_resistance(0)`) | 0x01 Reset; control released; FTMS view zeroed |
+| 0x01 Reset | the brake release (below) | 0x01 Reset; control released; FTMS view zeroed; epoch moved; no Stopped status |
 | 0x04 Set Target Resistance | `set_resistance` | 0x07 |
 | 0x05 Set Target Power | `set_target_power` | 0x08 |
 | 0x07 Start/Resume | `workout` | session report → 0x04 Started |
@@ -107,7 +113,18 @@ control pages gated:
 | 70 | — | the requested page is scheduled; never a page 71 |
 
 A target that FE-C sets also notifies FTMS subscribers (0x07, 0x08, 0x12 or
-0x13).
+0x13). Every status carries the value the hook applied (a clamped grade, for
+instance), not the one requested.
+
+**The brake release** (`trainer_cmd_release_brake()`), run by FTMS Reset and
+by a console reset, is chosen from the *declared* capabilities:
+
+| Declared | Action | State after |
+|---|---|---|
+| simulation | `set_sim(flat road)` | free ride |
+| basic resistance | `set_resistance(0)` | free ride |
+| ERG only | `set_target_power(minimum)` | ERG at the minimum |
+| none | refused (FTMS 0x04) | unchanged |
 
 An FE-C control page the trainer does not support is **ignored**, as
 §8.12.3.1 requires: no page 71 is sent and no sequence number is used. FE-C
@@ -119,7 +136,11 @@ status 2 (NOT_SUPPORTED) is one the FE "shall not use".
 
 - Rotation: pages 16, 25 and 17 in the §10.1 interleave.
 - Common pages 80/81, from `radiant_product`.
-- On request: 17, 50, 51, 54, **55**, 71, 80 and 81.
+- On request: 17, 50, 51, 54, 71, 80 and 81, and **55** once the node has
+  called `radiant_profile_fec_tx_set_user()` (this app always does; apps/trainer
+  and apps/treadmill do not, so they still answer -ENOTSUP).
+- One on-request slot: a second request before the first is served replaces
+  it.
 
 **Page 70 handling**, via `radiant_profile_fec_tx_handle_request()`:
 
