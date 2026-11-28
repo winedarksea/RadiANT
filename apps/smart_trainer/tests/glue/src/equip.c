@@ -28,7 +28,7 @@ static struct trainer_report riding(uint16_t w, uint8_t rpm, uint32_t mm_s)
 	return r;
 }
 
-ZTEST(trainer_equip, test_pedalling_starts_a_session_from_idle_paused_stopped)
+ZTEST(trainer_equip, test_pedalling_starts_a_session_from_idle_only)
 {
 	struct trainer_equip e;
 	struct trainer_report r = riding(200u, 90u, 9000u);
@@ -41,16 +41,30 @@ ZTEST(trainer_equip, test_pedalling_starts_a_session_from_idle_paused_stopped)
 	zassert_equal(trainer_equip_report(&e, &r), TRAINER_RUN_IDLE);
 	zassert_equal(e.run, TRAINER_RUN_RUNNING);
 
+	/* PAUSED and STOPPED are left only by an explicit start or a console
+	 * action, never by pedalling (the treadmill's rule). */
 	(void)trainer_equip_event(&e, TRAINER_EVT_PAUSED);
 	zassert_equal(e.run, TRAINER_RUN_PAUSED);
 	(void)trainer_equip_report(&e, &r);
+	zassert_equal(e.run, TRAINER_RUN_PAUSED, "pedalling does not resume a Pause");
+	(void)trainer_equip_event(&e, TRAINER_EVT_STARTED);
 	zassert_equal(e.run, TRAINER_RUN_RUNNING);
 
 	(void)trainer_equip_event(&e, TRAINER_EVT_STOPPED);
 	zassert_equal(e.run, TRAINER_RUN_STOPPED);
-	(void)trainer_equip_report(&e, &still);
-	zassert_equal(e.run, TRAINER_RUN_STOPPED);
+	(void)trainer_equip_report(&e, &r);
+	zassert_equal(e.run, TRAINER_RUN_STOPPED, "pedalling does not undo a Stop");
 	(void)trainer_equip_event(&e, TRAINER_EVT_STARTED);
+	zassert_equal(e.run, TRAINER_RUN_RUNNING);
+
+	/* A console reset returns to IDLE, from which pedalling starts. */
+	(void)trainer_equip_event(&e, TRAINER_EVT_CONSOLE_STOP);
+	zassert_equal(e.run, TRAINER_RUN_STOPPED);
+	(void)trainer_equip_event(&e, TRAINER_EVT_CONSOLE_RESET);
+	zassert_equal(e.run, TRAINER_RUN_IDLE);
+	(void)trainer_equip_report(&e, &still);
+	zassert_equal(e.run, TRAINER_RUN_IDLE);
+	(void)trainer_equip_report(&e, &r);
 	zassert_equal(e.run, TRAINER_RUN_RUNNING);
 }
 
@@ -74,14 +88,20 @@ ZTEST(trainer_equip, test_only_local_stop_and_reset_move_the_epoch)
 	zassert_equal(e.epoch, epoch + 1u);
 	zassert_equal(e.run, TRAINER_RUN_STOPPED);
 
+	/* The equipment state's half of a console reset: the targets are the
+	 * brake release's to change (trainer_cmd_release_brake()). */
 	e.mode = TRAINER_EQUIP_ERG;
 	e.target_power_w = 250u;
-	e.sim.grade_centi_pct = 500;
 	(void)trainer_equip_event(&e, TRAINER_EVT_CONSOLE_RESET);
 	zassert_equal(e.epoch, epoch + 2u);
 	zassert_equal(e.run, TRAINER_RUN_IDLE);
-	zassert_equal(e.mode, TRAINER_EQUIP_FREE);
-	zassert_equal(e.sim.grade_centi_pct, 0);
+	zassert_equal(e.mode, TRAINER_EQUIP_ERG, "not changed until the brake is released");
+
+	/* FTMS Reset moves the epoch too (the treadmill's REMOTE_RESET). */
+	(void)trainer_equip_report(&e, &r);
+	zassert_equal(trainer_equip_ftms_reset(&e), TRAINER_RUN_RUNNING);
+	zassert_equal(e.epoch, epoch + 3u);
+	zassert_equal(e.run, TRAINER_RUN_IDLE);
 }
 
 ZTEST(trainer_equip, test_tick_accumulates_only_while_running)

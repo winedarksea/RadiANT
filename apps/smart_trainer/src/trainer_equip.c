@@ -52,7 +52,7 @@ enum trainer_run trainer_equip_report(struct trainer_equip *e,
 	e->rep = *r;
 	/* The rider is the trainer's start button: a passive machine is "in
 	 * use" when somebody pedals it. */
-	if (r->pedalling && e->run != TRAINER_RUN_RUNNING) {
+	if (r->pedalling && e->run == TRAINER_RUN_IDLE) {
 		e->run = TRAINER_RUN_RUNNING;
 	}
 	return prev;
@@ -85,7 +85,6 @@ enum trainer_run trainer_equip_event(struct trainer_equip *e,
 		break;
 	case TRAINER_EVT_CONSOLE_RESET:
 		e->epoch++;
-		trainer_equip_reset_targets(e);
 		/* A local reset starts a new session for every view that has a
 		 * baseline; the ANT+ accumulators are rollover counters a
 		 * receiver differences, so they keep counting. */
@@ -103,6 +102,7 @@ enum trainer_run trainer_equip_ftms_reset(struct trainer_equip *e)
 {
 	enum trainer_run prev = e->run;
 
+	e->epoch++;
 	e->ftms_elapsed_base_ms = e->elapsed_ms;
 	e->ftms_distance_base_um = e->distance_um;
 	e->run = TRAINER_RUN_IDLE;

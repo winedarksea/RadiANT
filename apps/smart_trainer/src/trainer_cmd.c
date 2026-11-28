@@ -500,12 +500,84 @@ int trainer_cmd_ftms_workout(enum radiant_ble_ftms_workout w, uint32_t epoch, vo
 	return cfg.src->workout(map[w]);
 }
 
-int trainer_cmd_ftms_reset(bool motion_ok, uint32_t epoch, void *ctx)
+bool trainer_cmd_fec_page_supported(uint8_t page)
+{
+	struct trainer_caps c;
+
+	trainer_cmd_caps(&c);
+	switch (page) {
+	case RADIANT_PROFILE_FEC_PAGE_BASIC_RESISTANCE:
+		return c.resistance;
+	case RADIANT_PROFILE_FEC_PAGE_TARGET_POWER:
+		return c.erg;
+	case RADIANT_PROFILE_FEC_PAGE_WIND_RESISTANCE:
+	case RADIANT_PROFILE_FEC_PAGE_TRACK_RESISTANCE:
+		return c.sim;
+	default:
+		return false;
+	}
+}
+
+int trainer_cmd_release_brake(void)
 {
 	struct trainer_equip *e = cfg.equip;
 	const struct trainer_source_ops *s = cfg.src;
-	struct trainer_sim_params flat;
-	int rc = 0;
+	struct trainer_caps c;
+	int rc;
+
+	if (e == NULL) {
+		return -ENODEV;
+	}
+	trainer_cmd_caps(&c);
+
+	/* From the DECLARED capabilities only: a hook whose capability is
+	 * switched off in Kconfig is never used to reset, or a Reset would
+	 * put the brake into a mode the trainer does not advertise. */
+	if (c.sim) {
+		struct trainer_sim_params flat = e->sim;
+
+		flat.grade_centi_pct = 0;
+		flat.crr_e5 = TRAINER_SIM_DEFAULT_CRR_E5;
+		flat.cw_centi = TRAINER_SIM_DEFAULT_CW_CENTI;
+		flat.wind_mm_s = 0;
+		flat.drafting_centi = TRAINER_SIM_DEFAULT_DRAFTING_CENTI;
+		rc = s->set_sim(&flat);
+		if (rc == 0) {
+			trainer_equip_reset_targets(e); /* free ride, flat road */
+		}
+		return rc;
+	}
+	if (c.resistance) {
+		rc = s->set_resistance(0u);
+		if (rc == 0) {
+			trainer_equip_reset_targets(e);
+		}
+		return rc;
+	}
+	if (c.erg) {
+		/* An ERG-only brake cannot free-ride: the lowest target it
+		 * takes is the release, and the state says so (ERG at that
+		 * target) rather than claiming a free ride. */
+		uint16_t w = cfg.min_power_w;
+
+		rc = s->set_target_power(w);
+		if (rc == 0) {
+			struct trainer_sim_params sim = e->sim;
+
+			trainer_equip_reset_targets(e);
+			e->sim = sim;
+			e->mode = TRAINER_EQUIP_ERG;
+			e->target_power_w = w;
+		}
+		return rc;
+	}
+	/* Nothing declared can release the brake: refused, mode kept. */
+	return -ENOTSUP;
+}
+
+int trainer_cmd_ftms_reset(bool motion_ok, uint32_t epoch, void *ctx)
+{
+	int rc;
 
 	(void)ctx;
 	/* A trainer has no "stop half" to run: it moves nothing. A refused
@@ -517,21 +589,7 @@ int trainer_cmd_ftms_reset(bool motion_ok, uint32_t epoch, void *ctx)
 	if (rc != 0) {
 		return rc;
 	}
-
-	/* SS4.16.2: back to the default state - free ride on a flat road. */
-	if (s != NULL && s->set_sim != NULL) {
-		flat = e->sim;
-		flat.grade_centi_pct = 0;
-		flat.crr_e5 = TRAINER_SIM_DEFAULT_CRR_E5;
-		flat.cw_centi = TRAINER_SIM_DEFAULT_CW_CENTI;
-		flat.wind_mm_s = 0;
-		flat.drafting_centi = TRAINER_SIM_DEFAULT_DRAFTING_CENTI;
-		rc = s->set_sim(&flat);
-	} else if (s != NULL && s->set_resistance != NULL) {
-		rc = s->set_resistance(0u);
-	}
-	if (rc == 0) {
-		trainer_equip_reset_targets(e);
-	}
-	return rc;
+	/* SS4.16.2: back to the default state. Any failure, including a
+	 * trainer with no declared way to release its brake, answers 0x04. */
+	return trainer_cmd_release_brake();
 }

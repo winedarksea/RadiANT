@@ -49,6 +49,7 @@
 
 #include "trainer_cmd.h"
 #include "trainer_equip.h"
+#include "trainer_logic.h"
 #include "trainer_node.h"
 #include "trainer_source.h"
 #if defined(CONFIG_SMART_TRAINER_BLE)
@@ -123,23 +124,47 @@ uint32_t trainer_node_epoch(void)
 	return (uint32_t)atomic_get(&session_epoch);
 }
 
-void trainer_node_session_changed(enum trainer_run prev, enum trainer_run next)
+#if defined(CONFIG_SMART_TRAINER_BLE)
+/* Set once trainer_ble_start() has brought the controller up. */
+static bool ble_up;
+#endif
+
+/* trainer_logic's session callback: the epoch mirror for the BT RX thread,
+ * and the FTMS notification unless the logic says the core sends its own. */
+static void node_session(enum trainer_run prev, enum trainer_run next, bool notify, void *ctx)
 {
+	ARG_UNUSED(ctx);
 	atomic_set(&session_epoch, (atomic_val_t)equip.epoch);
 	if (prev == next) {
 		return;
 	}
 	LOG_INF("session %d -> %d (epoch %u)", (int)prev, (int)next, (unsigned)equip.epoch);
 #if defined(CONFIG_SMART_TRAINER_BLE)
-	trainer_ble_session_changed(prev, next);
+	if (notify && ble_up) {
+		trainer_ble_session_changed(prev, next);
+	}
+#else
+	ARG_UNUSED(notify);
+#endif
+}
+
+static void node_ftms_status(const uint8_t *msg, size_t len, void *ctx)
+{
+	ARG_UNUSED(ctx);
+#if defined(CONFIG_SMART_TRAINER_BLE)
+	/* FTMS subscribers hear a target set over ANT+ too. */
+	if (ble_up) {
+		trainer_ble_notify_status(msg, len);
+	}
+#else
+	ARG_UNUSED(msg);
+	ARG_UNUSED(len);
 #endif
 }
 
 void trainer_node_report(const struct trainer_report *r)
 {
-	enum trainer_run prev = trainer_equip_report(&equip, r);
-
-	trainer_node_session_changed(prev, equip.run);
+	trainer_logic_report(r);
 }
 
 void trainer_node_event(enum trainer_source_event evt)
@@ -148,7 +173,12 @@ void trainer_node_event(enum trainer_source_event evt)
 	case TRAINER_EVT_PAIRING_WINDOW:
 #if defined(CONFIG_RADIANT_BLE_PAIRING_WINDOW)
 		/* New phones only inside a window opened at the trainer
-		 * (radiant_ble_pairing.h): physical presence authorises. */
+		 * (radiant_ble_pairing.h): physical presence authorises. Not
+		 * before the controller is up. */
+		if (!ble_up) {
+			LOG_WRN("pairing window not opened: BLE is not up yet");
+			return;
+		}
 		(void)radiant_ble_pairing_window_open(CONFIG_SMART_TRAINER_PAIRING_WINDOW_S);
 		LOG_INF("pairing window open for %u s",
 			(unsigned)CONFIG_SMART_TRAINER_PAIRING_WINDOW_S);
@@ -156,53 +186,37 @@ void trainer_node_event(enum trainer_source_event evt)
 		return;
 	case TRAINER_EVT_FORGET_BONDS:
 #if defined(CONFIG_RADIANT_BLE_PAIRING_WINDOW)
+		if (!ble_up) {
+			LOG_WRN("bonds not forgotten: BLE is not up yet");
+			return;
+		}
 		LOG_WRN("forgetting every bond: %d", radiant_ble_bonds_forget_all());
 #endif
 		return;
 	default: {
-		enum trainer_run prev = trainer_equip_event(&equip, evt);
+		int rc = trainer_logic_event(evt);
 
-		trainer_node_session_changed(prev, equip.run);
+		if (rc != 0) {
+			LOG_ERR("console reset: the brake was not released (%d)", rc);
+		}
 		publish();
 		return;
 	}
 	}
 }
 
-/* ── FE-C: acknowledged control pages in, page 71 out ───────────────────── */
+/* FTMS Reset succeeded (trainer_ble.c's reset_done). Workqueue. */
+void trainer_node_ftms_reset_done(void)
+{
+	trainer_logic_ftms_reset_done();
+	publish();
+}
 
-/*
- * Page 71's sequence number: FE-C control pages carry none, so SS8.12.3.2
- * has the FE count "each supported command received", starting from 255 (no
- * command yet). Page 70 and page 55 are not commands and do not count.
- */
-static uint8_t fec_sequence = RADIANT_PROFILE_FEC_CMD_NO_SEQ;
+/* ── FE-C: acknowledged control pages in, page 71 out ───────────────────── */
 
 static void apply_control_page(const uint8_t *body, uint32_t rx_epoch)
 {
-	struct trainer_fec_answer a;
-
-	if (body[0] == RADIANT_PROFILE_FEC_PAGE_REQUEST) {
-		/* A request, never answered with a page 71 (SS8.12.3.1). */
-		(void)radiant_profile_fec_tx_handle_request(&fec, body);
-		return;
-	}
-
-	a = trainer_cmd_fec(body, rx_epoch, (uint32_t)k_uptime_get_32());
-	if (a.answer) {
-		fec_sequence = (fec_sequence >= 254u) ? 0u : (uint8_t)(fec_sequence + 1u);
-		/* Bytes [4..7] of the command go back position for position
-		 * (Table 8-49). */
-		radiant_profile_fec_tx_command_answered(&fec, body[0], fec_sequence, a.status,
-							&body[4]);
-		LOG_INF("FE-C page %u -> status %u", body[0], a.status);
-	}
-#if defined(CONFIG_SMART_TRAINER_BLE)
-	if (a.ftms_status_len != 0u) {
-		/* FTMS subscribers hear a target set over ANT+ too. */
-		trainer_ble_notify_status(a.ftms_status, a.ftms_status_len);
-	}
-#endif
+	trainer_logic_fec_page(body, rx_epoch, (uint32_t)k_uptime_get_32());
 	publish();
 }
 
@@ -256,16 +270,7 @@ static void fec_cmd_work_fn(struct k_work *w)
 		}
 		if (dropped) {
 			LOG_WRN("FE-C page %u dropped: the command queue was full", drop_page);
-			/* A dropped CONTROL page is still a command received;
-			 * a dropped request or page 55 owes nothing. */
-			if (drop_page >= RADIANT_PROFILE_FEC_PAGE_BASIC_RESISTANCE &&
-			    drop_page <= RADIANT_PROFILE_FEC_PAGE_TRACK_RESISTANCE) {
-				fec_sequence = (fec_sequence >= 254u) ? 0u
-								      : (uint8_t)(fec_sequence + 1u);
-				radiant_profile_fec_tx_command_answered(
-					&fec, drop_page, fec_sequence,
-					RADIANT_PROFILE_FEC_CMD_STATUS_FAIL, NULL);
-			}
+			trainer_logic_fec_dropped(drop_page);
 			continue;
 		}
 		break;
@@ -434,6 +439,16 @@ int main(void)
 	cmd_cfg.ctrl_gated = radiant_ctrl_fec_page_is_gated;
 #endif
 	trainer_cmd_bind(&cmd_cfg);
+	{
+		const struct trainer_logic_cfg lcfg = {
+			.equip = &equip,
+			.fec = &fec,
+			.session_changed = node_session,
+			.ftms_status = node_ftms_status,
+		};
+
+		trainer_logic_init(&lcfg);
+	}
 #if defined(CONFIG_RADIANT_CTRL_ARBITER)
 	/* Every control page this trainer implements needs the token. */
 	radiant_ctrl_init(CONFIG_SMART_TRAINER_CTRL_ANT_TIMEOUT_MS, trainer_cmd_ctrl_gates());
@@ -454,6 +469,10 @@ int main(void)
 		LOG_ERR("radiant_profile_fec_tx_init: %d", err);
 		return 0;
 	}
+
+	/* The equipment state exists: deliver what the driver (or a button)
+	 * pushed before now. */
+	trainer_source_ready();
 
 	if (src != NULL) {
 		LOG_INF("trainer source: %s", src->name);
@@ -483,6 +502,7 @@ int main(void)
 
 		trainer_cmd_ftms_caps(&caps);
 		err = trainer_ble_start(unit.devnum, unit.serial, &caps);
+		ble_up = (err == 0);
 		if (err != 0) {
 			LOG_ERR("BLE did not start: %d. The ANT+ master is unaffected "
 				"and this node is now ANT+ only.", err);

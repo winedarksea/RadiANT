@@ -156,8 +156,10 @@ struct trainer_report {
 	bool     resistance_valid;
 	/* ERG cannot be met at this cadence (FE-C page 25 flags). */
 	bool     erg_speed_low;
-	/* The rider is turning the cranks. A session that is IDLE or STOPPED
-	 * starts (RUNNING) on the first report with this set. */
+	/* The rider is turning the cranks. A session that is IDLE starts
+	 * (RUNNING) on the first report with this set. PAUSED and STOPPED are
+	 * left only by an explicit FTMS Start/Resume, a TRAINER_EVT_STARTED
+	 * or a console action - pedalling on after a Pause does not resume. */
 	bool     pedalling;
 };
 
@@ -170,7 +172,9 @@ enum trainer_source_event {
 	TRAINER_EVT_STOPPED,
 	/* A stop or reset at the trainer itself. Bump the epoch: anything
 	 * queued from a controller before it is refused. RESET also returns
-	 * the targets to their defaults and the session to IDLE. */
+	 * the session to IDLE and RELEASES THE BRAKE through the hooks, the
+	 * same release as FTMS Reset (trainer_cmd.h): the driver need not do
+	 * it itself, and should not report the reset before it happened. */
 	TRAINER_EVT_CONSOLE_STOP,
 	TRAINER_EVT_CONSOLE_RESET,
 	/* The BLE pairing window, opened at the trainer (radiant_ble_pairing.h),

@@ -12,8 +12,8 @@
  *
  *   FTMS op                       hook               FTMS status on 0x01
  *   0x00 Request Control          (arbiter claim)    -
- *   0x01 Reset                    set_sim(flat) or   0x01 Reset
- *                                 set_resistance(0)
+ *   0x01 Reset                    release the brake  0x01 Reset
+ *                                 (see below)
  *   0x04 Set Target Resistance    set_resistance     0x07 Target Resistance
  *   0x05 Set Target Power         set_target_power   0x08 Target Power
  *   0x07 Start/Resume             workout            (session report: 0x04)
@@ -124,6 +124,19 @@ int trainer_cmd_ftms_set_target(struct radiant_ble_ftms_target *t, uint32_t epoc
 				void *ctx);
 int trainer_cmd_ftms_workout(enum radiant_ble_ftms_workout w, uint32_t epoch, void *ctx);
 int trainer_cmd_ftms_reset(bool motion_ok, uint32_t epoch, void *ctx);
+
+/* Is this FE-C control page (48..51) one the trainer declares? */
+bool trainer_cmd_fec_page_supported(uint8_t page);
+
+/*
+ * Return the brake to its default state, for FTMS Reset and a console reset,
+ * chosen from the DECLARED capabilities: simulation -> set_sim(flat road),
+ * else basic resistance -> set_resistance(0), else ERG ->
+ * set_target_power(the minimum power), which leaves the state in ERG at that
+ * target. -ENOTSUP when nothing declared can release the brake, and on any
+ * failure the reported mode is kept. 0 on success.
+ */
+int trainer_cmd_release_brake(void);
 
 /* ── Conversions, exposed for the tests ─────────────────────────────────── */
 int32_t  trainer_wind_mm_s_from_kph(int32_t kph);

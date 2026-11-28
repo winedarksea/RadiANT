@@ -15,13 +15,17 @@
 void trainer_node_report(const struct trainer_report *r);
 void trainer_node_event(enum trainer_source_event evt);
 
+/* main() calls this once the equipment state exists: trainer_source.c holds
+ * every report and event until then. */
+void trainer_source_ready(void);
+
 /* The equipment state, for trainer_ble.c. Workqueue only. */
 struct trainer_equip *trainer_node_equip(void);
 
 /* The session epoch, from any thread (the BT RX thread reads it). */
 uint32_t trainer_node_epoch(void);
 
-/* A session transition, so main.c's FE-C pages and FTMS agree. Workqueue. */
-void trainer_node_session_changed(enum trainer_run prev, enum trainer_run next);
+/* FTMS Reset succeeded (the core's reset_done hook). Workqueue. */
+void trainer_node_ftms_reset_done(void);
 
 #endif /* TRAINER_NODE_H_ */

@@ -14,8 +14,11 @@ target_sources(app PRIVATE
   src/equip.c
   src/sim_glue.c
   src/cmd.c
+  src/logic.c
   ../../src/trainer_equip.c
   ../../src/trainer_cmd.c
+  ../../src/trainer_logic.c
+  ../../src/trainer_inbox.c
   ../../src/trainer_sim_model.c
   # apps/trainer model, reused in place as in the application.
   ../../../trainer/src/trainer_model.c

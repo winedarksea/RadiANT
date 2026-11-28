@@ -80,14 +80,11 @@ static int machine_encode(uint8_t *buf, size_t cap, void *ctx)
 
 static void machine_reset_done(void *ctx)
 {
-	struct trainer_equip *e = trainer_node_equip();
-	enum trainer_run prev;
-
 	ARG_UNUSED(ctx);
 	/* SS4.16.2: the FTMS view's elapsed time and distance to zero (ANT+
-	 * untouched), the session to Idle; the core sets Training Status. */
-	prev = trainer_equip_ftms_reset(e);
-	trainer_node_session_changed(prev, e->run);
+	 * untouched), the session to Idle, the epoch moved - QUIETLY: the core
+	 * sends Reset (0x01) and Idle itself (trainer_logic.h). */
+	trainer_node_ftms_reset_done();
 }
 
 static struct radiant_ble_ftms_machine ftms_machine = {
@@ -158,7 +155,14 @@ BT_CONN_CB_DEFINE(trainer_ble_conn_cb) = {
 	.disconnected = on_disconnected,
 };
 
-static uint8_t ftms_svc_data[RADIANT_BLE_FTMS_SVC_DATA_LEN];
+/* Table 3.1's Service Data, as a CONSTANT: 0x1826, Flags = Fitness Machine
+ * Available, Fitness Machine Type = Indoor Bike (bit 5). trainer_ble_start()
+ * checks it against radiant_ble_ftms_service_data(). */
+static const uint8_t ftms_svc_data[RADIANT_BLE_FTMS_SVC_DATA_LEN] = {
+	0x26u, 0x18u, RADIANT_BLE_FTMS_SD_FLAG_AVAILABLE,
+	(uint8_t)(RADIANT_BLE_FTMS_TYPE_INDOOR_BIKE & 0xFFu),
+	(uint8_t)(RADIANT_BLE_FTMS_TYPE_INDOOR_BIKE >> 8),
+};
 
 static struct bt_data ad[] = {
 	BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
@@ -202,8 +206,15 @@ int trainer_ble_start(uint16_t devnum, uint32_t serial,
 		LOG_ERR("radiant_ble_ftms_register: %d", err);
 		return err;
 	}
-	(void)radiant_ble_ftms_service_data(ftms_svc_data, sizeof(ftms_svc_data), true,
-					    RADIANT_BLE_FTMS_TYPE_INDOOR_BIKE);
+	{
+		uint8_t want[RADIANT_BLE_FTMS_SVC_DATA_LEN];
+
+		if (radiant_ble_ftms_service_data(want, sizeof(want), true,
+						  RADIANT_BLE_FTMS_TYPE_INDOOR_BIKE) != sizeof(want) ||
+		    memcmp(want, ftms_svc_data, sizeof(want)) != 0) {
+			LOG_ERR("FTMS Service Data constant disagrees with the core");
+		}
+	}
 
 	err = bt_enable(NULL);
 	if (err != 0) {

@@ -81,22 +81,30 @@ struct trainer_equip {
 void trainer_equip_init(struct trainer_equip *e, uint16_t max_resistance_n);
 
 /* Targets back to their defaults: free ride on a flat road, default rider
- * and bike kept (the user configuration is not a target). */
+ * and bike kept (the user configuration is not a target). The equipment
+ * state only - trainer_cmd_release_brake() is what commands the brake. */
 void trainer_equip_reset_targets(struct trainer_equip *e);
 
 /* A report from the driver. A report with `pedalling` set starts a session
- * that is IDLE, PAUSED or STOPPED. Returns the run state before it, so the
- * caller can notify a transition. */
+ * that is IDLE - and only IDLE: PAUSED and STOPPED are left by an explicit
+ * Start/Resume (TRAINER_EVT_STARTED) or a console action, as on the
+ * treadmill. Returns the run state before it, so the caller can notify a
+ * transition. */
 enum trainer_run trainer_equip_report(struct trainer_equip *e,
 				      const struct trainer_report *r);
 
-/* A session event. Returns the run state before it. */
+/* A session event. Returns the run state before it. CONSOLE_STOP and
+ * CONSOLE_RESET bump the epoch; CONSOLE_RESET also zeroes the FTMS view and
+ * returns to IDLE. Neither touches the targets: the brake release that a
+ * reset owes is trainer_cmd_release_brake(), run by the caller. */
 enum trainer_run trainer_equip_event(struct trainer_equip *e,
 				     enum trainer_source_event evt);
 
 /* FTMS Reset succeeded: the FTMS view's elapsed time and distance go to zero
- * (the ANT+ accumulators do not move) and the session returns to IDLE.
- * Returns the run state before it. */
+ * (the ANT+ accumulators do not move), the session returns to IDLE and the
+ * EPOCH MOVES, as the treadmill's REMOTE_RESET does: a control page queued
+ * before the Reset must not re-apply a target right after it. Returns the
+ * run state before it. */
 enum trainer_run trainer_equip_ftms_reset(struct trainer_equip *e);
 
 /* One page 25 update: the event count and the accumulated power advance

@@ -51,9 +51,11 @@ target_include_directories(app PRIVATE src ../trainer/src)
 target_sources(app PRIVATE
   src/main.c
   src/trainer_source.c
-  # Kernel-free: tests/glue compiles these three.
+  # Kernel-free: tests/glue compiles all of these.
   src/trainer_equip.c
   src/trainer_cmd.c
+  src/trainer_logic.c
+  src/trainer_inbox.c
   src/trainer_sim_model.c
   # apps/trainer's FE-C SS8.8.4 model, reused in place (trainer_sim_model.c
   # wraps it).

@@ -85,8 +85,9 @@ static int sim_workout(enum trainer_workout w)
 
 	if (rc == 0) {
 		/* The simulated brake is instant; a real one reports once it
-		 * really is in the new state. */
-		(void)trainer_source_report_event(evt);
+		 * really is in the new state. If the event cannot be queued the
+		 * session would never follow, so the procedure fails (0x04). */
+		rc = trainer_source_report_event(evt);
 	}
 	return rc;
 }

@@ -478,97 +478,143 @@ ZTEST(trainer_cmd, test_ftms_hook_needs_the_ble_token)
 		      RADIANT_BLE_FTMS_RESULT_SUCCESS);
 }
 
-/* ── Page 70 -> 54/55/71 round trips through the real FE-C master ────────── */
+/* ── Reset: the brake release chosen from the declared capabilities (R5) ── */
 
-static struct radiant_profile_fec_tx fec;
-
-static void fec_init(void)
+static int reset_via_ftms(void)
 {
-	struct radiant_profile_fec_tx_cfg c;
+	static const uint8_t req_ctrl[] = { RADIANT_BLE_FTMS_OP_REQUEST_CONTROL };
+	static const uint8_t reset[] = { RADIANT_BLE_FTMS_OP_RESET };
 
+	(void)cp(req_ctrl, 1u, RADIANT_BLE_FTMS_OWNER_NONE, 0u);
+	return cp(reset, 1u, SELF, equip.epoch).result;
+}
+
+static int f2_power(uint16_t w)
+{
+	fake.n_power++;
+	fake.power_w = w;
+	return fake.rc;
+}
+
+static int f2_resistance(uint16_t pm)
+{
+	fake.n_resistance++;
+	fake.permille = pm;
+	return fake.rc;
+}
+
+static int f2_sim(const struct trainer_sim_params *p)
+{
+	fake.n_sim++;
+	fake.sim = *p;
+	return fake.rc;
+}
+
+ZTEST(trainer_cmd, test_reset_on_each_source_shape)
+{
+	static const struct trainer_source_ops resist_erg = {
+		.set_target_power = f2_power, .set_resistance = f2_resistance,
+	};
+	static const struct trainer_source_ops sim_hook = {
+		.set_target_power = f2_power, .set_sim = f2_sim,
+	};
+	struct trainer_cmd_cfg c;
+
+	/* Full: simulation declared -> flat road, free ride. */
+	bind(&fake_full, true);
+	equip.mode = TRAINER_EQUIP_ERG;
+	zassert_equal(reset_via_ftms(), RADIANT_BLE_FTMS_RESULT_SUCCESS);
+	zassert_equal(fake.n_sim, 1);
+	zassert_equal(fake.sim.grade_centi_pct, 0);
+	zassert_equal(fake.n_resistance + fake.n_power, 0);
+	zassert_equal(equip.mode, TRAINER_EQUIP_FREE);
+
+	/* Resistance + ERG: resistance 0. */
+	bind(&resist_erg, true);
+	equip.mode = TRAINER_EQUIP_ERG;
+	zassert_equal(reset_via_ftms(), RADIANT_BLE_FTMS_RESULT_SUCCESS);
+	zassert_equal(fake.n_resistance, 1);
+	zassert_equal(fake.permille, 0u);
+	zassert_equal(fake.n_power, 0);
+	zassert_equal(equip.mode, TRAINER_EQUIP_FREE);
+
+	/* ERG only: the minimum target, and the state says ERG at it. */
+	bind(&fake_erg_only, true);
+	equip.mode = TRAINER_EQUIP_ERG;
+	equip.target_power_w = 250u;
+	zassert_equal(reset_via_ftms(), RADIANT_BLE_FTMS_RESULT_SUCCESS);
+	zassert_equal(fake.n_power, 1);
+	zassert_equal(fake.power_w, 0u);
+	zassert_equal(equip.mode, TRAINER_EQUIP_ERG);
+	zassert_equal(equip.target_power_w, 0u);
+
+	/* A set_sim hook with simulation NOT declared (CAP_SIM=n): never used;
+	 * ERG at the minimum instead. */
+	fake_reset();
+	trainer_equip_init(&equip, 0u);
 	memset(&c, 0, sizeof(c));
-	c.id.manufacturer_id = 255u;
-	c.id.serial_number = RADIANT_PROFILE_COMMON_INVALID_U32;
-	c.id.sw_revision_supplemental = RADIANT_PROFILE_COMMON_INVALID_U8;
-	c.equipment_type = RADIANT_PROFILE_FEC_TYPE_TRAINER;
-	c.caps.capabilities = trainer_cmd_fec_capabilities();
-	c.caps.max_resistance_n = equip.max_resistance_n;
-	c.caps.max_resistance_valid = true;
-	zassert_equal(radiant_profile_fec_tx_init(&fec, &c), 0);
+	c.equip = &equip;
+	c.src = &sim_hook;
+	c.allow_erg = true;
+	c.allow_resistance = true;
+	c.allow_sim = false;
+	c.min_power_w = 50u;
+	c.max_power_w = 2000u;
+	c.ctrl_owner = radiant_ctrl_owner;
+	c.ctrl_claim = radiant_ctrl_claim;
+	c.ctrl_gated = radiant_ctrl_fec_page_is_gated;
+	trainer_cmd_bind(&c);
+	radiant_ctrl_init(30000u, trainer_cmd_ctrl_gates());
+	trainer_cmd_ftms_caps(&ftms_caps);
+	zassert_equal(reset_via_ftms(), RADIANT_BLE_FTMS_RESULT_SUCCESS);
+	zassert_equal(fake.n_sim, 0, "an undeclared mode is never entered");
+	zassert_equal(fake.power_w, 50u);
+
+	/* Nothing declared can release the brake: 0x04, mode kept. */
+	bind(NULL, true);
+	equip.mode = TRAINER_EQUIP_BASIC;
+	zassert_equal(reset_via_ftms(), RADIANT_BLE_FTMS_RESULT_OPERATION_FAILED);
+	zassert_equal(equip.mode, TRAINER_EQUIP_BASIC);
+
+	/* A release the brake refuses: 0x04, mode kept. */
+	bind(&fake_full, true);
+	equip.mode = TRAINER_EQUIP_ERG;
+	fake.rc = -EIO;
+	zassert_equal(reset_via_ftms(), RADIANT_BLE_FTMS_RESULT_OPERATION_FAILED);
+	zassert_equal(equip.mode, TRAINER_EQUIP_ERG);
 }
 
-static bool find_page(uint8_t want, uint8_t *got)
+ZTEST(trainer_cmd, test_bike_sim_status_carries_the_clamped_grade)
 {
-	for (int i = 0; i < 40; i++) {
-		uint8_t b[8];
-
-		(void)radiant_profile_fec_tx_next(&fec, b);
-		if (b[0] == want) {
-			memcpy(got, b, 8);
-			return true;
-		}
-	}
-	return false;
-}
-
-static void request(uint8_t p)
-{
-	uint8_t r[8] = { RADIANT_PROFILE_FEC_PAGE_REQUEST, 0xFF, 0xFF, 0xFF, 0xFF, 1u, p,
-			 RADIANT_PROFILE_FEC_REQUEST_CMD_DATA_PAGE };
-
-	zassert_equal(radiant_profile_fec_tx_handle_request(&fec, r), 0);
-}
-
-ZTEST(trainer_cmd, test_page_70_round_trips_report_the_trainer)
-{
-	uint8_t b[8];
-	uint8_t got[8];
-	struct trainer_fec_answer a;
-	struct radiant_profile_fec_cmd_wind_resistance w;
-	struct radiant_profile_fec_cmd_track_resistance tr;
-	struct radiant_profile_fec_cmd_user_config u;
+	static const uint8_t req_ctrl[] = { RADIANT_BLE_FTMS_OP_REQUEST_CONTROL };
+	/* grade +300.00 % (0x7530), beyond FE-C's +200.00 % */
+	static const uint8_t sim[] = { RADIANT_BLE_FTMS_OP_SET_BIKE_SIM, 0, 0, 0x30, 0x75, 40, 51 };
+	struct radiant_ble_ftms_cp_outcome o;
 
 	bind(&fake_full, true);
-	fec_init();
+	(void)cp(req_ctrl, 1u, RADIANT_BLE_FTMS_OWNER_NONE, 0u);
+	o = cp(sim, sizeof(sim), SELF, equip.epoch);
+	zassert_equal(o.result, RADIANT_BLE_FTMS_RESULT_SUCCESS);
+	zassert_equal(fake.sim.grade_centi_pct, 20000);
+	zassert_equal((int16_t)(o.status[3] | (o.status[4] << 8)), 20000,
+		      "0x12 reports the applied grade, not the requested one");
+}
 
-	/* 54: the derived capabilities and the maximum. */
-	request(RADIANT_PROFILE_FEC_PAGE_CAPABILITIES);
-	zassert_true(find_page(RADIANT_PROFILE_FEC_PAGE_CAPABILITIES, got));
-	zassert_equal(got[7], 0x07u);
-	zassert_equal(got[5] | (got[6] << 8), 2000);
+ZTEST(trainer_cmd, test_start_while_pedalling_is_a_no_op)
+{
+	static const uint8_t req_ctrl[] = { RADIANT_BLE_FTMS_OP_REQUEST_CONTROL };
+	static const uint8_t start[] = { RADIANT_BLE_FTMS_OP_START_RESUME };
+	struct trainer_report r;
 
-	/* A page 49, answered as main.c does; then 71 on request reports 49,
-	 * not the request. */
-	page(b, RADIANT_PROFILE_FEC_PAGE_TARGET_POWER);
-	b[6] = 0x20u;
-	b[7] = 0x03u;
-	a = trainer_cmd_fec(b, equip.epoch, 0u);
-	radiant_profile_fec_tx_command_answered(&fec, b[0], 0u, a.status, &b[4]);
-	zassert_true(find_page(RADIANT_PROFILE_FEC_PAGE_CMD_STATUS, got));
-	request(RADIANT_PROFILE_FEC_PAGE_CMD_STATUS);
-	zassert_true(find_page(RADIANT_PROFILE_FEC_PAGE_CMD_STATUS, got));
-	zassert_equal(got[1], RADIANT_PROFILE_FEC_PAGE_TARGET_POWER);
-	zassert_equal(got[2], 0u);
-	zassert_equal(got[3], RADIANT_PROFILE_FEC_CMD_STATUS_PASS);
-	zassert_equal(got[6], 0x20u, "Table 8-49: target power LSB echoed");
-	zassert_equal(got[7], 0x03u);
-
-	/* 55: the user configuration in use, after an FE-C page 55. */
-	page(b, RADIANT_PROFILE_FEC_PAGE_USER_CONFIG);
-	b[1] = 0x40u;
-	b[2] = 0x1Fu;
-	b[6] = 70u;
-	b[4] = 0x40u; /* offset 0, bike LSN 4 */
-	b[5] = 0x0Bu;
-	b[7] = 0x00u;
-	(void)trainer_cmd_fec(b, equip.epoch, 0u);
-	trainer_equip_echo(&equip, &w, &tr, &u);
-	radiant_profile_fec_tx_set_user(&fec, &u);
-	request(RADIANT_PROFILE_FEC_PAGE_USER_CONFIG);
-	zassert_true(find_page(RADIANT_PROFILE_FEC_PAGE_USER_CONFIG, got));
-	zassert_equal(got[1] | (got[2] << 8), 8000);
-	zassert_equal(got[6], 70u);
-	zassert_equal((got[4] >> 4) | (got[5] << 4), 180);
+	bind(&fake_full, true);
+	zassert_true(ftms_caps.passive);
+	memset(&r, 0, sizeof(r));
+	r.pedalling = true;
+	(void)trainer_equip_report(&equip, &r);
+	zassert_equal(equip.run, TRAINER_RUN_RUNNING);
+	(void)cp(req_ctrl, 1u, RADIANT_BLE_FTMS_OWNER_NONE, 0u);
+	zassert_equal(cp(start, 1u, SELF, equip.epoch).result, RADIANT_BLE_FTMS_RESULT_SUCCESS);
+	zassert_equal(fake.n_workout, 0, "already running: no hook");
 }
 
 ZTEST_SUITE(trainer_cmd, NULL, NULL, NULL, NULL, NULL);
