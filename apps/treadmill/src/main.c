@@ -959,6 +959,9 @@ int main(void)
 	treadmill_state_init(&state);
 	treadmill_session_init(&session, &motion_policy);
 	atomic_set(&session_epoch, (atomic_val_t)session.epoch);
+	/* A key report the source made before the session existed would
+	 * otherwise be lost: the session starts UNKNOWN. */
+	treadmill_source_key_resync();
 	/* The machine range bounds every command path, FE-C page 51 included.
 	 * Kconfig's ranges already keep 0 inside it; asserted at file scope. */
 	(void)treadmill_state_set_limits(

@@ -296,6 +296,10 @@ enum treadmill_source_event {
  * queue never fills). */
 int treadmill_source_report_event(enum treadmill_source_event evt);
 
+/* Re-deliver the safety key's current level to the application (main.c calls
+ * it after treadmill_session_init(), so a report made earlier is not lost). */
+void treadmill_source_key_resync(void);
+
 /*
  * Implemented by the application (src/main.c), called ONLY from the report
  * work handler on the system workqueue.

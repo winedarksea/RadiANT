@@ -331,7 +331,8 @@ min_scenarios: 34
 # 2026-11-27: 11644, Phase 3 (treadmill FTMS core), cassandra mp3e: radiant.ftms 23 new,
 # treadmill.pages 33 observed (floor was 26) -> 55.
 # 2026-11-28: 11661 (cassandra mp3g): Phase 3 review fixes, +2 radiant.ftms, +15 treadmill.pages.
-min_testcases: 11661
+# 2026-11-28: 11664 (cassandra mp3h): safety review round 3, +3 treadmill.pages.
+min_testcases: 11664
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -511,7 +512,8 @@ min_cases.hrm_ble.publish: 31
 # capabilities and the Reset baseline.
 # 2026-11-28: 70 (mp3g), the review fixes: moving-not-running, incline at rest,
 # tokens, the real FE-C claim path, non-owner stop, one case per door, Reset order.
-min_cases.treadmill.pages: 70
+# 2026-11-28: 73 (mp3h): refused stop ends moving, Reset while latched, refused page keeps no token.
+min_cases.treadmill.pages: 73
 min_cases.treadmill.hr_rx: 3
 # 2026-11-20: +3 (HAL drift item 5, as radiant.unit).
 # 2026-11-20: +1 (the ETIME retry re-read, as radiant.unit).

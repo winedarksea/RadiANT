@@ -744,4 +744,56 @@ ZTEST(treadmill_cmd, test_derived_finished_is_not_a_lap)
 	zassert_not_equal(st.lap_toggle, lap, "the source's own FINISHED is");
 }
 
+/* ── Round 3 review cases ───────────────────────────────────────────────── */
+
+ZTEST(treadmill_cmd, test_a_refused_stop_still_ends_moving)
+{
+	/* The driver refuses the Stop: answered 0x04, but the belt no longer
+	 * counts as moving, so nothing can speed it up or tilt it remotely. */
+	fake.stop_rc = -EIO;
+	zassert_equal(cp(op_stop, 2).result, 0x04, NULL);
+	zassert_false(treadmill_session_moving(&ses), NULL);
+	zassert_equal(cp(op_speed_10kph, 3).result, 0x05, NULL);
+	radiant_ctrl_release(RADIANT_CTRL_BLE);
+	zassert_equal(treadmill_cmd_fec_track_resistance(300, ses.epoch),
+		      RADIANT_PROFILE_FEC_CMD_STATUS_REJECTED, NULL);
+	zassert_equal(fake.speed_calls + fake.incline_calls, 0, NULL);
+
+	/* The same for a refused Pause and a refused Set Target Speed 0. */
+	cmd_reset(NULL);
+	fake.pause_rc = -EIO;
+	(void)cp(op_pause, 2);
+	zassert_false(treadmill_session_moving(&ses), NULL);
+	cmd_reset(NULL);
+	fake.speed_rc = -EIO;
+	(void)cp(op_speed_0, 3);
+	zassert_false(treadmill_session_moving(&ses), NULL);
+}
+
+ZTEST(treadmill_cmd, test_reset_while_latched_stops_and_answers_0x04)
+{
+	struct radiant_ble_ftms_cp_outcome o;
+
+	(void)treadmill_session_input(&ses, TREADMILL_SESSION_KEY_OUT);
+	o = cp(op_reset, 1);
+	zassert_equal(o.result, 0x04, NULL);
+	zassert_equal(fake.speed_calls, 1, "the belt-stop half still ran");
+	zassert_equal(fake.last_speed, 0u, NULL);
+	zassert_false(o.reset_view, "no Training Status Idle while latched");
+	zassert_false(o.release, NULL);
+	zassert_equal(ses.run, TREADMILL_RUN_SAFETY_STOP, NULL);
+}
+
+ZTEST(treadmill_cmd, test_a_refused_page_does_not_take_the_token)
+{
+	radiant_ctrl_release(RADIANT_CTRL_BLE);
+	remote_ok = false;
+	zassert_equal(treadmill_cmd_fec_track_resistance(300, ses.epoch),
+		      RADIANT_PROFILE_FEC_CMD_STATUS_REJECTED, NULL);
+	zassert_equal(treadmill_cmd_fec_wind(ses.epoch), RADIANT_PROFILE_FEC_CMD_STATUS_REJECTED,
+		      NULL);
+	zassert_equal(radiant_ctrl_owner(), RADIANT_CTRL_NONE,
+		      "a refused page must not lock FTMS and the grade provider out");
+}
+
 ZTEST_SUITE(treadmill_cmd, NULL, NULL, cmd_reset, NULL, NULL);

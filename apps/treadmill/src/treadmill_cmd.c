@@ -118,11 +118,19 @@ static uint8_t fec_status_for(int rc)
 	return RADIANT_PROFILE_FEC_CMD_STATUS_FAIL;
 }
 
-/* The shared front half of pages 50 and 51: capability, epoch, then claim -
- * in that order, so neither an undeclared page nor a stale one touches the
- * token. 0xFF means "go on". */
-static uint8_t fec_front(uint32_t rx_epoch)
+/* The shared front half of pages 50 and 51: capability, epoch, the motion
+ * rule, then the claim - in that order, so an undeclared, stale or refused
+ * page never touches the token (a refused page that took it would lock FTMS
+ * and the grade provider out until the ANT timeout). Page 50 moves nothing but
+ * is gated with page 51, so it is asked the same rule. 0xFF means "go on". */
+static uint8_t fec_front(int32_t grade_centi, uint32_t rx_epoch)
 {
+	struct treadmill_motion_cmd probe = {
+		.kind = TREADMILL_MOTION_SIM_GRADE, .value = grade_centi,
+		.epoch = rx_epoch, .token = true, /* (d) is the claim, below */
+	};
+	int rc;
+
 	if (!cfg.incline_cmd) {
 		/* Page 54 does not declare Simulation mode: the answer the
 		 * declaration implies, and the page is ungated. */
@@ -134,6 +142,10 @@ static uint8_t fec_front(uint32_t rx_epoch)
 		 * key-out revoked. */
 		return RADIANT_PROFILE_FEC_CMD_STATUS_REJECTED;
 	}
+	rc = treadmill_motion_permitted(&probe, cfg.session);
+	if (rc != 0) {
+		return fec_status_for(rc);
+	}
 	if (cfg.fec_claim != NULL && !cfg.fec_claim()) {
 		/* An FTMS client ran Request Control: explicit beats implicit. */
 		return RADIANT_PROFILE_FEC_CMD_STATUS_REJECTED;
@@ -143,23 +155,14 @@ static uint8_t fec_front(uint32_t rx_epoch)
 
 uint8_t treadmill_cmd_fec_track_resistance(int32_t grade_centi, uint32_t rx_epoch)
 {
-	struct treadmill_motion_cmd probe = {
-		.kind = TREADMILL_MOTION_SIM_GRADE, .value = grade_centi,
-		.epoch = rx_epoch, .token = true,
-	};
-	uint8_t front = fec_front(rx_epoch);
+	uint8_t front = fec_front(grade_centi, rx_epoch);
 	int32_t adopted;
 	int rc;
 
+	/* Authorised (and claimed) BEFORE the target moves: a refused page
+	 * leaves the target where it was. The door asks again. */
 	if (front != 0xFFu) {
 		return front;
-	}
-	/* Authorise BEFORE the target moves: a refused page must leave the
-	 * target where it was. The door asks again. The claim above succeeded,
-	 * so the token holds. */
-	rc = treadmill_motion_permitted(&probe, cfg.session);
-	if (rc != 0) {
-		return fec_status_for(rc);
 	}
 	/* A simulation grade: CLAMPED to the machine range and answered PASS -
 	 * the road may be steeper than the deck. */
@@ -170,7 +173,7 @@ uint8_t treadmill_cmd_fec_track_resistance(int32_t grade_centi, uint32_t rx_epoc
 
 uint8_t treadmill_cmd_fec_wind(uint32_t rx_epoch)
 {
-	uint8_t front = fec_front(rx_epoch);
+	uint8_t front = fec_front(0, rx_epoch);
 
 	return (front != 0xFFu) ? front : RADIANT_PROFILE_FEC_CMD_STATUS_PASS;
 }
@@ -227,12 +230,11 @@ int treadmill_cmd_ftms_set_target(const struct radiant_ble_ftms_target *t, uint3
 			return rc;
 		}
 		rc = treadmill_cmd_drive_speed(TREADMILL_MOTION_SPEED, adopted, epoch, token);
-		if (rc == 0) {
-			if (adopted == 0u) {
-				treadmill_session_note_stop(cfg.session);
-			} else {
-				treadmill_session_note_start(cfg.session);
-			}
+		if (adopted == 0u) {
+			/* A requested stop counts whatever the driver said. */
+			treadmill_session_note_stop(cfg.session);
+		} else if (rc == 0) {
+			treadmill_session_note_start(cfg.session);
 		}
 		return rc;
 	}
@@ -282,12 +284,11 @@ int treadmill_cmd_ftms_workout(enum radiant_ble_ftms_workout w, uint32_t epoch, 
 			(void)treadmill_state_command_speed(cfg.state, 0u, &adopted);
 		}
 		rc = treadmill_cmd_drive_stop(w == RADIANT_BLE_FTMS_WORKOUT_PAUSE);
-		if (rc == 0) {
-			/* The belt stops counting as moving NOW, before the
-			 * machine reports it: nothing may restart it remotely
-			 * in the gap. */
-			treadmill_session_note_stop(cfg.session);
-		}
+		/* The belt stops counting as moving NOW, before the machine
+		 * reports it, and WHATEVER THE DRIVER ANSWERED: a stop it
+		 * refused must not leave a remote speed-up or a queued page 51
+		 * free to pass condition (c). */
+		treadmill_session_note_stop(cfg.session);
 		return rc;
 	default:
 		return -ENOTSUP;
@@ -333,9 +334,8 @@ int treadmill_cmd_ftms_reset(bool motion_ok, uint32_t epoch, void *ctx)
 		incline_rc = accepted_or_rc(incline_rc);
 	}
 
-	if (speed_rc == 0) {
-		treadmill_session_note_stop(cfg.session);
-	}
+	/* A requested stop counts whatever the driver said. */
+	treadmill_session_note_stop(cfg.session);
 	return (speed_rc != 0) ? speed_rc : incline_rc;
 }
 
@@ -365,6 +365,14 @@ enum radiant_ble_ftms_verdict treadmill_cmd_ftms_auth(const struct radiant_ble_f
 		c.kind = m->resume ? TREADMILL_MOTION_RESUME : TREADMILL_MOTION_START;
 		break;
 	case RADIANT_BLE_FTMS_OP_RESET:
+		if (cfg.session->run == TREADMILL_RUN_SAFETY_STOP) {
+			/* Latched: the stop half still runs (a stop always
+			 * passes), but the procedure is refused - 0x04, no
+			 * Training Status Idle, no session change - so FTMS and
+			 * page 16 keep agreeing that the machine is stopped by
+			 * its safety key. */
+			return RADIANT_BLE_FTMS_DENY;
+		}
 		if (!reset_needs_incline()) {
 			/* No deck to move: Reset is all stop, and a stop
 			 * always passes. */

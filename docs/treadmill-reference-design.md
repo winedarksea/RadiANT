@@ -451,6 +451,19 @@ FTMS Stop and Pause, and Reset's speed half need no authorisation. Reset stops
 the belt **first**, then levels the deck. A Reset whose incline half is needed
 (an incline capability and a target that is not already 0) and refused still
 stops the belt and answers `0x04`; with no incline half to run it succeeds.
+**Watch for this with apps:** many FTMS apps send Reset straight after Request
+Control. On a machine at rest with the deck inclined and
+`CONFIG_TREADMILL_REMOTE_START=n`, that Reset needs an incline move the rule
+refuses, so it stops the (already stopped) belt and answers `0x04`. Level the
+deck at the console, or accept the `0x04`. A Reset while SAFETY_STOP is
+latched also runs only its stop half and answers `0x04`, leaving Training
+Status and page 16 on the safety stop. A stop the driver refuses still ends
+"moving" at once. A refused FE-C page never takes the ANT token: the order is
+capability, epoch, motion rule, then the claim.
+
+**The grade provider needs an FTMS controller.** Under exclusive arbitration its
+token is the same as FTMS's (owner == BLE), so it acts only while a BLE client
+has run Request Control and holds the machine.
 
 **Queued requests cannot outlive a local stop.** The FTMS pending procedure and
 the FE-C control-page ring record the epoch on receipt; a changed epoch at

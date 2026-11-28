@@ -81,6 +81,8 @@ static atomic_t events_dropped;
 #define KEY_LEVEL_OUT     2
 static atomic_t key_level = ATOMIC_INIT(KEY_LEVEL_UNKNOWN);
 static atomic_t key_out_count;
+/* Set by treadmill_source_key_resync(): deliver the level again. */
+static atomic_t key_resync;
 
 static void event_work_fn(struct k_work *w);
 static K_WORK_DEFINE(event_work, event_work_fn);
@@ -354,11 +356,42 @@ static void event_work_fn(struct k_work *w)
 	/* The key first: safety before buttons. A pull that happened since the
 	 * last pass is delivered even if the key is back in now, and then the
 	 * level it is at. */
+	if (atomic_cas(&key_resync, 1, 0)) {
+		delivered_level = KEY_LEVEL_UNKNOWN;
+	}
 	if (outs != consumed_outs ||
 	    (level == KEY_LEVEL_OUT && delivered_level != KEY_LEVEL_OUT)) {
+		bool pulled = (outs != consumed_outs);
+		unsigned int discarded = 0u;
+
 		consumed_outs = outs;
 		delivered_level = KEY_LEVEL_OUT;
 		treadmill_node_event(TREADMILL_EVT_SAFETY_KEY_OUT);
+
+		/*
+		 * The key overtakes the queue, so a console Start or Stop that
+		 * was queued BEFORE the pull would otherwise land after it -
+		 * and after an IN delivered just below - and clear the latch
+		 * with no console action after key-in. Console events queued
+		 * before this pull are therefore discarded; the user presses
+		 * again. Other events (the paused/resumed echoes, the pairing
+		 * control) are still delivered, in order.
+		 */
+		if (pulled) {
+			while (k_msgq_get(&event_q, &e, K_NO_WAIT) == 0) {
+				if (e == TREADMILL_EVT_CONSOLE_START ||
+				    e == TREADMILL_EVT_CONSOLE_STOP ||
+				    e == TREADMILL_EVT_CONSOLE_PAUSE) {
+					discarded++;
+					continue;
+				}
+				treadmill_node_event((enum treadmill_source_event)e);
+			}
+			if (discarded != 0u) {
+				LOG_WRN("treadmill_source: %u console event(s) queued before a "
+					"safety-key pull discarded", discarded);
+			}
+		}
 	}
 	if (level == KEY_LEVEL_IN && delivered_level != KEY_LEVEL_IN) {
 		delivered_level = KEY_LEVEL_IN;
@@ -380,6 +413,14 @@ static void event_work_fn(struct k_work *w)
  * report words on the workqueue without every caller learning the atomics.
  * ---------------------------------------------------------------------------
  */
+
+void treadmill_source_key_resync(void)
+{
+	/* A key report made before the session existed was delivered into a
+	 * session that init then reset to UNKNOWN: deliver the level again. */
+	atomic_set(&key_resync, 1);
+	(void)k_work_submit(&event_work);
+}
 
 uint32_t treadmill_source_last_speed(void)
 {
