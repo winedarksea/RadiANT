@@ -28,7 +28,7 @@
  *   TREADMILL_SUPPRESS_ANT_WHEN_CONNECTED. What IS arbitrated is whose
  *   commanded grade the deck actually moves to, since two controllers
  *   writing the same function is last-writer-wins with no signal to either.
- *   The ownership token lives in src/treadmill_control.h - it governs who
+ *   The ownership token is <radiant/radiant_ctrl_arbiter.h> - it governs who
  *   the deck obeys, not who gets told; the transmit side above is unaffected.
  *
  *   COMMANDS HOP TO THE WORKQUEUE FIRST. treadmill_state.h's lock-free
@@ -62,7 +62,7 @@
 #include "treadmill_state.h"
 
 #if defined(CONFIG_TREADMILL_CTRL_POLICY_EXCLUSIVE)
-#include "treadmill_control.h"
+#include <radiant/radiant_ctrl_arbiter.h>
 #endif
 #if defined(CONFIG_TREADMILL_BLE)
 #include "treadmill_ble.h"
@@ -295,18 +295,18 @@ static uint8_t fec_sequence;
 
 #if defined(CONFIG_TREADMILL_CTRL_POLICY_EXCLUSIVE)
 /*
- * treadmill_control.h spells these two page numbers itself so the ztest that
+ * radiant_ctrl_arbiter.h spells these two page numbers itself so the ztest that
  * drives the policy does not have to pull radiant_profile_fec_tx.h in. This is the
  * cross-check that keeps the two spellings from drifting - the same guard
  * treadmill_state.c puts on its copy of the FE state values.
  */
-_Static_assert(TREADMILL_CTRL_PAGE_TRACK_RESISTANCE ==
+_Static_assert(RADIANT_CTRL_PAGE_TRACK_RESISTANCE ==
 		       RADIANT_PROFILE_FEC_PAGE_TRACK_RESISTANCE,
-	       "treadmill_control.h's copy of FE-C page 51 has drifted from "
+	       "radiant_ctrl_arbiter.h's copy of FE-C page 51 has drifted from "
 	       "radiant_profile_fec_tx.h's");
-_Static_assert(TREADMILL_CTRL_PAGE_WIND_RESISTANCE ==
+_Static_assert(RADIANT_CTRL_PAGE_WIND_RESISTANCE ==
 		       RADIANT_PROFILE_FEC_PAGE_WIND_RESISTANCE,
-	       "treadmill_control.h's copy of FE-C page 50 has drifted from "
+	       "radiant_ctrl_arbiter.h's copy of FE-C page 50 has drifted from "
 	       "radiant_profile_fec_tx.h's");
 #endif
 
@@ -336,8 +336,8 @@ static void apply_control_page(const uint8_t *body)
 	 * exactly this and is how the controller learns it lost the deck;
 	 * there is no other signal, because ANT+ has no connection to drop.
 	 */
-	if (treadmill_control_page_is_gated(page) &&
-	    treadmill_control_claim(TREADMILL_CTRL_ANT, false,
+	if (radiant_ctrl_fec_page_is_gated(page) &&
+	    radiant_ctrl_claim(RADIANT_CTRL_ANT, false,
 				    (uint32_t)k_uptime_get_32()) != 0) {
 		LOG_INF("FE-C page %u refused: a BLE client holds control", page);
 		radiant_profile_fec_tx_command_answered(&fec, page, fec_sequence,
@@ -444,7 +444,7 @@ static void apply_control_page(const uint8_t *body)
  * A WORKQUEUE HOP AND NOT A MUTEX, for two reasons. It restores the invariant
  * the code already documents rather than adding a second, weaker one beside
  * it; and once both control paths are on one thread, the ownership token in
- * treadmill_control.c needs no lock either, which is most of why that module
+ * the arbiter needs no lock either, which is most of why that module
  * can be kernel-free and therefore testable.
  *
  * THE HOP IS INVISIBLE ON AIR. Page 71 is not sent from here - it is staged
@@ -808,7 +808,7 @@ static void node_tick_fn(struct k_work *w)
 	 * event at all - it simply stops sending page 51. A BLE owner is not
 	 * touched here; that one is released by Reset or by a disconnect.
 	 */
-	treadmill_control_tick((uint32_t)k_uptime_get_32());
+	radiant_ctrl_tick((uint32_t)k_uptime_get_32());
 #endif
 
 #if defined(CONFIG_TREADMILL_BLE)
@@ -883,7 +883,8 @@ int main(void)
 		treadmill_mm_s_from_ftms_speed(CONFIG_TREADMILL_MAX_SPEED_CENTI_KPH));
 
 #if defined(CONFIG_TREADMILL_CTRL_POLICY_EXCLUSIVE)
-	treadmill_control_init(CONFIG_TREADMILL_CTRL_ANT_TIMEOUT_MS);
+	radiant_ctrl_init(CONFIG_TREADMILL_CTRL_ANT_TIMEOUT_MS,
+			  RADIANT_CTRL_GATE_SIMULATION);
 #endif
 
 	memset(&fec_cfg, 0, sizeof(fec_cfg));

@@ -108,7 +108,7 @@
 #include "treadmill_ftms_actuate.h"
 #include "treadmill_state.h"
 #if defined(CONFIG_TREADMILL_CTRL_POLICY_EXCLUSIVE)
-#include "treadmill_control.h"
+#include <radiant/radiant_ctrl_arbiter.h>
 #endif
 
 LOG_MODULE_DECLARE(treadmill, CONFIG_TREADMILL_LOG_LEVEL);
@@ -292,7 +292,7 @@ static atomic_t connections;
  * "which BLE client may write the control point", which is a question FTMS
  * already specifies and this file already got right. Whether the BLE side owns
  * the deck AT ALL, against an FE-C controller that has no such handshake, is
- * treadmill_control.h's question and is tracked there. The two are kept
+ * <radiant/radiant_ctrl_arbiter.h>'s question and is tracked there. The two are kept
  * separate because they have different lifetimes: `controller` is per
  * connection, the token is per machine.
  *
@@ -624,7 +624,7 @@ static uint8_t handle_reset(struct bt_conn *conn)
 		 * has explicitly reset has said it is finished; keeping the
 		 * deck locked to it after that would be the token outliving
 		 * the intent behind it. */
-		treadmill_control_release(TREADMILL_CTRL_BLE);
+		radiant_ctrl_release(RADIANT_CTRL_BLE);
 #endif
 	}
 
@@ -731,7 +731,7 @@ static void cp_work_fn(struct k_work *w)
 		 * REJECTED on its next command, since ANT+ has no connection
 		 * to notify over.
 		 */
-		(void)treadmill_control_claim(TREADMILL_CTRL_BLE, true,
+		(void)radiant_ctrl_claim(RADIANT_CTRL_BLE, true,
 					      (uint32_t)k_uptime_get_32());
 #endif
 		controller = conn;
@@ -1191,7 +1191,7 @@ static void disc_work_fn(struct k_work *w)
 		 * floor is usually the head unit that was tracking it all
 		 * along. There is no equivalent event on the ANT+ side, which
 		 * is exactly why that side needs a timeout instead. */
-		treadmill_control_release(TREADMILL_CTRL_BLE);
+		radiant_ctrl_release(RADIANT_CTRL_BLE);
 #endif
 	}
 

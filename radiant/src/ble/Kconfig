@@ -6,7 +6,8 @@
 #
 # docs: <radiant/radiant_product.h>, <radiant/radiant_ble_adv.h>,
 # <radiant/radiant_ble_conn.h>, <radiant/radiant_ble_dis.h>,
-# <radiant/radiant_ble_pairing.h>.
+# <radiant/radiant_ble_pairing.h>, <radiant/radiant_ctrl_arbiter.h>,
+# <radiant/radiant_ble_ftms.h>.
 
 menuconfig RADIANT_PRODUCT
 	bool "product identity record (radiant_product.h)"
@@ -153,6 +154,17 @@ config RADIANT_PRODUCT_STRICT
 	  and placeholder identity is logged as a warning at boot.
 
 endif # RADIANT_PRODUCT
+
+config RADIANT_CTRL_ARBITER
+	bool "FE-C / FTMS control arbiter (radiant_ctrl_arbiter.h)"
+	help
+	  One owner at a time for fitness equipment commanded over two
+	  transports: an explicit FTMS Request Control preempts an implicit
+	  FE-C claim, an idle ANT+ claim lapses after a timeout (ANT+ is
+	  connectionless), and a refused controller is told on the wire (page
+	  71 REJECTED, FTMS 0x05). NOT a suppression rule: every transmitter
+	  keeps running for every listener. Kernel-free; every caller must run
+	  on the system workqueue. See <radiant/radiant_ctrl_arbiter.h>.
 
 menuconfig RADIANT_BLE
 	bool "shared BLE peripheral layer (radiant_ble_*.h)"

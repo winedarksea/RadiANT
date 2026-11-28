@@ -38,7 +38,7 @@ void treadmill_ble_tick(void);
  * are different facts: a phone can be connected for a whole session reading
  * Treadmill Data and never once run Request Control, and gating an FE-C
  * controller on this would lock it out for exactly that phone.
- * treadmill_control_owner() is the question the control paths ask. */
+ * radiant_ctrl_owner() is the question the control paths ask. */
 bool treadmill_ble_connected(void);
 
 /*

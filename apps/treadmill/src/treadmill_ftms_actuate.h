@@ -10,7 +10,7 @@
  * client was told the belt had stopped when the source had refused to stop
  * it. These two functions make the decision from the answers instead.
  *
- * Same rule as treadmill_control.c: no Zephyr header, no lock, no clock, and
+ * Same rule as radiant_ctrl_arbiter.c: no Zephyr header, no lock, no clock, and
  * the actuators come in as function pointers. That is what lets
  * apps/treadmill/tests/pages drive the decision with a fake that fails on
  * demand; nothing tests treadmill_ble.c itself.

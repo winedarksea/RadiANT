@@ -320,7 +320,7 @@ config TREADMILL_BLE
 	  THAT RULING IS ABOUT THE TRANSMITTER AND STILL STANDS. It is not
 	  about command ownership, which is a separate question and IS now
 	  arbitrated - see TREADMILL_CTRL_POLICY below and
-	  src/treadmill_control.h. Nothing is ever suppressed: FE-C pages
+	  <radiant/radiant_ctrl_arbiter.h>. Nothing is ever suppressed: FE-C pages
 	  16/17/19/80/81, SDM 0x7C and the FTMS Treadmill Data notification all
 	  keep running for every listener no matter who holds control. What the
 	  token decides is only whose commanded grade the deck actually moves
@@ -381,7 +381,7 @@ config TREADMILL_BLE_NOTIFY_INTERVAL_MS
 # token would be ceremony; the gating code is compiled out entirely there
 # rather than being present and always answering yes.
 #
-# NOT A SUPPRESSION RULE. See TREADMILL_BLE's help and src/treadmill_control.h:
+# NOT A SUPPRESSION RULE. See TREADMILL_BLE's help and <radiant/radiant_ctrl_arbiter.h>:
 # every page and every notification keeps going out to every listener whoever
 # holds the token. This decides only whose commanded grade the deck moves to.
 
@@ -391,10 +391,11 @@ choice TREADMILL_CTRL_POLICY
 	default TREADMILL_CTRL_POLICY_EXCLUSIVE
 	help
 	  What happens when a head unit on ANT+ and a phone on BLE both try to
-	  command the machine. See src/treadmill_control.h.
+	  command the machine. See <radiant/radiant_ctrl_arbiter.h>.
 
 config TREADMILL_CTRL_POLICY_EXCLUSIVE
 	bool "exclusive ownership - explicit beats implicit"
+	select RADIANT_CTRL_ARBITER
 	help
 	  One controller at a time, and the asymmetry is spec-native rather
 	  than invented: FTMS §4.16.2 already requires an explicit Request

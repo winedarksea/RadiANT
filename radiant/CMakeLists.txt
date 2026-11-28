@@ -339,6 +339,10 @@ if(CONFIG_RADIANT_PRODUCT)
   endif()
 endif()
 
+# The FE-C / FTMS control arbiter. Kernel-free and also compiled, unmodified,
+# by radiant/tests/ftms on native_sim.
+zephyr_library_sources_ifdef(CONFIG_RADIANT_CTRL_ARBITER src/ble/radiant_ctrl_arbiter.c)
+
 if(CONFIG_RADIANT_BLE_PAIRING_WINDOW AND CONFIG_BT_KEYS_OVERWRITE_OLDEST)
   message(FATAL_ERROR
     "radiant: CONFIG_BT_KEYS_OVERWRITE_OLDEST defeats CONFIG_RADIANT_BLE_PAIRING_WINDOW. "
