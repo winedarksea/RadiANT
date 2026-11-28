@@ -261,7 +261,13 @@ void radiant_ble_ftms_notify_status(const uint8_t *msg, size_t len)
 	const struct bt_gatt_attr *attr = status_attr();
 
 	if (attr != NULL && len != 0u) {
-		(void)bt_gatt_notify(NULL, attr, msg, (uint16_t)len);
+		int err = bt_gatt_notify(NULL, attr, msg, (uint16_t)len);
+
+		/* From the system workqueue a notify does not wait for a
+		 * buffer: say so when a status is lost. */
+		if (err != 0 && err != -ENOTCONN) {
+			LOG_WRN("FTMS: status 0x%02x not notified: %d", msg[0], err);
+		}
 	}
 }
 

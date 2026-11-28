@@ -1,0 +1,57 @@
+/*
+ * nRF52840 DK, as a RadiANT smart trainer (copied from apps/treadmill).
+ *
+ * THE POINT OF THIS BOARD IS THAT IT IS NOT AN nRF54L. radiant's nrf backend
+ * has `depends on SOC_COMPATIBLE_NRF52X || SOC_COMPATIBLE_NRF54LX`, and this
+ * row is what keeps the nRF52 half of that compiled - on the family most
+ * existing ANT+ silicon actually is.
+ *
+ * BUILD-VERIFIED ONLY. Nothing here has been on a bench. Unlike apps/treadmill,
+ * the BLE arm IS built on this part (scripts/build_all.ps1 trainer_dual_52840:
+ * dual.conf, FTMS Indoor Bike, SDC + MPSL + the gate, 2026-11-28: 276.9 kB flash,
+ * 84.0 kB RAM) - one ANT+ master and one GATT service is lighter than the
+ * treadmill. Built is not measured: there is no nRF52 bench slot for this
+ * application yet.
+ *
+ * radiant/Kconfig's own help records that this part's on-air behaviour is
+ * predicted from the nRF54L15 measurements rather than confirmed. Do not read a
+ * green build here as a working machine.
+ */
+
+/ {
+	chosen {
+		/*
+		 * The TIMER radiant's nrf backend owns outright. It runs at
+		 * 1 MHz forever and is what t_sync is hardware-captured into
+		 * from RADIO's ADDRESS event, so it cannot be shared: naming it
+		 * here rather than in the source is what makes a second user a
+		 * devicetree conflict instead of two drivers reprogramming
+		 * each other's prescaler.
+		 *
+		 * TIMER4, and the choice is constrained from both ends. The
+		 * backend needs FIVE compare/capture channels - t_sync capture,
+		 * RX start, window close, software now-capture, TX start - and
+		 * on nRF52 only TIMER3 and TIMER4 have more than four, which is
+		 * a compile-time #error in radiant_radio_nrf.c rather than
+		 * something to discover on the air.
+		 *
+		 * TIMER4 rather than TIMER3 to match apps/dongle's and
+		 * apps/hrm_ble's overlays, so that the nRF52 answer is one
+		 * number across this repository rather than three. MPSL on
+		 * nRF52 reserves TIMER0 (mpsl_hwres.h), not these.
+		 */
+		radiant,radio-timer = &timer4;
+
+		/*
+		 * The entropy source K_dev is drawn from on first boot (ADR
+		 * 0020), for the reason apps/hrm_ble's overlay gives: the RNG
+		 * peripheral, not the SoC default &cryptocell, whose driver
+		 * links CryptoCell's platform library for one 16-byte draw.
+		 */
+		zephyr,entropy = &rng;
+	};
+};
+
+&timer4 {
+	status = "okay";
+};

@@ -229,7 +229,10 @@ radiant_ble_ftms_cp_decide(const struct radiant_ble_ftms_cp_request *req,
 		 * Failed, not Success - a client uses the difference to decide
 		 * whether it started the session. */
 		if (session->run == RADIANT_BLE_FTMS_RUN_RUNNING) {
-			d.result = RADIANT_BLE_FTMS_RESULT_OPERATION_FAILED;
+			/* A passive machine's session starts when the user
+			 * moves it, so "already started" is the request met. */
+			d.result = caps->passive ? RADIANT_BLE_FTMS_RESULT_SUCCESS
+						 : RADIANT_BLE_FTMS_RESULT_OPERATION_FAILED;
 			return d;
 		}
 		m.resume = (session->run == RADIANT_BLE_FTMS_RUN_PAUSED);
@@ -347,15 +350,19 @@ radiant_ble_ftms_cp_execute(const struct radiant_ble_ftms_cp_decision *d,
 		}
 		break;
 
-	case RADIANT_BLE_FTMS_ACT_SET_TARGET:
+	case RADIANT_BLE_FTMS_ACT_SET_TARGET: {
+		/* The hook may rewrite the copy to what it applied. */
+		struct radiant_ble_ftms_target applied = d->target;
+
 		rc = (ops != NULL && ops->set_target != NULL)
-			     ? ops->set_target(&d->target, d->epoch, ops->ctx)
+			     ? ops->set_target(&applied, d->epoch, ops->ctx)
 			     : -ENOTSUP;
 		o.result = radiant_ble_ftms_result_for(rc);
 		if (rc == 0) {
-			o.status_len = target_status(&d->target, o.status);
+			o.status_len = target_status(&applied, o.status);
 		}
 		break;
+	}
 
 	case RADIANT_BLE_FTMS_ACT_START:
 		o.result = workout(ops, RADIANT_BLE_FTMS_WORKOUT_START, d->epoch);

@@ -1042,6 +1042,8 @@ ZTEST(radiant_profile_fec_tx, test_requests_for_17_50_51_are_served_and_others_r
 	zassert_equal(radiant_profile_fec_tx_request(&tx, RADIANT_PROFILE_FEC_PAGE_TRAINER, 1u), -ENOTSUP);
 	zassert_equal(radiant_profile_fec_tx_request(&tx, RADIANT_PROFILE_FEC_PAGE_GENERAL, 1u),
 		      -ENOTSUP, NULL);
+	/* A node that never called radiant_profile_fec_tx_set_user() (apps/trainer,
+	 * apps/treadmill) has no page 55 to give: unchanged, -ENOTSUP. */
 	zassert_equal(radiant_profile_fec_tx_request(&tx, RADIANT_PROFILE_FEC_PAGE_USER_CONFIG,
 					     1u),
 		      -ENOTSUP, NULL);
@@ -1211,6 +1213,232 @@ ZTEST(radiant_profile_fec_tx, test_master_declines_null_arguments)
 	zassert_equal(radiant_profile_fec_tx_next(NULL, body), RADIANT_PROFILE_SLOT_IDLE, NULL);
 	zassert_equal(radiant_profile_fec_tx_next(&tx, NULL), RADIANT_PROFILE_SLOT_IDLE, NULL);
 	zassert_equal(radiant_profile_fec_tx_messages(NULL), 0u, NULL);
+}
+
+/* -- Page 70 round trips: 55, 54 and 71 on request ------------------------ */
+
+static void page70(uint8_t *body, uint8_t requested, uint8_t byte5, uint8_t type)
+{
+	body[0] = RADIANT_PROFILE_FEC_PAGE_REQUEST;
+	body[1] = 0xFFu;
+	body[2] = 0xFFu;
+	body[3] = 0xFFu;
+	body[4] = 0xFFu;
+	body[5] = byte5;
+	body[6] = requested;
+	body[7] = type;
+}
+
+/* Run `n` messages and count those carrying `page`; the last copy is left in
+ * `last`. */
+static uint32_t count_page(struct radiant_profile_fec_tx *tx, uint8_t page,
+			   uint32_t n, uint8_t *last)
+{
+	uint8_t  body[8];
+	uint32_t seen = 0u;
+
+	for (uint32_t i = 0; i < n; i++) {
+		zassert_not_equal(radiant_profile_fec_tx_next(tx, body),
+				  RADIANT_PROFILE_SLOT_IDLE, NULL);
+		if (body[0] == page) {
+			seen++;
+			if (last != NULL) {
+				memcpy(last, body, 8u);
+			}
+		}
+	}
+	return seen;
+}
+
+ZTEST(radiant_profile_fec_tx, test_page_55_is_served_on_request_with_the_config_in_use)
+{
+	struct radiant_profile_fec_tx              tx;
+	struct radiant_profile_fec_cmd_user_config u;
+	struct radiant_profile_fec_cmd_user_config back;
+	uint8_t                                    req[8];
+	uint8_t                                    got[8];
+
+	init_trainer_master(&tx);
+
+	/* Before radiant_profile_fec_tx_set_user(): not a page this node keeps. */
+	page70(req, RADIANT_PROFILE_FEC_PAGE_USER_CONFIG, 1u,
+	       RADIANT_PROFILE_FEC_REQUEST_CMD_DATA_PAGE);
+	zassert_equal(radiant_profile_fec_tx_handle_request(&tx, req), -ENOTSUP);
+	zassert_equal(count_page(&tx, RADIANT_PROFILE_FEC_PAGE_USER_CONFIG, 20u, got), 0u);
+
+	/* Set with every field invalid: each field's own sentinel, never a
+	 * 0 kg rider. */
+	memset(&u, 0, sizeof(u));
+	radiant_profile_fec_tx_set_user(&tx, &u);
+	zassert_equal(radiant_profile_fec_tx_handle_request(&tx, req), 0);
+	zassert_equal(count_page(&tx, RADIANT_PROFILE_FEC_PAGE_USER_CONFIG, 20u, got), 1u);
+	zassert_equal(got[1], 0xFFu);
+	zassert_equal(got[2], 0xFFu);
+	zassert_equal(got[4], 0xFFu);
+	zassert_equal(got[5], 0xFFu);
+	zassert_equal(got[6], 0xFFu);
+	zassert_equal(got[7], 0x00u, "gear ratio sentinel is zero");
+
+	memset(&u, 0, sizeof(u));
+	u.user_weight_10g = 7550u; /* 75.50 kg */
+	u.user_weight_valid = true;
+	u.bike_weight_50g = 180u; /* 9.00 kg */
+	u.bike_weight_valid = true;
+	u.wheel_diameter_cm = 70u;
+	u.wheel_diameter_valid = true;
+	u.wheel_offset_mm = 2u;
+	u.wheel_offset_valid = true;
+	radiant_profile_fec_tx_set_user(&tx, &u);
+
+	zassert_equal(radiant_profile_fec_tx_handle_request(&tx, req), 0);
+	zassert_equal(count_page(&tx, RADIANT_PROFILE_FEC_PAGE_USER_CONFIG, 20u, got), 1u);
+	zassert_equal(radiant_profile_fec_decode_user_config(got, &back), 0);
+	zassert_equal(back.user_weight_10g, 7550u);
+	zassert_equal(back.bike_weight_50g, 180u);
+	zassert_equal(back.wheel_diameter_cm, 70u);
+	zassert_equal(back.wheel_offset_mm, 2u);
+	zassert_false(back.gear_ratio_valid);
+}
+
+ZTEST(radiant_profile_fec_tx, test_an_unrepresentable_user_config_cannot_wedge_the_master)
+{
+	struct radiant_profile_fec_tx              tx;
+	struct radiant_profile_fec_cmd_user_config u;
+	uint8_t                                    got[8];
+
+	init_trainer_master(&tx);
+
+	/* A bike weight AT the sentinel, flagged valid: the encoder refuses it,
+	 * and a refused slot 3 would stop the group advancing. */
+	memset(&u, 0, sizeof(u));
+	u.bike_weight_50g = RADIANT_PROFILE_FEC_BIKE_WEIGHT_INVALID;
+	u.bike_weight_valid = true;
+	u.wheel_offset_mm = 0x20u;
+	u.wheel_offset_valid = true;
+	radiant_profile_fec_tx_set_user(&tx, &u);
+	zassert_equal(radiant_profile_fec_tx_request(&tx, RADIANT_PROFILE_FEC_PAGE_USER_CONFIG,
+						     1u), 0);
+	zassert_equal(count_page(&tx, RADIANT_PROFILE_FEC_PAGE_USER_CONFIG, 20u, got), 1u);
+	zassert_equal(got[4], 0xFFu, "offset and bike LSN both invalid");
+	zassert_equal(got[5], 0xFFu);
+	zassert_equal(radiant_profile_fec_tx_messages(&tx), 20u, "never stalled");
+}
+
+ZTEST(radiant_profile_fec_tx, test_page_70_ack_bit_is_answered_by_broadcast_count)
+{
+	struct radiant_profile_fec_tx tx;
+	uint8_t                       req[8];
+
+	init_trainer_master(&tx);
+
+	/* Bit 7 + count 3: FE-C SS10.3 forbids the acknowledged reply, so the
+	 * count is honoured and the copies go out as ordinary data slots. */
+	page70(req, RADIANT_PROFILE_FEC_PAGE_CAPABILITIES, 0x83u,
+	       RADIANT_PROFILE_FEC_REQUEST_CMD_DATA_PAGE);
+	zassert_equal(radiant_profile_fec_tx_handle_request(&tx, req), 0);
+	zassert_equal(count_page(&tx, RADIANT_PROFILE_FEC_PAGE_CAPABILITIES, 60u, NULL), 3u);
+
+	/* 0x80, "until a successful acknowledge": a bounded broadcast count. */
+	page70(req, RADIANT_PROFILE_FEC_PAGE_CAPABILITIES, 0x80u,
+	       RADIANT_PROFILE_FEC_REQUEST_CMD_DATA_PAGE);
+	zassert_equal(radiant_profile_fec_tx_handle_request(&tx, req), 0);
+	zassert_equal(count_page(&tx, RADIANT_PROFILE_FEC_PAGE_CAPABILITIES, 80u, NULL),
+		      RADIANT_PROFILE_FEC_TX_REQUEST_UNTIL_ACK_COUNT);
+
+	/* Without bit 7 the count is the count. */
+	page70(req, RADIANT_PROFILE_FEC_PAGE_CAPABILITIES, 2u,
+	       RADIANT_PROFILE_FEC_REQUEST_CMD_DATA_PAGE);
+	zassert_equal(radiant_profile_fec_tx_handle_request(&tx, req), 0);
+	zassert_equal(count_page(&tx, RADIANT_PROFILE_FEC_PAGE_CAPABILITIES, 60u, NULL), 2u);
+}
+
+ZTEST(radiant_profile_fec_tx, test_page_70_invalid_and_foreign_requests_schedule_nothing)
+{
+	struct radiant_profile_fec_tx tx;
+	uint8_t                       req[8];
+
+	init_trainer_master(&tx);
+
+	/* 0x00 is reserved as invalid. */
+	page70(req, RADIANT_PROFILE_FEC_PAGE_CAPABILITIES, 0x00u,
+	       RADIANT_PROFILE_FEC_REQUEST_CMD_DATA_PAGE);
+	zassert_equal(radiant_profile_fec_tx_handle_request(&tx, req), -EINVAL);
+	/* Data page set, ANT-FS: not this master's to serve. */
+	page70(req, RADIANT_PROFILE_FEC_PAGE_CAPABILITIES, 1u,
+	       RADIANT_PROFILE_FEC_REQUEST_CMD_DATA_PAGE_SET);
+	zassert_equal(radiant_profile_fec_tx_handle_request(&tx, req), -ENOTSUP);
+	page70(req, RADIANT_PROFILE_FEC_PAGE_CAPABILITIES, 1u,
+	       RADIANT_PROFILE_FEC_REQUEST_CMD_ANTFS_SESSION);
+	zassert_equal(radiant_profile_fec_tx_handle_request(&tx, req), -ENOTSUP);
+	/* A page in the rotation. */
+	page70(req, RADIANT_PROFILE_FEC_PAGE_TRAINER, 1u,
+	       RADIANT_PROFILE_FEC_REQUEST_CMD_DATA_PAGE);
+	zassert_equal(radiant_profile_fec_tx_handle_request(&tx, req), -ENOTSUP);
+	/* Not a page 70 at all. */
+	req[0] = RADIANT_PROFILE_FEC_PAGE_TRACK_RESISTANCE;
+	zassert_equal(radiant_profile_fec_tx_handle_request(&tx, req), -EINVAL);
+	zassert_equal(radiant_profile_fec_tx_handle_request(NULL, req), -EINVAL);
+	zassert_equal(radiant_profile_fec_tx_handle_request(&tx, NULL), -EINVAL);
+
+	zassert_equal(count_page(&tx, RADIANT_PROFILE_FEC_PAGE_CAPABILITIES, 40u, NULL), 0u);
+	zassert_equal(count_page(&tx, RADIANT_PROFILE_FEC_PAGE_CMD_STATUS, 40u, NULL), 0u,
+		      "no request is answered with a page 71");
+}
+
+ZTEST(radiant_profile_fec_tx, test_page_71_on_request_reports_the_command_not_the_request)
+{
+	struct radiant_profile_fec_tx         tx;
+	struct radiant_profile_fec_cmd_status st;
+	static const uint8_t                  echo[4] = { 0xFFu, 0x4Cu, 0x4Fu, 0x50u };
+	uint8_t                               req[8];
+	uint8_t                               got[8];
+
+	init_trainer_master(&tx);
+
+	/* Before any command: 255 / 255 / Uninitialised (SS8.12.3). */
+	page70(req, RADIANT_PROFILE_FEC_PAGE_CMD_STATUS, 1u,
+	       RADIANT_PROFILE_FEC_REQUEST_CMD_DATA_PAGE);
+	zassert_equal(radiant_profile_fec_tx_handle_request(&tx, req), 0);
+	zassert_equal(count_page(&tx, RADIANT_PROFILE_FEC_PAGE_CMD_STATUS, 20u, got), 1u);
+	zassert_equal(radiant_profile_fec_decode_cmd_status(got, &st), 0);
+	zassert_equal(st.last_command, RADIANT_PROFILE_FEC_CMD_NONE);
+	zassert_equal(st.sequence, RADIANT_PROFILE_FEC_CMD_NO_SEQ);
+	zassert_equal(st.status, RADIANT_PROFILE_FEC_CMD_STATUS_UNINITIALISED);
+
+	/* A page 51, answered; let its own page 71 go out. */
+	radiant_profile_fec_tx_command_answered(&tx, RADIANT_PROFILE_FEC_PAGE_TRACK_RESISTANCE,
+						0u, RADIANT_PROFILE_FEC_CMD_STATUS_PASS, echo);
+	zassert_equal(count_page(&tx, RADIANT_PROFILE_FEC_PAGE_CMD_STATUS, 20u, NULL), 1u);
+
+	/* Figure 6-2: the controller asks for page 71 to confirm the mode. The
+	 * request must not become the "last command" it asks about. */
+	page70(req, RADIANT_PROFILE_FEC_PAGE_CMD_STATUS, 2u,
+	       RADIANT_PROFILE_FEC_REQUEST_CMD_DATA_PAGE);
+	zassert_equal(radiant_profile_fec_tx_handle_request(&tx, req), 0);
+	zassert_equal(count_page(&tx, RADIANT_PROFILE_FEC_PAGE_CMD_STATUS, 40u, got), 2u);
+	zassert_equal(radiant_profile_fec_decode_cmd_status(got, &st), 0);
+	zassert_equal(st.last_command, RADIANT_PROFILE_FEC_PAGE_TRACK_RESISTANCE);
+	zassert_equal(st.sequence, 0u);
+	zassert_equal(st.status, RADIANT_PROFILE_FEC_CMD_STATUS_PASS);
+	zassert_mem_equal(st.data, echo, 4u);
+}
+
+ZTEST(radiant_profile_fec_tx, test_page_54_on_request_carries_the_configured_capabilities)
+{
+	struct radiant_profile_fec_tx tx;
+	uint8_t                       req[8];
+	uint8_t                       got[8];
+
+	init_trainer_master(&tx);
+	page70(req, RADIANT_PROFILE_FEC_PAGE_CAPABILITIES, 1u,
+	       RADIANT_PROFILE_FEC_REQUEST_CMD_DATA_PAGE);
+	zassert_equal(radiant_profile_fec_tx_handle_request(&tx, req), 0);
+	zassert_equal(count_page(&tx, RADIANT_PROFILE_FEC_PAGE_CAPABILITIES, 20u, got), 1u);
+	zassert_equal(got[5], 2000u & 0xFFu);
+	zassert_equal(got[6], 2000u >> 8);
+	zassert_equal(got[7], RADIANT_PROFILE_FEC_CAP_BASIC_RESISTANCE |
+				      RADIANT_PROFILE_FEC_CAP_TARGET_POWER |
+				      RADIANT_PROFILE_FEC_CAP_SIMULATION);
 }
 
 ZTEST_SUITE(radiant_profile_fec_tx, NULL, NULL, NULL, NULL, NULL);

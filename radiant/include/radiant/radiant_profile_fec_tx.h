@@ -571,6 +571,13 @@ struct radiant_profile_fec_tx {
 	struct radiant_profile_fec_cmd_wind_resistance  wind;
 	struct radiant_profile_fec_cmd_track_resistance track;
 
+	/* The user configuration in use, echoed by page 55 on request.
+	 * Store-only, like the two above; every field starts invalid. */
+	struct radiant_profile_fec_cmd_user_config      user;
+	/* radiant_profile_fec_tx_set_user() has been called: only then is
+	 * page 55 served on request. */
+	bool user_set;
+
 	/* Transmitted messages, and the position within the five-message
 	 * group. Advanced once per emitted message by radiant_profile_fec_tx_next(),
 	 * never by the engine - a slot the engine declined is not a message. */
@@ -624,6 +631,13 @@ void radiant_profile_fec_tx_set_wind(struct radiant_profile_fec_tx *tx,
 void radiant_profile_fec_tx_set_track(struct radiant_profile_fec_tx *tx,
 			      const struct radiant_profile_fec_cmd_track_resistance *t);
 
+/* The user configuration page 55 echoes on request (SS10.1.3.1: a simulation
+ * FE applies page 55, and Common Pages SS6.2 lets a controller ask for any
+ * page the FE supports). A bike weight or wheel offset that cannot be
+ * represented is stored as invalid, so the echo always encodes. */
+void radiant_profile_fec_tx_set_user(struct radiant_profile_fec_tx *tx,
+				     const struct radiant_profile_fec_cmd_user_config *u);
+
 /*
  * Record the answer to a control page and arm the page 71 that owes it.
  *
@@ -643,16 +657,55 @@ void radiant_profile_fec_tx_command_answered(struct radiant_profile_fec_tx *tx,
 /*
  * A page 70 arrived. Deliver `page` in the next `count` data slots.
  *
- * Returns 0, or -ENOTSUP for a page this master cannot produce on request -
- * which the caller should answer with a page 71 carrying
- * RADIANT_PROFILE_FEC_CMD_STATUS_NOT_SUPPORTED rather than by staying silent.
- * Supported: 17, 50, 51, 54, 71, 80 and 81. Page 17 is in the rotation too,
+ * Returns 0, or -ENOTSUP for a page this master cannot produce on request.
+ * Supported: 17, 50, 51, 54, 71, 80 and 81, and 55 once the node has called
+ * radiant_profile_fec_tx_set_user() (before that, -ENOTSUP as for any page the
+ * node does not keep). Page 17 is in the rotation too,
  * but SS10.1.3.1 has the general settings page answer a request on any
  * controllable FE; 50 and 51 are the simulation settings, which are
- * available on request and never broadcast.
+ * available on request and never broadcast; 55 is the user configuration
+ * in use (radiant_profile_fec_tx_set_user()). `count` 0 is treated as 1.
+ *
+ * THERE IS ONE ON-REQUEST SLOT. A request that arrives before the previous one
+ * has been fully served replaces it (the earlier page's remaining copies are
+ * dropped). A controller that asks for two pages back to back gets the second;
+ * it retries the first, as Common Pages SS6.2 expects of a requester that saw
+ * no answer.
+ *
+ * A PAGE 70 IS NOT A CONTROL PAGE, and neither outcome is answered with a
+ * page 71: SS8.12.3.1 [MD_FEC_001] says page 71's command ID "shall NOT be
+ * set to the value of a request message data page, i.e. common page 70", and
+ * an unsupported request is answered by not responding (Common Pages Rev 3.1
+ * SS6.2). The caller must not call radiant_profile_fec_tx_command_answered()
+ * for a page 70, nor advance its page-71 sequence number (SS8.12.3.2 counts
+ * supported COMMANDS). Answering page 70 with page 71 would also overwrite
+ * the very status a controller asks page 71 for (SS6.4.1, Figure 6-2).
  */
 int radiant_profile_fec_tx_request(struct radiant_profile_fec_tx *tx, uint8_t page,
 			   uint8_t count);
+
+/* Page 70 byte 5 = 0x80 ("until a successful acknowledge") is answered with
+ * this many broadcast copies, because FE-C forbids the acknowledged reply
+ * (see radiant_profile_fec_tx_handle_request()). */
+#define RADIANT_PROFILE_FEC_TX_REQUEST_UNTIL_ACK_COUNT 4u
+
+/*
+ * A whole page 70, decoded and scheduled: the entry point a node uses.
+ *
+ *   - command type 1 (request data page) only; anything else -ENOTSUP;
+ *   - byte 5 bit 7, "reply acknowledged if possible", is honoured as FE-C
+ *     defines it: the reply is BROADCAST. Fitness Equipment Rev 5.0 SS10.3
+ *     [MD_0006]: FE "shall only send broadcast messages ... and shall never
+ *     send acknowledged or burst messages" (and SS8.12.3 again for page 71).
+ *     Bits 0-6 still give the count; 0x80 sends
+ *     RADIANT_PROFILE_FEC_TX_REQUEST_UNTIL_ACK_COUNT copies;
+ *   - byte 5 = 0x00 is reserved as invalid: -EINVAL, nothing scheduled;
+ *   - otherwise radiant_profile_fec_tx_request()'s 0 / -ENOTSUP.
+ *
+ * Whatever it returns, the caller sends NO page 71 (see above).
+ */
+int radiant_profile_fec_tx_handle_request(struct radiant_profile_fec_tx *tx,
+					  const uint8_t *body);
 
 /*
  * Fill `body` with the next message and say what it was.

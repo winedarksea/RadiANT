@@ -355,6 +355,34 @@ $treadmillTargets = @(
     @{ dir='tread_dual_fail';  board='nrf54l15dk/nrf54l15/cpuapp'; source='SIMULATED'; conf='dual.conf'; sdm=$true; expect_fail='CONFIG_RADIANT_PRODUCT_STRICT refuses this product identity' }
 )
 
+$trainerDualAsserts = @('CONFIG_RADIANT_PRODUCT_STRICT=y', 'CONFIG_RADIANT_BLE=y', 'CONFIG_BT_DIS=y',
+    'CONFIG_RADIANT_PRODUCT_MANUFACTURER_ID=65534',
+    'CONFIG_RADIANT_BLE_FTMS=y', 'CONFIG_RADIANT_BLE_FTMS_INDOOR_BIKE=y', 'CONFIG_SMART_TRAINER=y',
+    'CONFIG_RADIANT_CTRL_ARBITER=y',
+    'CONFIG_SMART_TRAINER_CAP_ERG=y', 'CONFIG_SMART_TRAINER_CAP_RESISTANCE=y', 'CONFIG_SMART_TRAINER_CAP_SIM=y',
+    'CONFIG_RADIANT_BLE_PAIRING_WINDOW=y')
+# ---- The smart trainer ---------------------------------------------------------
+#
+# apps/smart_trainer, the FE-C + FTMS Indoor Bike reference design (Phase 4).
+# A fifth list, shaped like $treadmillTargets: SMART_TRAINER_SOURCE and its own
+# BLE symbol set. -Only matches the directory, so -Only "trainer*" builds these.
+# NOT apps/trainer (the ACK-fault simulator), which has no rows here: release.yml
+# builds it.
+$trainerTargets = @(
+    @{ dir='trainer_l15';      board='nrf54l15dk/nrf54l15/cpuapp'; source='SIMULATED'; conf=$null }
+    @{ dir='trainer_52840dk';  board='nrf52840dk/nrf52840';        source='SIMULATED'; conf=$null }
+    @{ dir='trainer_ble';      board='nrf54l15dk/nrf54l15/cpuapp'; source='SIMULATED'; conf='ble.conf'; ble=$true }
+    @{ dir='trainer_custom';   board='nrf54l15dk/nrf54l15/cpuapp'; source='CUSTOM';    conf='source_custom.conf' }
+    # The named dual-radio preset with the TEST identity, on both SoC families,
+    # and without any identity (must fail to configure). Asserted: strict
+    # identity, DIS, the FTMS Indoor Bike machine, the FE-C profile (always in
+    # CONFIG_SMART_TRAINER) behind the arbiter, the three advertised
+    # capabilities, and equipment bonding.
+    @{ dir='trainer_dual';       board='nrf54l15dk/nrf54l15/cpuapp'; source='SIMULATED'; conf='dual.conf;../../tests/product_test.conf'; ble=$true; assert_config=$trainerDualAsserts }
+    @{ dir='trainer_dual_52840'; board='nrf52840dk/nrf52840';        source='SIMULATED'; conf='dual.conf;../../tests/product_test.conf'; ble=$true; assert_config=$trainerDualAsserts }
+    @{ dir='trainer_dual_fail';  board='nrf54l15dk/nrf54l15/cpuapp'; source='SIMULATED'; conf='dual.conf'; expect_fail='CONFIG_RADIANT_PRODUCT_STRICT refuses this product identity' }
+)
+
 # ---- The heart-rate transmitter sample ---------------------------------------
 #
 # radiant/samples/hr_transmitter, the battery-node demonstration. A fourth list:
@@ -887,6 +915,78 @@ try {
             if ($t.ble) { $notes += 'FTMS + RSC + SMP + MPSL gate' }
             if ($t.hr)  { $notes += 'ANT+ HR slave' }
             Write-Host ("  ok: {0} HAL, {1} source, {2}" -f $RadiantBackend, $t.source, ($notes -join ', '))
+        }
+    }
+
+    # ---- The smart trainer -----------------------------------------------------
+    if ($Backend -eq 'core') {
+        $smartTrainerApp = Join-Path $repo 'apps\smart_trainer'
+        foreach ($t in $trainerTargets) {
+            if ($t.dir -notlike $Only) { continue }
+
+            $out = Join-Path $repo "build\$($t.dir)"
+            Write-Host "`n=== smart_trainer $($t.dir)  [$($t.board)]" -ForegroundColor Cyan
+
+            $extra = @('--', "-DRADIANT_BACKEND=$RadiantBackend")
+            # IMAGE-SCOPED: the prefix is the application directory's basename.
+            if ($t.conf) { $extra += "-Dsmart_trainer_EXTRA_CONF_FILE=$($t.conf)" }
+
+            $log = Join-Path $env:TEMP "build_$($t.dir).log"
+            $rc = Invoke-West @('-z', $zephyr, 'build', '-s', $smartTrainerApp,
+                                '-d', $out, '-b', $t.board, '-p', 'always') $extra $log `
+                              -MergeStderr:([bool]$t.expect_fail)
+            if ($t.expect_fail) {
+                if ($rc -eq 0) {
+                    throw "smart_trainer $($t.dir): configured and built, but must be refused ('$($t.expect_fail)')"
+                }
+                if (-not (Select-String -Path $log -SimpleMatch $t.expect_fail -Quiet)) {
+                    Get-Content $log -Tail 30
+                    throw "smart_trainer $($t.dir): failed, but not with '$($t.expect_fail)'; full log at $log"
+                }
+                Write-Host "  ok: refused as expected ('$($t.expect_fail)')"
+                continue
+            }
+            if ($rc -ne 0) {
+                Get-Content $log -Tail 30
+                throw "build failed for smart_trainer $($t.dir); full log at $log"
+            }
+
+            $cfg = Get-Content (Join-Path $out 'smart_trainer\zephyr\.config')
+
+            $want = "CONFIG_RADIANT_BACKEND_$($RadiantBackend.ToUpper())=y"
+            if (-not ($cfg | Where-Object { $_ -eq $want })) {
+                $got = ($cfg | Where-Object { $_ -match '^CONFIG_RADIANT_BACKEND_\w+=y' })
+                throw "smart_trainer $($t.dir): expected $want in .config, found '$got'"
+            }
+            $wantSource = "CONFIG_SMART_TRAINER_SOURCE_$($t.source)=y"
+            if (-not ($cfg | Where-Object { $_ -eq $wantSource })) {
+                throw "smart_trainer $($t.dir): expected $wantSource in .config"
+            }
+            # The BLE interlock: the gate, its session, SMP and the SDC come from
+            # `select`/`default` on SMART_TRAINER_BLE, not from the fragment.
+            if ($t.ble) {
+                foreach ($sym in @('CONFIG_SMART_TRAINER_BLE=y',
+                                   'CONFIG_RADIANT_BACKEND_NRF_GATE_MPSL=y',
+                                   'CONFIG_MPSL_TIMESLOT_SESSION_COUNT=2',
+                                   'CONFIG_BT_SMP=y',
+                                   'CONFIG_BT_LL_SOFTDEVICE=y',
+                                   'CONFIG_RADIANT_BLE_FTMS_INDOOR_BIKE=y',
+                                   'CONFIG_RADIANT_CTRL_ARBITER=y')) {
+                    if (-not ($cfg | Where-Object { $_ -eq $sym })) {
+                        throw "smart_trainer $($t.dir): expected $sym in .config"
+                    }
+                }
+            } elseif (-not ($cfg | Where-Object { $_ -eq '# CONFIG_BT is not set' })) {
+                throw "smart_trainer $($t.dir): expected '# CONFIG_BT is not set' in .config"
+            }
+            foreach ($line in @($t.assert_config)) {
+                if (-not $line) { continue }
+                if (-not ($cfg | Where-Object { $_ -eq $line })) {
+                    throw "smart_trainer $($t.dir): expected '$line' in .config"
+                }
+            }
+            $note = if ($t.ble) { 'FE-C + FTMS Indoor Bike + MPSL gate' } else { 'FE-C only' }
+            Write-Host ("  ok: {0} HAL, {1} source, {2}" -f $RadiantBackend, $t.source, $note)
         }
     }
 

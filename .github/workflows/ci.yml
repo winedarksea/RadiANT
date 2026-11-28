@@ -218,12 +218,15 @@ jobs:
           # app/apps/dongle_thread/tests is the Matter bridge's stored-record
           # decoder (security review 2026-11-20 item 2) - the one part of the
           # Matter arm that builds without the CHIP stack.
+          # app/apps/smart_trainer/tests is the smart trainer's equipment state,
+          # seam<->model glue and command paths (Phase 4).
           "${zephyr_base}/scripts/twister" \
             -T app/radiant/tests \
             -T app/apps/hrm_ble/tests \
             -T app/apps/treadmill/tests \
             -T app/apps/trainer/tests \
             -T app/apps/dongle_thread/tests \
+            -T app/apps/smart_trainer/tests \
             -p native_sim \
             --inline-logs \
             -v

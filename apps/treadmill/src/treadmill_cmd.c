@@ -204,7 +204,7 @@ int treadmill_cmd_grade_provider(int32_t grade_centi)
 
 /* ── FTMS ───────────────────────────────────────────────────────────────── */
 
-int treadmill_cmd_ftms_set_target(const struct radiant_ble_ftms_target *t, uint32_t epoch,
+int treadmill_cmd_ftms_set_target(struct radiant_ble_ftms_target *t, uint32_t epoch,
 				  void *ctx)
 {
 	bool token = treadmill_cmd_ftms_token();
