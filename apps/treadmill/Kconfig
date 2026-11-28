@@ -247,10 +247,12 @@ config TREADMILL_REMOTE_START
 	help
 	  Off by default, and the default is the safety decision. With it off
 	  a remote controller - an FTMS client or an FE-C head unit - can
-	  change speed and grade only while the belt is ALREADY RUNNING
-	  (started at the console), and can always stop it. FTMS Start/Resume
-	  and a Set Target Speed above 0 from Idle, Paused or Stopped answer
-	  0x05 Control Not Permitted.
+	  change speed and grade only while the belt is ALREADY MOVING
+	  (a running session with the belt reported above 0 and no remote stop
+	  accepted since), and can always stop it. FTMS Start/Resume, a Set
+	  Target Speed above 0 and every incline change (FTMS, FE-C page 51,
+	  the grade provider, Reset's incline half) on a belt at rest are
+	  refused: 0x05 Control Not Permitted, FE-C REJECTED, or dropped.
 
 	  Turn it on only for a machine whose own design makes a remotely
 	  started belt safe (a standing-detection deck, an attendant), and

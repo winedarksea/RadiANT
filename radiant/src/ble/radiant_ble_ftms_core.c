@@ -163,6 +163,7 @@ radiant_ble_ftms_cp_decide(const struct radiant_ble_ftms_cp_request *req,
 
 	op = req->data[0];
 	d.op = op;
+	d.epoch = req->epoch;
 	m.op = op;
 	m.stale = (req->epoch != session->epoch);
 
@@ -295,9 +296,17 @@ static uint8_t target_status(const struct radiant_ble_ftms_target *t, uint8_t *o
 	}
 }
 
-static int workout(const struct radiant_ble_ftms_ops *ops, enum radiant_ble_ftms_workout w)
+/* Start/Resume and Stop/Pause are mandatory (Table 4.15): a machine that
+ * cannot do one fails the procedure (0x04) rather than calling a mandatory op
+ * code unsupported. */
+static uint8_t workout(const struct radiant_ble_ftms_ops *ops, enum radiant_ble_ftms_workout w,
+		       uint32_t epoch)
 {
-	return (ops != NULL && ops->workout != NULL) ? ops->workout(w, ops->ctx) : -ENOTSUP;
+	int rc = (ops != NULL && ops->workout != NULL) ? ops->workout(w, epoch, ops->ctx)
+						      : -ENOTSUP;
+
+	return (rc == -ENOTSUP) ? RADIANT_BLE_FTMS_RESULT_OPERATION_FAILED
+				: radiant_ble_ftms_result_for(rc);
 }
 
 struct radiant_ble_ftms_cp_outcome
@@ -318,7 +327,7 @@ radiant_ble_ftms_cp_execute(const struct radiant_ble_ftms_cp_decision *d,
 
 	case RADIANT_BLE_FTMS_ACT_RESET:
 		rc = (ops != NULL && ops->reset != NULL)
-			     ? ops->reset(d->reset_motion_ok, ops->ctx)
+			     ? ops->reset(d->reset_motion_ok, d->epoch, ops->ctx)
 			     : -ENOTSUP;
 		if (!d->reset_motion_ok) {
 			/* The stop half ran (or was attempted); the procedure as
@@ -340,7 +349,7 @@ radiant_ble_ftms_cp_execute(const struct radiant_ble_ftms_cp_decision *d,
 
 	case RADIANT_BLE_FTMS_ACT_SET_TARGET:
 		rc = (ops != NULL && ops->set_target != NULL)
-			     ? ops->set_target(&d->target, ops->ctx)
+			     ? ops->set_target(&d->target, d->epoch, ops->ctx)
 			     : -ENOTSUP;
 		o.result = radiant_ble_ftms_result_for(rc);
 		if (rc == 0) {
@@ -349,16 +358,16 @@ radiant_ble_ftms_cp_execute(const struct radiant_ble_ftms_cp_decision *d,
 		break;
 
 	case RADIANT_BLE_FTMS_ACT_START:
-		o.result = radiant_ble_ftms_result_for(workout(ops, RADIANT_BLE_FTMS_WORKOUT_START));
+		o.result = workout(ops, RADIANT_BLE_FTMS_WORKOUT_START, d->epoch);
 		break;
 	case RADIANT_BLE_FTMS_ACT_RESUME:
-		o.result = radiant_ble_ftms_result_for(workout(ops, RADIANT_BLE_FTMS_WORKOUT_RESUME));
+		o.result = workout(ops, RADIANT_BLE_FTMS_WORKOUT_RESUME, d->epoch);
 		break;
 	case RADIANT_BLE_FTMS_ACT_PAUSE:
-		o.result = radiant_ble_ftms_result_for(workout(ops, RADIANT_BLE_FTMS_WORKOUT_PAUSE));
+		o.result = workout(ops, RADIANT_BLE_FTMS_WORKOUT_PAUSE, d->epoch);
 		break;
 	case RADIANT_BLE_FTMS_ACT_STOP:
-		o.result = radiant_ble_ftms_result_for(workout(ops, RADIANT_BLE_FTMS_WORKOUT_STOP));
+		o.result = workout(ops, RADIANT_BLE_FTMS_WORKOUT_STOP, d->epoch);
 		break;
 	}
 

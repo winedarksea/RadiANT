@@ -34,6 +34,8 @@ static void session_reset(void *fixture)
 	policy.remote_motion_allowed = fake_remote_allowed;
 	policy.remote_start = false;
 	treadmill_session_init(&s, &policy);
+	/* The seam requires a key report at start; the default fixture has it. */
+	(void)treadmill_session_input(&s, TREADMILL_SESSION_KEY_IN);
 }
 
 static struct treadmill_motion_cmd cmd(enum treadmill_motion_kind kind, int32_t value)
@@ -45,10 +47,13 @@ static struct treadmill_motion_cmd cmd(enum treadmill_motion_kind kind, int32_t 
 	return c;
 }
 
+/* RUNNING with the belt reported moving. */
 static void go_running(void)
 {
 	(void)treadmill_session_input(&s, TREADMILL_SESSION_FE_IN_USE);
+	treadmill_session_set_belt(&s, 3000u);
 	zassert_equal(s.run, TREADMILL_RUN_RUNNING, NULL);
+	zassert_true(treadmill_session_moving(&s), NULL);
 }
 
 /* ── Transitions ────────────────────────────────────────────────────────── */
@@ -147,7 +152,7 @@ ZTEST(treadmill_session, test_safety_key_latches_from_every_state)
 		zassert_true(c.epoch_bumped, NULL);
 		zassert_true(c.revoke_control, "a key pull revokes control");
 		zassert_equal(s.epoch, e + 1u, NULL);
-		zassert_false(s.key_in, NULL);
+		zassert_equal(s.key, TREADMILL_KEY_OUT, NULL);
 	}
 }
 
@@ -170,7 +175,7 @@ ZTEST(treadmill_session, test_the_latch_needs_key_in_and_a_console_action)
 	/* Key in alone: still latched. */
 	zassert_equal(treadmill_session_input(&s, TREADMILL_SESSION_KEY_IN).next,
 		      TREADMILL_RUN_SAFETY_STOP, NULL);
-	zassert_true(s.key_in, NULL);
+	zassert_equal(s.key, TREADMILL_KEY_IN, NULL);
 	zassert_equal(treadmill_session_input(&s, TREADMILL_SESSION_CONSOLE_PAUSE).next,
 		      TREADMILL_RUN_SAFETY_STOP, "pause is not the action the latch waits for");
 
@@ -303,17 +308,19 @@ ZTEST(treadmill_session, test_c_starting_from_rest_needs_remote_start)
 		zassert_equal(treadmill_motion_permitted(&resume, &s), -EACCES, NULL);
 		zassert_equal(treadmill_motion_permitted(&speed, &s), -EACCES,
 			      "the Set-Speed auto-start is the same rule");
-		/* (c) is about the belt: the deck may move at rest. */
-		zassert_equal(treadmill_motion_permitted(&incline, &s), 0, NULL);
+		/* The deck does not move remotely at rest either (S2). */
+		zassert_equal(treadmill_motion_permitted(&incline, &s), -EACCES, NULL);
 
 		policy.remote_start = true;
 		zassert_equal(treadmill_motion_permitted(&start, &s), 0, NULL);
 		zassert_equal(treadmill_motion_permitted(&speed, &s), 0, NULL);
+		zassert_equal(treadmill_motion_permitted(&incline, &s), 0, NULL);
 	}
 
-	/* Already running: a speed change does not start anything. */
+	/* Already moving: a speed change does not start anything. */
 	policy.remote_start = false;
 	s.run = TREADMILL_RUN_RUNNING;
+	treadmill_session_set_belt(&s, 3000u);
 	{
 		struct treadmill_motion_cmd speed = cmd(TREADMILL_MOTION_SPEED, 4000);
 
@@ -349,6 +356,78 @@ ZTEST(treadmill_session, test_a_stale_epoch_is_cancelled_not_denied)
 
 	c.epoch = s.epoch;
 	zassert_equal(treadmill_motion_permitted(&c, &s), 0, NULL);
+}
+
+/* ── Moving is not running (S1) ─────────────────────────────────────────── */
+
+ZTEST(treadmill_session, test_running_at_zero_is_not_moving)
+{
+	struct treadmill_motion_cmd speed, incline;
+
+	/* A console session started at 0: RUNNING, belt reported 0. */
+	(void)treadmill_session_input(&s, TREADMILL_SESSION_CONSOLE_START);
+	zassert_equal(s.run, TREADMILL_RUN_RUNNING, NULL);
+	zassert_false(treadmill_session_moving(&s), NULL);
+	speed = cmd(TREADMILL_MOTION_SPEED, 1000);
+	incline = cmd(TREADMILL_MOTION_INCLINE, 100);
+	zassert_equal(treadmill_motion_permitted(&speed, &s), -EACCES,
+		      "a remote speed may not start a belt at rest");
+	zassert_equal(treadmill_motion_permitted(&incline, &s), -EACCES, NULL);
+
+	/* Once the belt reports moving, both are fine. */
+	treadmill_session_set_belt(&s, 800u);
+	zassert_equal(treadmill_motion_permitted(&speed, &s), 0, NULL);
+	zassert_equal(treadmill_motion_permitted(&incline, &s), 0, NULL);
+}
+
+ZTEST(treadmill_session, test_an_accepted_remote_stop_ends_moving_at_once)
+{
+	struct treadmill_motion_cmd speed;
+
+	go_running();
+	treadmill_session_note_stop(&s);
+	/* Still RUNNING, the belt still reports speed: but a stop was accepted. */
+	zassert_equal(s.run, TREADMILL_RUN_RUNNING, NULL);
+	zassert_false(treadmill_session_moving(&s), NULL);
+	speed = cmd(TREADMILL_MOTION_SPEED, 3000);
+	zassert_equal(treadmill_motion_permitted(&speed, &s), -EACCES, NULL);
+
+	/* A new session clears it. */
+	(void)treadmill_session_input(&s, TREADMILL_SESSION_FE_FINISHED);
+	(void)treadmill_session_input(&s, TREADMILL_SESSION_FE_IN_USE);
+	zassert_true(treadmill_session_moving(&s), NULL);
+}
+
+ZTEST(treadmill_session, test_an_unknown_key_permits_nothing)
+{
+	struct treadmill_motion_cmd speed, stop;
+
+	treadmill_session_init(&s, &policy);
+	zassert_equal(s.key, TREADMILL_KEY_UNKNOWN, NULL);
+	(void)treadmill_session_input(&s, TREADMILL_SESSION_FE_IN_USE);
+	treadmill_session_set_belt(&s, 3000u);
+	speed = cmd(TREADMILL_MOTION_SPEED, 3000);
+	zassert_equal(treadmill_motion_permitted(&speed, &s), -EACCES, NULL);
+	stop = cmd(TREADMILL_MOTION_STOP, 0);
+	zassert_equal(treadmill_motion_permitted(&stop, &s), 0, "stopping still passes");
+
+	(void)treadmill_session_input(&s, TREADMILL_SESSION_KEY_IN);
+	zassert_equal(treadmill_motion_permitted(&speed, &s), 0, NULL);
+}
+
+ZTEST(treadmill_session, test_remote_reset_returns_to_idle)
+{
+	struct treadmill_session_change c;
+
+	go_running();
+	c = treadmill_session_input(&s, TREADMILL_SESSION_REMOTE_RESET);
+	zassert_equal(c.next, TREADMILL_RUN_IDLE, NULL);
+	zassert_true(c.epoch_bumped, NULL);
+
+	/* It cannot clear the latch. */
+	(void)treadmill_session_input(&s, TREADMILL_SESSION_KEY_OUT);
+	zassert_equal(treadmill_session_input(&s, TREADMILL_SESSION_REMOTE_RESET).next,
+		      TREADMILL_RUN_SAFETY_STOP, NULL);
 }
 
 ZTEST_SUITE(treadmill_session, NULL, NULL, session_reset, NULL, NULL);

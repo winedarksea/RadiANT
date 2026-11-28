@@ -5,10 +5,10 @@
  * See treadmill_cmd.h. Kernel-free.
  *
  * THE INVARIANT THIS FILE EXISTS FOR: every call into treadmill_source_ctrl.h
- * is inside drive_speed(), drive_incline(), drive_start() or drive_stop(), and
- * each of those calls gate() on its first line and returns before the source
- * if gate() refuses. A new path adds a call to one of these, never a new call
- * into the source.
+ * is inside one of the four treadmill_cmd_drive_*() doors, and each of those
+ * calls gate() on its first line and returns before the source if gate()
+ * refuses. A new path adds a call to one of these, never a new call into the
+ * source.
  */
 
 #include <errno.h>
@@ -42,10 +42,22 @@ static int gate(enum treadmill_motion_kind kind, int32_t value, uint32_t epoch, 
 	return treadmill_motion_permitted(&c, cfg.session);
 }
 
+bool treadmill_cmd_ftms_token(void)
+{
+	return (cfg.ctrl_owner == NULL) || (cfg.ctrl_owner() == RADIANT_CTRL_BLE);
+}
+
+bool treadmill_cmd_grade_token(void)
+{
+	/* The same token FTMS uses: the grade provider is a BLE-side command
+	 * source and may not act while the BLE side does not own the machine. */
+	return treadmill_cmd_ftms_token();
+}
+
 /* ── The four doors to the source ───────────────────────────────────────── */
 
-static int drive_speed(enum treadmill_motion_kind kind, uint32_t mm_s, uint32_t epoch,
-		       bool token)
+int treadmill_cmd_drive_speed(enum treadmill_motion_kind kind, uint32_t mm_s, uint32_t epoch,
+			      bool token)
 {
 	int rc = gate(kind, (int32_t)mm_s, epoch, token);
 
@@ -55,8 +67,8 @@ static int drive_speed(enum treadmill_motion_kind kind, uint32_t mm_s, uint32_t 
 	return treadmill_source_set_speed(mm_s);
 }
 
-static int drive_incline(enum treadmill_motion_kind kind, int32_t centi, uint32_t epoch,
-			 bool token)
+int treadmill_cmd_drive_incline(enum treadmill_motion_kind kind, int32_t centi, uint32_t epoch,
+				bool token)
 {
 	int rc = gate(kind, centi, epoch, token);
 
@@ -66,7 +78,7 @@ static int drive_incline(enum treadmill_motion_kind kind, int32_t centi, uint32_
 	return treadmill_source_set_incline(centi);
 }
 
-static int drive_start(bool resume, uint32_t epoch, bool token)
+int treadmill_cmd_drive_start(bool resume, uint32_t epoch, bool token)
 {
 	int rc = gate(resume ? TREADMILL_MOTION_RESUME : TREADMILL_MOTION_START, 0, epoch,
 		      token);
@@ -78,8 +90,9 @@ static int drive_start(bool resume, uint32_t epoch, bool token)
 }
 
 /* Stop and Pause: the gate always answers 0 for a STOP; it is called anyway
- * so that this door looks like the other three. */
-static int drive_stop(bool pause)
+ * so that this door looks like the other three. A source without the hook
+ * falls back to set_speed(0) inside treadmill_source.c. */
+int treadmill_cmd_drive_stop(bool pause)
 {
 	int rc = gate(TREADMILL_MOTION_STOP, 0, cfg.session->epoch, false);
 
@@ -105,23 +118,45 @@ static uint8_t fec_status_for(int rc)
 	return RADIANT_PROFILE_FEC_CMD_STATUS_FAIL;
 }
 
-uint8_t treadmill_cmd_fec_track_resistance(int32_t grade_centi, uint32_t rx_epoch,
-					   bool token)
+/* The shared front half of pages 50 and 51: capability, epoch, then claim -
+ * in that order, so neither an undeclared page nor a stale one touches the
+ * token. 0xFF means "go on". */
+static uint8_t fec_front(uint32_t rx_epoch)
+{
+	if (!cfg.incline_cmd) {
+		/* Page 54 does not declare Simulation mode: the answer the
+		 * declaration implies, and the page is ungated. */
+		return RADIANT_PROFILE_FEC_CMD_STATUS_NOT_SUPPORTED;
+	}
+	if (rx_epoch != cfg.session->epoch) {
+		/* Received before a local stop or a safety-key event. Refused
+		 * BEFORE the claim: a stale page must not re-take a token the
+		 * key-out revoked. */
+		return RADIANT_PROFILE_FEC_CMD_STATUS_REJECTED;
+	}
+	if (cfg.fec_claim != NULL && !cfg.fec_claim()) {
+		/* An FTMS client ran Request Control: explicit beats implicit. */
+		return RADIANT_PROFILE_FEC_CMD_STATUS_REJECTED;
+	}
+	return 0xFFu;
+}
+
+uint8_t treadmill_cmd_fec_track_resistance(int32_t grade_centi, uint32_t rx_epoch)
 {
 	struct treadmill_motion_cmd probe = {
 		.kind = TREADMILL_MOTION_SIM_GRADE, .value = grade_centi,
-		.epoch = rx_epoch, .token = token,
+		.epoch = rx_epoch, .token = true,
 	};
+	uint8_t front = fec_front(rx_epoch);
 	int32_t adopted;
 	int rc;
 
-	if (!cfg.incline_cmd) {
-		/* Page 54 does not declare Simulation mode: the answer the
-		 * declaration implies. */
-		return RADIANT_PROFILE_FEC_CMD_STATUS_NOT_SUPPORTED;
+	if (front != 0xFFu) {
+		return front;
 	}
 	/* Authorise BEFORE the target moves: a refused page must leave the
-	 * target where it was. drive_incline() asks again. */
+	 * target where it was. The door asks again. The claim above succeeded,
+	 * so the token holds. */
 	rc = treadmill_motion_permitted(&probe, cfg.session);
 	if (rc != 0) {
 		return fec_status_for(rc);
@@ -129,22 +164,22 @@ uint8_t treadmill_cmd_fec_track_resistance(int32_t grade_centi, uint32_t rx_epoc
 	/* A simulation grade: CLAMPED to the machine range and answered PASS -
 	 * the road may be steeper than the deck. */
 	adopted = treadmill_state_request_incline(cfg.state, grade_centi);
-	rc = drive_incline(TREADMILL_MOTION_SIM_GRADE, adopted, rx_epoch, token);
+	rc = treadmill_cmd_drive_incline(TREADMILL_MOTION_SIM_GRADE, adopted, rx_epoch, true);
 	return fec_status_for(rc);
 }
 
-uint8_t treadmill_cmd_fec_wind(uint32_t rx_epoch, bool token)
+uint8_t treadmill_cmd_fec_wind(uint32_t rx_epoch)
 {
-	if (!token || rx_epoch != cfg.session->epoch) {
-		return RADIANT_PROFILE_FEC_CMD_STATUS_REJECTED;
-	}
-	return RADIANT_PROFILE_FEC_CMD_STATUS_PASS;
+	uint8_t front = fec_front(rx_epoch);
+
+	return (front != 0xFFu) ? front : RADIANT_PROFILE_FEC_CMD_STATUS_PASS;
 }
 
 /* ── The grade provider ─────────────────────────────────────────────────── */
 
-int treadmill_cmd_grade_provider(int32_t grade_centi, bool token)
+int treadmill_cmd_grade_provider(int32_t grade_centi)
 {
+	bool token = treadmill_cmd_grade_token();
 	struct treadmill_motion_cmd probe = {
 		.kind = TREADMILL_MOTION_SIM_GRADE, .value = grade_centi,
 		.epoch = cfg.session->epoch, .token = token,
@@ -160,19 +195,16 @@ int treadmill_cmd_grade_provider(int32_t grade_centi, bool token)
 		return rc; /* dropped, target untouched */
 	}
 	adopted = treadmill_state_request_incline(cfg.state, grade_centi);
-	return drive_incline(TREADMILL_MOTION_SIM_GRADE, adopted, cfg.session->epoch, token);
+	return treadmill_cmd_drive_incline(TREADMILL_MOTION_SIM_GRADE, adopted,
+					   cfg.session->epoch, token);
 }
 
 /* ── FTMS ───────────────────────────────────────────────────────────────── */
 
-static bool ftms_token(void)
+int treadmill_cmd_ftms_set_target(const struct radiant_ble_ftms_target *t, uint32_t epoch,
+				  void *ctx)
 {
-	return (cfg.ftms_token == NULL) || cfg.ftms_token();
-}
-
-int treadmill_cmd_ftms_set_target(const struct radiant_ble_ftms_target *t, void *ctx)
-{
-	uint32_t epoch = cfg.session->epoch;
+	bool token = treadmill_cmd_ftms_token();
 	int rc;
 
 	(void)ctx;
@@ -185,7 +217,7 @@ int treadmill_cmd_ftms_set_target(const struct radiant_ble_ftms_target *t, void 
 		if (!cfg.speed_cmd) {
 			return -ENOTSUP;
 		}
-		rc = gate(TREADMILL_MOTION_SPEED, (int32_t)mm_s, epoch, ftms_token());
+		rc = gate(TREADMILL_MOTION_SPEED, (int32_t)mm_s, epoch, token);
 		if (rc != 0) {
 			return rc;
 		}
@@ -194,7 +226,15 @@ int treadmill_cmd_ftms_set_target(const struct radiant_ble_ftms_target *t, void 
 		if (rc != 0) {
 			return rc;
 		}
-		return drive_speed(TREADMILL_MOTION_SPEED, adopted, epoch, ftms_token());
+		rc = treadmill_cmd_drive_speed(TREADMILL_MOTION_SPEED, adopted, epoch, token);
+		if (rc == 0) {
+			if (adopted == 0u) {
+				treadmill_session_note_stop(cfg.session);
+			} else {
+				treadmill_session_note_start(cfg.session);
+			}
+		}
+		return rc;
 	}
 	case RADIANT_BLE_FTMS_OP_SET_INCLINE: {
 		int32_t centi = treadmill_fec_incline_from_ftms(t->v.incline_deci);
@@ -203,7 +243,7 @@ int treadmill_cmd_ftms_set_target(const struct radiant_ble_ftms_target *t, void 
 		if (!cfg.incline_cmd) {
 			return -ENOTSUP;
 		}
-		rc = gate(TREADMILL_MOTION_INCLINE, centi, epoch, ftms_token());
+		rc = gate(TREADMILL_MOTION_INCLINE, centi, epoch, token);
 		if (rc != 0) {
 			return rc;
 		}
@@ -211,37 +251,57 @@ int treadmill_cmd_ftms_set_target(const struct radiant_ble_ftms_target *t, void 
 		if (rc != 0) {
 			return rc;
 		}
-		return drive_incline(TREADMILL_MOTION_INCLINE, adopted, epoch, ftms_token());
+		return treadmill_cmd_drive_incline(TREADMILL_MOTION_INCLINE, adopted, epoch, token);
 	}
 	default:
 		return -ENOTSUP;
 	}
 }
 
-int treadmill_cmd_ftms_workout(enum radiant_ble_ftms_workout w, void *ctx)
+int treadmill_cmd_ftms_workout(enum radiant_ble_ftms_workout w, uint32_t epoch, void *ctx)
 {
 	uint32_t adopted;
+	int rc;
 
 	(void)ctx;
 
 	switch (w) {
 	case RADIANT_BLE_FTMS_WORKOUT_START:
-		return drive_start(false, cfg.session->epoch, ftms_token());
 	case RADIANT_BLE_FTMS_WORKOUT_RESUME:
-		return drive_start(true, cfg.session->epoch, ftms_token());
+		rc = treadmill_cmd_drive_start(w == RADIANT_BLE_FTMS_WORKOUT_RESUME, epoch,
+					       treadmill_cmd_ftms_token());
+		if (rc == 0) {
+			treadmill_session_note_start(cfg.session);
+		}
+		return rc;
 	case RADIANT_BLE_FTMS_WORKOUT_PAUSE:
-		return drive_stop(true);
 	case RADIANT_BLE_FTMS_WORKOUT_STOP:
-		/* The commanded target follows the stop, so a later resume of
-		 * a canned workout does not restore an old setpoint. */
-		(void)treadmill_state_command_speed(cfg.state, 0u, &adopted);
-		return drive_stop(false);
+		if (w == RADIANT_BLE_FTMS_WORKOUT_STOP) {
+			/* The commanded target follows the stop, so a later
+			 * resume does not restore an old setpoint. */
+			(void)treadmill_state_command_speed(cfg.state, 0u, &adopted);
+		}
+		rc = treadmill_cmd_drive_stop(w == RADIANT_BLE_FTMS_WORKOUT_PAUSE);
+		if (rc == 0) {
+			/* The belt stops counting as moving NOW, before the
+			 * machine reports it: nothing may restart it remotely
+			 * in the gap. */
+			treadmill_session_note_stop(cfg.session);
+		}
+		return rc;
 	default:
 		return -ENOTSUP;
 	}
 }
 
-int treadmill_cmd_ftms_reset(bool motion_ok, void *ctx)
+/* Reset has an incline half only if there is a deck to level that is not
+ * already level. */
+static bool reset_needs_incline(void)
+{
+	return cfg.incline_cmd && (cfg.state->target_incline_centi_pct != 0);
+}
+
+int treadmill_cmd_ftms_reset(bool motion_ok, uint32_t epoch, void *ctx)
 {
 	uint32_t adopted_speed;
 	int32_t adopted_incline;
@@ -251,32 +311,39 @@ int treadmill_cmd_ftms_reset(bool motion_ok, void *ctx)
 	(void)ctx;
 
 	/*
-	 * §4.16.2: target speed and inclination to 0. The incline half MOVES THE
-	 * DECK and is motion (RESET_INCLINE); the speed half is a stop and
-	 * always runs, so a Reset whose incline half is refused still stops the
-	 * belt (and the core answers 0x04).
+	 * §4.16.2: target speed and inclination to 0. THE BELT STOPS FIRST: the
+	 * speed half is a stop and always runs. Then the incline half, which
+	 * moves the deck and is motion (RESET_INCLINE) - authorised by the core
+	 * before execute, and asked again at its door with the receipt epoch.
+	 *
+	 * The session is told about the stop only AFTER both halves: the
+	 * incline door must judge the machine as it was when the Reset was
+	 * authorised, not as the speed half has just left it.
 	 */
-	if (motion_ok && cfg.incline_cmd) {
-		incline_rc = drive_incline(TREADMILL_MOTION_RESET_INCLINE, 0,
-					   cfg.session->epoch, ftms_token());
+	(void)treadmill_state_command_speed(cfg.state, 0u, &adopted_speed);
+	speed_rc = accepted_or_rc(treadmill_cmd_drive_speed(TREADMILL_MOTION_STOP, 0u, epoch,
+							    false));
+
+	if (motion_ok && reset_needs_incline()) {
+		incline_rc = treadmill_cmd_drive_incline(TREADMILL_MOTION_RESET_INCLINE, 0, epoch,
+							 treadmill_cmd_ftms_token());
 		if (incline_rc == 0) {
 			(void)treadmill_state_command_incline(cfg.state, 0, &adopted_incline);
 		}
 		incline_rc = accepted_or_rc(incline_rc);
 	}
 
-	(void)treadmill_state_command_speed(cfg.state, 0u, &adopted_speed);
-	speed_rc = accepted_or_rc(drive_speed(TREADMILL_MOTION_STOP, 0u, cfg.session->epoch,
-					      false));
-
-	return (incline_rc != 0) ? incline_rc : speed_rc;
+	if (speed_rc == 0) {
+		treadmill_session_note_stop(cfg.session);
+	}
+	return (speed_rc != 0) ? speed_rc : incline_rc;
 }
 
 enum radiant_ble_ftms_verdict treadmill_cmd_ftms_auth(const struct radiant_ble_ftms_motion *m,
 						      const struct radiant_ble_ftms_session *s,
 						      void *ctx)
 {
-	struct treadmill_motion_cmd c = { .token = ftms_token() };
+	struct treadmill_motion_cmd c = { .token = treadmill_cmd_ftms_token() };
 	int rc;
 
 	(void)s; /* the bound treadmill session is the same session, in full */
@@ -298,6 +365,11 @@ enum radiant_ble_ftms_verdict treadmill_cmd_ftms_auth(const struct radiant_ble_f
 		c.kind = m->resume ? TREADMILL_MOTION_RESUME : TREADMILL_MOTION_START;
 		break;
 	case RADIANT_BLE_FTMS_OP_RESET:
+		if (!reset_needs_incline()) {
+			/* No deck to move: Reset is all stop, and a stop
+			 * always passes. */
+			return RADIANT_BLE_FTMS_PERMIT;
+		}
 		c.kind = TREADMILL_MOTION_RESET_INCLINE;
 		break;
 	default:

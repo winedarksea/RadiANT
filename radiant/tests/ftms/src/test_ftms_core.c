@@ -153,12 +153,15 @@ ZTEST(radiant_ftms_core, test_decision_table_sweep)
 							continue;
 						}
 
-						/* RULE: Stop and Pause always reach the machine. */
+						/* RULE: Stop and Pause always reach the machine,
+						 * and are not swapped. */
 						if (op == 0x08) {
-							zassert_true(d.action == RADIANT_BLE_FTMS_ACT_STOP ||
-								     d.action == RADIANT_BLE_FTMS_ACT_PAUSE,
-								     "run %u verdict %u", (unsigned)runs[ru],
-								     (unsigned)verdicts[v]);
+							zassert_equal(d.action,
+								      (requests[r].data[1] == 0x01)
+									      ? RADIANT_BLE_FTMS_ACT_STOP
+									      : RADIANT_BLE_FTMS_ACT_PAUSE,
+								      "run %u verdict %u", (unsigned)runs[ru],
+								      (unsigned)verdicts[v]);
 							zassert_equal(auth_calls, 0, "stopping is never asked");
 							continue;
 						}
@@ -204,8 +207,15 @@ ZTEST(radiant_ftms_core, test_decision_table_sweep)
 						zassert_equal(auth_calls, 1, "op 0x%02x", op);
 						switch (verdicts[v]) {
 						case RADIANT_BLE_FTMS_PERMIT:
-							zassert_not_equal(d.action, RADIANT_BLE_FTMS_ACT_NONE,
-									  "op 0x%02x", op);
+							/* The EXACT action: a START/RESUME swap
+							 * would be caught here. */
+							zassert_equal(d.action,
+								      (op != 0x07) ? RADIANT_BLE_FTMS_ACT_SET_TARGET :
+								      (runs[ru] == RADIANT_BLE_FTMS_RUN_PAUSED)
+									      ? RADIANT_BLE_FTMS_ACT_RESUME
+									      : RADIANT_BLE_FTMS_ACT_START,
+								      "op 0x%02x run %u", op, (unsigned)runs[ru]);
+							zassert_equal(d.epoch, 3u, "the receipt epoch rides along");
 							break;
 						case RADIANT_BLE_FTMS_DENY:
 							zassert_equal(d.result, 0x05, "op 0x%02x", op);
@@ -353,25 +363,30 @@ static int set_target_calls, workout_calls, reset_calls;
 static enum radiant_ble_ftms_workout last_workout;
 static bool last_reset_motion_ok;
 
-static int fake_set_target(const struct radiant_ble_ftms_target *t, void *ctx)
+static uint32_t last_epoch;
+
+static int fake_set_target(const struct radiant_ble_ftms_target *t, uint32_t epoch, void *ctx)
 {
 	ARG_UNUSED(t);
 	ARG_UNUSED(ctx);
+	last_epoch = epoch;
 	set_target_calls++;
 	return set_target_rc;
 }
 
-static int fake_workout(enum radiant_ble_ftms_workout w, void *ctx)
+static int fake_workout(enum radiant_ble_ftms_workout w, uint32_t epoch, void *ctx)
 {
 	ARG_UNUSED(ctx);
+	last_epoch = epoch;
 	workout_calls++;
 	last_workout = w;
 	return workout_rc;
 }
 
-static int fake_reset(bool motion_ok, void *ctx)
+static int fake_reset(bool motion_ok, uint32_t epoch, void *ctx)
 {
 	ARG_UNUSED(ctx);
+	last_epoch = epoch;
 	reset_calls++;
 	last_reset_motion_ok = motion_ok;
 	return reset_rc;
@@ -385,6 +400,44 @@ static void exec_reset(void)
 {
 	set_target_rc = workout_rc = reset_rc = 0;
 	set_target_calls = workout_calls = reset_calls = 0;
+}
+
+ZTEST(radiant_ftms_core, test_hooks_get_the_receipt_epoch)
+{
+	struct radiant_ble_ftms_cp_decision d = {
+		.op = 0x02, .action = RADIANT_BLE_FTMS_ACT_SET_TARGET, .epoch = 41u,
+		.target = { .op = 0x02 },
+	};
+
+	exec_reset();
+	(void)radiant_ble_ftms_cp_execute(&d, &ops);
+	zassert_equal(last_epoch, 41u, NULL);
+	d.action = RADIANT_BLE_FTMS_ACT_STOP;
+	d.epoch = 42u;
+	(void)radiant_ble_ftms_cp_execute(&d, &ops);
+	zassert_equal(last_epoch, 42u, NULL);
+	d.action = RADIANT_BLE_FTMS_ACT_RESET;
+	d.epoch = 43u;
+	(void)radiant_ble_ftms_cp_execute(&d, &ops);
+	zassert_equal(last_epoch, 43u, NULL);
+}
+
+ZTEST(radiant_ftms_core, test_an_oversize_write_is_invalid_parameter)
+{
+	/* The glue queues an over-long write with its true length; the exact
+	 * length rule answers it 0x03 in a Response Code. */
+	static const uint8_t big[12] = { 0x02, 0xE8, 0x03 };
+	static const uint8_t big_rc[12] = { 0x00 };
+	static const uint8_t big_unknown[12] = { 0x09 };
+	struct radiant_ble_ftms_caps caps = treadmill_caps();
+
+	zassert_equal(decide(big, sizeof(big), RADIANT_BLE_FTMS_RUN_RUNNING, &caps,
+			     RADIANT_BLE_FTMS_OWNER_SELF).result, 0x03, NULL);
+	zassert_equal(decide(big_rc, sizeof(big_rc), RADIANT_BLE_FTMS_RUN_RUNNING, &caps,
+			     RADIANT_BLE_FTMS_OWNER_NONE).result, 0x03, NULL);
+	zassert_equal(decide(big_unknown, sizeof(big_unknown), RADIANT_BLE_FTMS_RUN_RUNNING,
+			     &caps, RADIANT_BLE_FTMS_OWNER_SELF).result, 0x02, NULL);
+	zassert_equal(auth_calls, 0, NULL);
 }
 
 ZTEST(radiant_ftms_core, test_success_means_the_driver_accepted)
@@ -465,7 +518,13 @@ ZTEST(radiant_ftms_core, test_workout_actions_and_their_absence)
 		zassert_equal(o.status_len, 0u, NULL);
 
 		o = radiant_ble_ftms_cp_execute(&d, &none);
-		zassert_equal(o.result, 0x02, "a NULL hook is not supported");
+		zassert_equal(o.result, 0x04,
+			      "a mandatory op code with no hook fails; never 0x02");
+
+		exec_reset();
+		workout_rc = -ENOTSUP;
+		o = radiant_ble_ftms_cp_execute(&d, &ops);
+		zassert_equal(o.result, 0x04, NULL);
 	}
 }
 

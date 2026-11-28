@@ -235,6 +235,14 @@ void treadmill_state_set_heart_rate(struct treadmill_state *s, uint8_t bpm,
  * value of it. */
 void treadmill_state_set_state(struct treadmill_state *s, uint8_t fe_state);
 
+/* Set the FE state WITHOUT the lap event: the state the session derives
+ * (PAUSED and SAFETY_STOP also read FINISHED) is not a finished session. */
+void treadmill_state_set_derived_state(struct treadmill_state *s, uint8_t fe_state);
+
+/* A lap event: flip the toggle (§8.5.2.7.1). Called when the SOURCE reports
+ * FINISHED, which is what a899c1c toggled on. */
+void treadmill_state_lap(struct treadmill_state *s);
+
 /* FE-C page 55's user weight, 0.01 kg. */
 void treadmill_state_set_user_mass(struct treadmill_state *s,
 				   uint16_t mass_10g);

@@ -129,12 +129,25 @@ static int machine_encode(uint8_t *buf, size_t cap, void *ctx)
 					  heart_rate_field, buf, cap);
 }
 
-static void machine_reset_view(void *ctx)
+static void machine_reset_done(void *ctx)
 {
 	ARG_UNUSED(ctx);
-	/* §4.16.2: the FTMS view's time and accumulated fields go to zero.
-	 * The ANT+ accumulators do not move. */
+	/* §4.16.2: the FTMS view's time and accumulated fields go to zero (the
+	 * ANT+ accumulators do not move), and the session returns to Idle - the
+	 * core sets Training Status to Idle with it. */
 	treadmill_ftms_baseline_capture(&ftms_baseline, treadmill_node_state());
+	treadmill_node_session_reset();
+}
+
+void treadmill_ble_target_incline_changed(int32_t centi_pct)
+{
+	uint8_t msg[3];
+	uint16_t deci = (uint16_t)treadmill_ftms_incline_from_fec(centi_pct);
+
+	msg[0] = RADIANT_BLE_FTMS_STATUS_TARGET_INCLINE;
+	msg[1] = (uint8_t)(deci & 0xFFu);
+	msg[2] = (uint8_t)(deci >> 8);
+	radiant_ble_ftms_notify_status(msg, sizeof(msg));
 }
 
 static struct radiant_ble_ftms_machine ftms_machine = {
@@ -148,7 +161,7 @@ static struct radiant_ble_ftms_machine ftms_machine = {
 	.encode_data = machine_encode,
 	.session = machine_session,
 	.epoch = machine_epoch,
-	.reset_view = machine_reset_view,
+	.reset_done = machine_reset_done,
 };
 
 void treadmill_ble_session_changed(enum treadmill_run prev, enum treadmill_run next,
@@ -202,17 +215,6 @@ static void notify_rsc(const struct treadmill_state *s)
 	(void)bt_rscs_measurement_send(NULL, &m);
 }
 
-/* The grade provider's token (d): under exclusive arbitration it may not
- * override an FE-C controller that holds the machine. */
-static bool grade_provider_token(void)
-{
-#if defined(CONFIG_RADIANT_CTRL_ARBITER)
-	return radiant_ctrl_owner() != RADIANT_CTRL_ANT;
-#else
-	return true;
-#endif
-}
-
 void treadmill_ble_state_changed(const struct treadmill_state *s)
 {
 	uint32_t now;
@@ -238,7 +240,13 @@ void treadmill_ble_state_changed(const struct treadmill_state *s)
 		int32_t grade = grade_provider(grade_provider_user);
 
 		if (grade != INT32_MIN) {
-			(void)treadmill_cmd_grade_provider(grade, grade_provider_token());
+			int32_t before = s->target_incline_centi_pct;
+
+			/* Token: the same as FTMS's (treadmill_cmd_grade_token()). */
+			if (treadmill_cmd_grade_provider(grade) == 0 &&
+			    s->target_incline_centi_pct != before) {
+				treadmill_ble_target_incline_changed(s->target_incline_centi_pct);
+			}
 		}
 	}
 

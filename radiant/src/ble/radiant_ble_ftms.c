@@ -256,13 +256,18 @@ static const struct bt_gatt_attr *data_attr(void)
 
 /* The Fitness Machine Status, to EVERY subscribed client - the one whose
  * procedure caused it included. NULL means "every subscriber". */
-static void notify_status(const uint8_t *msg, uint16_t len)
+void radiant_ble_ftms_notify_status(const uint8_t *msg, size_t len)
 {
 	const struct bt_gatt_attr *attr = status_attr();
 
 	if (attr != NULL && len != 0u) {
-		(void)bt_gatt_notify(NULL, attr, msg, len);
+		(void)bt_gatt_notify(NULL, attr, msg, (uint16_t)len);
 	}
+}
+
+static void notify_status(const uint8_t *msg, uint16_t len)
+{
+	radiant_ble_ftms_notify_status(msg, len);
 }
 
 static void set_training_status(uint8_t ts)
@@ -460,8 +465,13 @@ static void cp_work_fn(struct k_work *w)
 	if (o.release) {
 		release_control();
 	}
-	if (o.reset_view && machine->reset_view != NULL) {
-		machine->reset_view(machine->ctx);
+	if (o.reset_view) {
+		/* §4.16.2: Training Status to Idle; the machine zeroes its FTMS
+		 * view and returns its session to idle. */
+		if (machine->reset_done != NULL) {
+			machine->reset_done(machine->ctx);
+		}
+		set_training_status(RADIANT_BLE_FTMS_TRAINING_IDLE);
 	}
 
 	cp_respond(conn, o.op, o.result);
@@ -486,9 +496,7 @@ static ssize_t write_cp(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 	if (offset != 0u) {
 		return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
 	}
-	if (len < 1u || len > sizeof(cp_pending.data)) {
-		/* The buffer's bound, not the spec's: the longest procedure
-		 * here is seven octets (0x11). */
+	if (len < 1u) {
 		return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
 	}
 
@@ -504,7 +512,12 @@ static ssize_t write_cp(struct bt_conn *conn, const struct bt_gatt_attr *attr,
 		return BT_GATT_ERR(BT_ATT_ERR_CCC_IMPROPER_CONF);
 	}
 
-	memcpy(cp_pending.data, buf, len);
+	/* A write longer than the buffer keeps its op code and its true length:
+	 * the decision's exact-length rule answers it 0x03 (or 0x02 for an op
+	 * code this machine does not honour) in a Response Code, rather than as
+	 * an ATT error. The longest procedure here is seven octets (0x11), so
+	 * nothing past the buffer is ever parsed. */
+	memcpy(cp_pending.data, buf, MIN(len, sizeof(cp_pending.data)));
 	cp_pending.len = len;
 	/* The epoch NOW, on this thread: a local stop between here and the
 	 * work item running cancels an actuating request. */

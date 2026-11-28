@@ -268,7 +268,7 @@ static void publish(void)
  * page 16's state, FTMS Training Status and the FTMS machine status all follow
  * from what it decides, and a safety-key pull revokes every remote controller.
  */
-static void session_apply(enum treadmill_session_input in)
+static void session_apply_ex(enum treadmill_session_input in, bool notify_ble)
 {
 	struct treadmill_session_change c = treadmill_session_input(&session, in);
 
@@ -284,13 +284,31 @@ static void session_apply(enum treadmill_session_input in)
 	if (c.prev != c.next) {
 		LOG_INF("session: %u -> %u (epoch %u)", (unsigned)c.prev,
 			(unsigned)c.next, (unsigned)session.epoch);
-		treadmill_state_set_state(&state, treadmill_session_fe_state(c.next));
+		/* No lap event here: PAUSED and SAFETY_STOP also read FINISHED,
+		 * and only the source's own FINISHED is a lap (deliver()). */
+		treadmill_state_set_derived_state(&state, treadmill_session_fe_state(c.next));
 	}
 #if defined(CONFIG_TREADMILL_BLE)
-	if (c.prev != c.next || c.revoke_control) {
+	if (notify_ble && (c.prev != c.next || c.revoke_control)) {
 		treadmill_ble_session_changed(c.prev, c.next, c.revoke_control);
 	}
+#else
+	ARG_UNUSED(notify_ble);
 #endif
+}
+
+static void session_apply(enum treadmill_session_input in)
+{
+	session_apply_ex(in, true);
+}
+
+/* FTMS Reset succeeded (treadmill_ble.c's reset_done hook, on the workqueue):
+ * the session returns to IDLE and the epoch moves. Quiet towards FTMS: the
+ * core has already notified Reset (0x01) and sets Training Status to Idle. */
+void treadmill_node_session_reset(void)
+{
+	session_apply_ex(TREADMILL_SESSION_REMOTE_RESET, false);
+	publish();
 }
 
 void treadmill_node_deliver(uint32_t strides)
@@ -302,6 +320,8 @@ void treadmill_node_deliver(uint32_t strides)
 	uint8_t fe = treadmill_source_last_state();
 
 	treadmill_state_set_speed(&state, treadmill_source_last_speed());
+	/* "Moving" for the motion rule is the reported belt, not the session. */
+	treadmill_session_set_belt(&session, treadmill_source_last_speed());
 	treadmill_state_set_incline(&state, treadmill_source_last_incline());
 	treadmill_state_set_cadence_16(&state,
 				       treadmill_source_last_cadence_16());
@@ -309,6 +329,11 @@ void treadmill_node_deliver(uint32_t strides)
 
 	if (fe != fed_fe_state) {
 		fed_fe_state = fe;
+		if (fe == TREADMILL_STATE_FINISHED) {
+			/* §8.5.2.7.1: the lap event is the machine's own end of
+			 * session, as in a899c1c. */
+			treadmill_state_lap(&state);
+		}
 		session_apply((fe == TREADMILL_STATE_IN_USE)     ? TREADMILL_SESSION_FE_IN_USE
 			      : (fe == TREADMILL_STATE_FINISHED) ? TREADMILL_SESSION_FE_FINISHED
 								 : TREADMILL_SESSION_FE_READY);
@@ -414,26 +439,16 @@ static void apply_control_page(const uint8_t *body, uint32_t rx_epoch)
 
 	fec_sequence++;
 
-#if defined(CONFIG_TREADMILL_CTRL_POLICY_EXCLUSIVE)
 	/*
-	 * The claim is IMPLICIT - there is no FE-C acquire handshake to
-	 * perform - so it loses to a BLE client that ran an explicit FTMS
-	 * Request Control. REJECTED (3) is the profile's own constant for
-	 * exactly this and is how the controller learns it lost the deck;
-	 * there is no other signal, because ANT+ has no connection to drop.
+	 * THE TOKEN IS CLAIMED INSIDE treadmill_cmd.c, for pages 50 and 51 - the
+	 * only pages this machine gates, and only when it declares Simulation
+	 * mode - and only AFTER the page has passed the epoch check, so a page
+	 * received before a safety-key pull cannot re-take the token the pull
+	 * revoked. The claim is IMPLICIT (FE-C has no acquire), so it loses to an
+	 * FTMS Request Control and is answered REJECTED.
 	 */
-	if (radiant_ctrl_fec_page_is_gated(page) &&
-	    radiant_ctrl_claim(RADIANT_CTRL_ANT, false,
-				    (uint32_t)k_uptime_get_32()) != 0) {
-		LOG_INF("FE-C page %u refused: a BLE client holds control", page);
-		radiant_profile_fec_tx_command_answered(&fec, page, fec_sequence,
-						RADIANT_PROFILE_FEC_CMD_STATUS_REJECTED,
-						&body[4]);
-		return;
-	}
-#endif
-
 	switch (page) {
+	case RADIANT_PROFILE_FEC_PAGE_TRACK_RESISTANCE: {	switch (page) {
 	case RADIANT_PROFILE_FEC_PAGE_TRACK_RESISTANCE: {
 		struct radiant_profile_fec_cmd_track_resistance cmd;
 
@@ -453,11 +468,24 @@ static void apply_control_page(const uint8_t *body, uint32_t rx_epoch)
 		 * inside what the machine can physically do.
 		 *
 		 * A MOTION PATH: treadmill_cmd_fec_track_resistance() puts it
-		 * behind the motion rule. The token was claimed above (or there
-		 * is no arbitration); a refusal by the rule, or a request
-		 * received before a local stop (rx_epoch), is REJECTED. */
-		status = treadmill_cmd_fec_track_resistance(cmd.grade_centi_pct,
-							    rx_epoch, true);
+		 * behind the motion rule. No token, a refusal by the rule, or a
+		 * request received before a local stop (rx_epoch) is REJECTED. */
+		{
+			int32_t before = state.target_incline_centi_pct;
+
+			status = treadmill_cmd_fec_track_resistance(cmd.grade_centi_pct,
+								    rx_epoch);
+#if defined(CONFIG_TREADMILL_BLE)
+			/* FTMS subscribers hear a target set over ANT+ too. */
+			if (status == RADIANT_PROFILE_FEC_CMD_STATUS_PASS &&
+			    state.target_incline_centi_pct != before) {
+				treadmill_ble_target_incline_changed(
+					state.target_incline_centi_pct);
+			}
+#else
+			ARG_UNUSED(before);
+#endif
+		}
 		LOG_INF("FE-C page 51: grade %d.%02d %% -> status %u",
 			cmd.grade_centi_pct / 100,
 			(cmd.grade_centi_pct < 0 ? -cmd.grade_centi_pct
@@ -473,7 +501,7 @@ static void apply_control_page(const uint8_t *body, uint32_t rx_epoch)
 		 * machine advertises support for is how a controller decides
 		 * simulation mode is broken and stops sending page 51 too - and
 		 * refused exactly when page 51 would be for the epoch. */
-		status = treadmill_cmd_fec_wind(rx_epoch, true);
+		status = treadmill_cmd_fec_wind(rx_epoch);
 		break;
 
 	case RADIANT_PROFILE_FEC_PAGE_USER_CONFIG: {
@@ -675,11 +703,10 @@ const struct treadmill_state *treadmill_node_state(void)
 }
 
 #if defined(CONFIG_TREADMILL_CTRL_POLICY_EXCLUSIVE)
-/* (d) for an FTMS path: the BLE side holds the cross-transport token. The FTMS
- * core has already checked this client holds FTMS control. */
-static bool ftms_token(void)
+/* The FE-C implicit claim, made by treadmill_cmd.c after its epoch check. */
+static bool fec_claim(void)
 {
-	return radiant_ctrl_owner() == RADIANT_CTRL_BLE;
+	return radiant_ctrl_claim(RADIANT_CTRL_ANT, false, (uint32_t)k_uptime_get_32()) == 0;
 }
 #endif
 
@@ -940,11 +967,6 @@ int main(void)
 		treadmill_fec_incline_from_ftms(CONFIG_TREADMILL_MAX_INCLINE_DECI),
 		treadmill_mm_s_from_ftms_speed(CONFIG_TREADMILL_MAX_SPEED_CENTI_KPH));
 
-#if defined(CONFIG_TREADMILL_CTRL_POLICY_EXCLUSIVE)
-	radiant_ctrl_init(CONFIG_TREADMILL_CTRL_ANT_TIMEOUT_MS,
-			  RADIANT_CTRL_GATE_SIMULATION);
-#endif
-
 	/*
 	 * WHAT THIS MACHINE ADVERTISES, from what its driver implements (the
 	 * source registered from a SYS_INIT, before main()) and the Kconfig
@@ -963,7 +985,8 @@ int main(void)
 			.state = &state,
 			.session = &session,
 #if defined(CONFIG_TREADMILL_CTRL_POLICY_EXCLUSIVE)
-			.ftms_token = ftms_token,
+			.ctrl_owner = radiant_ctrl_owner,
+			.fec_claim = fec_claim,
 #endif
 		};
 
@@ -972,6 +995,13 @@ int main(void)
 		cmd_cfg.incline_cmd = caps.incline_cmd;
 		cmd_cfg.speed_cmd = caps.speed_cmd;
 		treadmill_cmd_bind(&cmd_cfg);
+
+#if defined(CONFIG_TREADMILL_CTRL_POLICY_EXCLUSIVE)
+		/* Pages 50/51 are gated only when Simulation mode is declared;
+		 * otherwise they are ungated and answer NOT_SUPPORTED. */
+		radiant_ctrl_init(CONFIG_TREADMILL_CTRL_ANT_TIMEOUT_MS,
+				  caps.fec_simulation ? RADIANT_CTRL_GATE_SIMULATION : 0u);
+#endif
 	}
 
 	memset(&fec_cfg, 0, sizeof(fec_cfg));

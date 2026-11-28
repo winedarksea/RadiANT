@@ -51,5 +51,7 @@ target_sources(app PRIVATE
   ../../src/treadmill_caps.c
   ../../src/treadmill_ftms_data.c
   ../../../../radiant/src/ble/radiant_ble_ftms_core.c
+  # The real FE-C/FTMS arbiter, so the token paths are exercised for real.
+  ../../../../radiant/src/ble/radiant_ctrl_arbiter.c
 )
 target_include_directories(app PRIVATE ../../src ../../../../radiant/include)

@@ -96,6 +96,12 @@ struct treadmill_source_api {
 	void (*poll)(const struct treadmill_source *src);
 
 	/*
+	 * PROMPT STATE REPORTS AFTER A STOP. After an accepted set_speed(0) or
+	 * workout_stop, report_state(FINISHED or READY) as soon as the belt is
+	 * stopped. Until then the application treats the belt as not moving
+	 * anyway (treadmill_session_note_stop()), but the session - and FTMS
+	 * Training Status - stays RUNNING until the report arrives.
+	 *
 	 * MOVE THE DECK. `centi_pct` is 0.01 % grade, already inside the
 	 * machine range (CONFIG_TREADMILL_MIN/MAX_INCLINE_DECI, enforced in
 	 * treadmill_state.c for every command path), which is itself inside
@@ -194,7 +200,17 @@ void treadmill_source_poll(void);
  * FTMS Training Status, the FTMS machine-status notifications and FE-C page
  * 16's state follow this source's STATE REPORTS and EVENTS (report_state(),
  * report_event()), never the command. A machine that accepts Start and never
- * starts the belt stays Idle on both radios, which is the truth.
+ * starts the belt stays Idle on both radios, which is the truth. (One command
+ * moves the session itself: an accepted FTMS Reset returns it to Idle, as
+ * §4.16.2 requires of Training Status.)
+ *
+ * STOPPING NEEDS FTMS CONTROL. FTMS Stop, Pause and Set Target Speed 0 are
+ * procedures, and every procedure but Request Control needs control
+ * (§4.16.2), so a client without it gets 0x05. That is conformant and it is
+ * not a safety gap: the console's own Stop and the safety key always work,
+ * and with CONFIG_BT_MAX_CONN=1 Request Control always succeeds for the one
+ * client. What never needs AUTHORISATION (the motion rule) is the stop
+ * itself.
  *
  * ─── The control path is not here ──────────────────────────────────────────
  *
@@ -260,7 +276,13 @@ enum treadmill_source_event {
 	/* The safety key (tether clip). OUT latches SAFETY_STOP and revokes every
 	 * remote controller; only IN plus a console Start or Stop clears it. A
 	 * machine whose key cuts the motor in hardware must still report it:
-	 * the radios cannot otherwise know why the belt stopped. */
+	 * the radios cannot otherwise know why the belt stopped.
+	 *
+	 * REPORT THE KEY ONCE AT START, IN OR OUT: until the first report the
+	 * key is UNKNOWN and nothing moves remotely. A machine with no key
+	 * reports IN once. These two never ride the event queue: they are a
+	 * level and a pull counter, so they cannot be lost to a full queue and
+	 * an out-then-in between two handler passes still latches. */
 	TREADMILL_EVT_SAFETY_KEY_OUT,
 	TREADMILL_EVT_SAFETY_KEY_IN,
 	/* The console's pairing control: open the BLE pairing window, or forget

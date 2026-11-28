@@ -27,7 +27,17 @@
  * THE SAFETY LATCH. A safety-key pull enters SAFETY_STOP from any state and
  * revokes every remote controller. Only a local key-in PLUS a console action
  * (Start or Stop) clears it; no remote command, state report or key-in alone
- * does.
+ * does. The key starts UNKNOWN and nothing may move remotely until the source
+ * has reported it (treadmill_source.h requires a report at start).
+ *
+ * MOVING IS NOT RUNNING. RUNNING is a session; the belt can sit at 0 inside
+ * one (a console session started at 0, or a remote Stop/speed 0 that the
+ * machine has not yet turned into a FINISHED report). "Moving", which the
+ * motion rule's condition (c) uses, is RUNNING AND a reported belt speed above
+ * 0 AND no remote stop accepted since (treadmill_session_note_stop()).
+ *
+ * A REMOTE RESET (FTMS §4.16.2) returns the session to IDLE and bumps the
+ * epoch, unless it is latched.
  *
  * ─── The motion rule ───────────────────────────────────────────────────────
  *
@@ -81,6 +91,14 @@ enum treadmill_session_input {
 	TREADMILL_SESSION_RESUMED, /* running again, after a remote Resume */
 	TREADMILL_SESSION_KEY_OUT,
 	TREADMILL_SESSION_KEY_IN,
+	/* An FTMS Reset the machine accepted. */
+	TREADMILL_SESSION_REMOTE_RESET,
+};
+
+enum treadmill_key {
+	TREADMILL_KEY_UNKNOWN = 0, /* not yet reported: no remote motion */
+	TREADMILL_KEY_IN,
+	TREADMILL_KEY_OUT,
 };
 
 /*
@@ -101,7 +119,12 @@ struct treadmill_motion_policy {
 struct treadmill_session {
 	enum treadmill_run run;
 	uint32_t epoch;
-	bool key_in;
+	enum treadmill_key key;
+	/* The source's last reported belt speed (treadmill_session_set_belt()). */
+	uint32_t belt_mm_s;
+	/* A remote stop, speed 0 or pause was accepted and the session has not
+	 * re-entered RUNNING since: the belt does not count as moving. */
+	bool stop_commanded;
 	const struct treadmill_motion_policy *policy;
 };
 
@@ -121,6 +144,19 @@ void treadmill_session_init(struct treadmill_session *s,
 struct treadmill_session_change
 treadmill_session_input(struct treadmill_session *s,
 			enum treadmill_session_input in);
+
+/* The source reported this belt speed. */
+void treadmill_session_set_belt(struct treadmill_session *s, uint32_t mm_s);
+
+/* A remote stop (speed 0, Stop, Pause, Reset) was accepted by the driver: the
+ * belt stops counting as moving now, before the machine reports anything. */
+void treadmill_session_note_stop(struct treadmill_session *s);
+
+/* A remote start or speed above 0 was accepted (it passed the rule). */
+void treadmill_session_note_start(struct treadmill_session *s);
+
+/* RUNNING, belt reported above 0, no remote stop since. */
+bool treadmill_session_moving(const struct treadmill_session *s);
 
 /* FE-C page 16's state for a run state: IDLE READY, RUNNING IN_USE, and
  * FINISHED for PAUSED, STOPPED and SAFETY_STOP - FE state 4 is the profile's
@@ -165,8 +201,9 @@ struct treadmill_motion_cmd {
  *
  * Authorization is ALL of:
  *   (a) policy->remote_motion_allowed() is true,
- *   (b) the session is not SAFETY_STOP,
- *   (c) for START, RESUME or SPEED > 0 from a non-RUNNING state,
+ *   (b) the session is not SAFETY_STOP and the key is reported IN,
+ *   (c) for START, RESUME, SPEED > 0, or ANY incline change (INCLINE,
+ *       RESET_INCLINE, SIM_GRADE) while the belt is not MOVING (see above):
  *       policy->remote_start (CONFIG_TREADMILL_REMOTE_START, default n) - the
  *       Set-Speed auto-start is this same rule, not a separate one,
  *   (d) cmd->token.

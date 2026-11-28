@@ -61,6 +61,10 @@ void treadmill_ble_state_changed(const struct treadmill_state *s);
 void treadmill_ble_session_changed(enum treadmill_run prev, enum treadmill_run next,
 				   bool revoke);
 
+/* The target incline changed through FE-C page 51 or the grade provider:
+ * FTMS subscribers get 0x06 Target Incline Changed, as for an FTMS change. */
+void treadmill_ble_target_incline_changed(int32_t centi_pct);
+
 /*
  * THE ZWIFT SEAM: specified, and deliberately not built.
  *
@@ -102,6 +106,10 @@ const struct treadmill_state *treadmill_node_state(void);
 
 /* The session, for Training Status. Read-only, system workqueue. */
 const struct treadmill_session *treadmill_node_session(void);
+
+/* An FTMS Reset succeeded: return the session to IDLE and bump the epoch,
+ * without a second FTMS status (the core has notified Reset). Workqueue. */
+void treadmill_node_session_reset(void);
 
 /* The session epoch, from ANY thread (an atomic mirror): FTMS records it when
  * a Control Point write is received, on the BT RX thread. */

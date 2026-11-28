@@ -69,6 +69,19 @@ static K_WORK_DEFINE(report_work, report_work_fn);
 K_MSGQ_DEFINE(event_q, sizeof(uint8_t), EVENT_QUEUE_DEPTH, 1);
 static atomic_t events_dropped;
 
+/*
+ * THE SAFETY KEY DOES NOT RIDE THE QUEUE. A full queue may drop a button
+ * press; it must never drop a key pull. So the key is a LEVEL (unknown, in,
+ * out) plus a count of pulls, both set directly by report_event() and read by
+ * the handler: a pull is delivered even if the key went back in before the
+ * handler ran, and the level is delivered whatever happened to the queue.
+ */
+#define KEY_LEVEL_UNKNOWN 0
+#define KEY_LEVEL_IN      1
+#define KEY_LEVEL_OUT     2
+static atomic_t key_level = ATOMIC_INIT(KEY_LEVEL_UNKNOWN);
+static atomic_t key_out_count;
+
 static void event_work_fn(struct k_work *w);
 static K_WORK_DEFINE(event_work, event_work_fn);
 
@@ -185,6 +198,11 @@ int treadmill_source_workout_start(void)
 
 int treadmill_source_workout_pause(void)
 {
+	if (registered != NULL && registered->api->workout_pause == NULL) {
+		/* Pause is a mandatory FTMS op code and a stop: without the
+		 * hook, the machine stops the belt instead. */
+		return treadmill_source_set_speed(0u);
+	}
 	return call_hook((registered != NULL) ? registered->api->workout_pause : NULL);
 }
 
@@ -298,6 +316,18 @@ int treadmill_source_report_event(enum treadmill_source_event evt)
 {
 	uint8_t e = (uint8_t)evt;
 
+	if (evt == TREADMILL_EVT_SAFETY_KEY_OUT || evt == TREADMILL_EVT_SAFETY_KEY_IN) {
+		/* Not droppable: a level and a counter, then a wake-up. */
+		if (evt == TREADMILL_EVT_SAFETY_KEY_OUT) {
+			atomic_set(&key_level, KEY_LEVEL_OUT);
+			atomic_inc(&key_out_count);
+		} else {
+			atomic_set(&key_level, KEY_LEVEL_IN);
+		}
+		(void)k_work_submit(&event_work);
+		return 0;
+	}
+
 	if (k_msgq_put(&event_q, &e, K_NO_WAIT) != 0) {
 		/* Not LOG_*: this may be an ISR. Counted, and the handler
 		 * reports the count on its next pass. */
@@ -311,10 +341,29 @@ int treadmill_source_report_event(enum treadmill_source_event evt)
 
 static void event_work_fn(struct k_work *w)
 {
+	/* Touched only here, on the system workqueue. */
+	static atomic_val_t consumed_outs;
+	static atomic_val_t delivered_level = KEY_LEVEL_UNKNOWN;
 	uint8_t e;
 	atomic_val_t dropped = atomic_set(&events_dropped, 0);
+	atomic_val_t outs = atomic_get(&key_out_count);
+	atomic_val_t level = atomic_get(&key_level);
 
 	ARG_UNUSED(w);
+
+	/* The key first: safety before buttons. A pull that happened since the
+	 * last pass is delivered even if the key is back in now, and then the
+	 * level it is at. */
+	if (outs != consumed_outs ||
+	    (level == KEY_LEVEL_OUT && delivered_level != KEY_LEVEL_OUT)) {
+		consumed_outs = outs;
+		delivered_level = KEY_LEVEL_OUT;
+		treadmill_node_event(TREADMILL_EVT_SAFETY_KEY_OUT);
+	}
+	if (level == KEY_LEVEL_IN && delivered_level != KEY_LEVEL_IN) {
+		delivered_level = KEY_LEVEL_IN;
+		treadmill_node_event(TREADMILL_EVT_SAFETY_KEY_IN);
+	}
 
 	if (dropped != 0) {
 		LOG_ERR("treadmill_source: %ld event(s) lost, the queue was full",

@@ -312,6 +312,9 @@ static int sim_start(const struct treadmill_source *src)
 	ARG_UNUSED(src);
 
 	sim.running = true;
+	/* The seam requires the key's state once at start. */
+	(void)treadmill_source_report_event(sim.key_in ? TREADMILL_EVT_SAFETY_KEY_IN
+						       : TREADMILL_EVT_SAFETY_KEY_OUT);
 	k_work_schedule(&sim_tick, K_MSEC(SIM_TICK_MS));
 	LOG_INF("simulated treadmill: a 150 s workout on repeat, 0 to 3.0 m/s; "
 		"remote control %s", sim.remote_enabled ? "enabled" : "disabled");
@@ -355,9 +358,13 @@ static int sim_set_speed(const struct treadmill_source *src, uint32_t mm_s)
 			return -EACCES;
 		}
 		/* A speed from rest starts the belt - the auto-start the motion
-		 * rule's condition (c) has already authorised. */
+		 * rule's condition (c) has already authorised. Leaving a pause
+		 * this way is a resume, and is reported as one. */
 		sim.halted = false;
-		sim.paused = false;
+		if (sim.paused) {
+			sim.paused = false;
+			(void)treadmill_source_report_event(TREADMILL_EVT_RESUMED);
+		}
 	}
 	sim.target_speed_mm_s = mm_s;
 	sim.speed_overridden = true;

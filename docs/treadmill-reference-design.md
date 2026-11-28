@@ -169,9 +169,15 @@ bool (*remote_motion_allowed)(const struct treadmill_source *src);
 int  treadmill_source_report_event(enum treadmill_source_event evt);
 ```
 
-- The workout hooks are optional. NULL answers `-ENOTSUP` (FTMS `0x02`), except
-  `workout_stop`, which falls back to `set_speed(0)`: a Stop is never
-  unsupported on a machine that can be told a speed.
+- The workout hooks are optional. Start/Resume and Stop/Pause are mandatory FTMS
+  op codes, so a missing hook is never `0x02`: without `workout_start`/`_resume`
+  FTMS answers `0x04` Operation Failed, and without `workout_stop`/`_pause` the
+  machine falls back to `set_speed(0)` (a stop) and succeeds if the driver
+  accepts it.
+- **Report FINISHED or READY promptly after an accepted `set_speed(0)` or
+  `workout_stop`.** The application stops counting the belt as moving the moment
+  the stop is accepted, but the session, Training Status and page 16 stay
+  RUNNING until the report arrives.
 - **Pause calls the source, and the source decides** whether the belt stops or
   slows to a walk. Once it *is* paused it reports `TREADMILL_EVT_PAUSED` (and
   `TREADMILL_EVT_RESUMED` after a resume).
@@ -180,9 +186,13 @@ int  treadmill_source_report_event(enum treadmill_source_event evt);
   console. **NULL means no**: such a machine can be watched and stopped from
   either radio, and never started, sped up or tilted remotely.
 - Events, delivered once each and in order (a queue, ISR-safe): console
-  Start/Stop/Pause, the paused/resumed echoes, safety key out/in, and the
-  console's pairing control (open the BLE pairing window, or forget every
-  bond).
+  Start/Stop/Pause, the paused/resumed echoes and the console's pairing control
+  (open the BLE pairing window, or forget every bond).
+- **The safety key is not a queued event.** `TREADMILL_EVT_SAFETY_KEY_OUT`/`_IN`
+  set a level and a pull counter directly, so a full queue cannot lose a pull and
+  an out-then-in between two handler passes still latches. **Report the key once
+  at start** (a machine without one reports IN): until then it is UNKNOWN and
+  nothing moves remotely.
 - The actuating wrappers (`treadmill_source_set_*`, `treadmill_source_workout_*`)
   are declared in `src/treadmill_source_ctrl.h`, which only `src/treadmill_cmd.c`
   includes. A radio cannot call the source around the motion rule.
@@ -195,7 +205,16 @@ or workout hook returned 0. It is not a completion and not a state.
 **Training Status, the FTMS machine-status notifications and FE-C page 16's
 state follow the source's state reports and events, never the command.** A
 machine that accepts Start and never starts the belt stays Idle on both radios,
-which is the truth. The seam header says this too.
+which is the truth. The seam header says this too. The one exception is an
+accepted FTMS Reset, which returns the session to Idle because §4.16.2 says so
+of Training Status.
+
+**Stopping needs FTMS control.** FTMS Stop, Pause and Set Target Speed 0 are
+Control Point procedures, and every procedure except Request Control needs
+control (§4.16.2), so a client without it gets `0x05`. That is conformant, and it
+is not a safety gap: the console's Stop and the safety key always work locally,
+and with `CONFIG_BT_MAX_CONN=1` Request Control always succeeds for the one
+client. What a stop never needs is *authorisation* under the motion rule.
 
 ### The one call that is easy to leave out
 
@@ -403,9 +422,15 @@ PAUSED, STOPPED and a latched SAFETY_STOP, driven only by what the machine
 reports — FE state edges and the source's events. FTMS Training Status (Idle,
 Manual Mode, Post-Workout) and FE-C page 16 (READY, IN_USE, FINISHED for
 paused/stopped/safety — FE state 4 is "FINISHED (PAUSED)") are both derived from
-it. Every local Stop or Pause and every safety-key event **increments the
-epoch**. A safety-key pull latches SAFETY_STOP and revokes every remote
-controller; only a local key-in **plus** a console Start or Stop clears it.
+it. Every local Stop or Pause, every safety-key event and every accepted FTMS
+Reset **increments the epoch**. A safety-key pull latches SAFETY_STOP and
+revokes every remote controller; only a local key-in **plus** a console Start or
+Stop clears it. The key is UNKNOWN until the source first reports it.
+
+**Moving is not RUNNING.** The belt can sit at 0 inside a RUNNING session (a
+console session started at 0, or a remote Stop the machine has not yet turned
+into a FINISHED report). The motion rule's "moving" is RUNNING **and** a reported
+belt speed above 0 **and** no remote stop, speed 0 or pause accepted since.
 
 **The motion rule.** A motion command is anything that can start the belt, raise
 its speed or move the deck. Every path calls `treadmill_motion_permitted(cmd,
@@ -416,14 +441,16 @@ requires all of:
 | | Condition |
 |---|---|
 | (a) | the source's `remote_motion_allowed()`: key present, remote enabled at the console |
-| (b) | not in SAFETY_STOP |
-| (c) | for Start, Resume, or a speed above 0 from anything but RUNNING: `CONFIG_TREADMILL_REMOTE_START=y` (**default n**). The Set-Speed auto-start is this rule, not a separate one. |
-| (d) | the control token, as in §4a |
+| (b) | not in SAFETY_STOP, and the key reported IN |
+| (c) | for Start, Resume, a speed above 0, **or any incline change** (FTMS incline, Reset's incline half, FE-C page 51, the grade provider) while the belt is not **moving**: `CONFIG_TREADMILL_REMOTE_START=y` (**default n**). The Set-Speed auto-start is this rule, not a separate one. |
+| (d) | the control token, as in §4a: for FTMS **and the grade provider**, the arbiter's owner is BLE (the grade provider gets no weaker token than FTMS); for FE-C, the implicit claim, made only after the page passes its epoch check |
 
 A refusal answers FTMS `0x05` Control Not Permitted or FE-C `REJECTED`; a
 refused grade-provider value is dropped. **Stopping always passes**: speed 0,
-FTMS Stop and Pause, and Reset's speed half need nothing. A Reset whose incline
-half is refused still stops the belt and answers `0x04`.
+FTMS Stop and Pause, and Reset's speed half need no authorisation. Reset stops
+the belt **first**, then levels the deck. A Reset whose incline half is needed
+(an incline capability and a target that is not already 0) and refused still
+stops the belt and answers `0x04`; with no incline half to run it succeeds.
 
 **Queued requests cannot outlive a local stop.** The FTMS pending procedure and
 the FE-C control-page ring record the epoch on receipt; a changed epoch at
@@ -431,9 +458,13 @@ dequeue refuses an actuating request (`0x04` / `REJECTED`) without reaching the
 driver. Stops are not refused for it.
 
 `src/treadmill_cmd.c` is the only file that includes `treadmill_source_ctrl.h`,
-and each of its calls into the source sits in one of four helpers that call the
-gate on their first line. The FTMS hooks gate again even though the core has
-already asked, so no future caller can reach the source around the rule.
+and each of its calls into the source sits in one of four doors
+(`treadmill_cmd_drive_speed/_incline/_start/_stop`) that call the gate on their
+first line; each door has its own test. The FTMS hooks gate again with the epoch
+recorded at receipt, even though the core has already asked, so no future
+caller can reach the source around the rule. A target incline set over FE-C
+page 51 or by the grade provider is notified to FTMS subscribers as `0x06`
+Target Incline Changed, like one set over FTMS.
 
 **FTMS Reset follows §4.16.2 without disturbing ANT+.** It sets target speed
 and incline to 0 (the incline half under the motion rule), revokes control, and
@@ -442,13 +473,20 @@ baseline held in the Treadmill Data encoder (`src/treadmill_ftms_data.c`). The
 ANT+ accumulators are untouched, so a head unit tracking the same run never
 sees its distance go backwards. One baseline, not one per client: Reset is a
 machine procedure whose status goes to every client, and `CONFIG_BT_MAX_CONN`
-is 1. Training Status follows the session, not the Reset.
+is 1. **Training Status goes to Idle** (§4.16.2): an accepted Reset returns the
+session to IDLE (page 16 READY) and bumps the epoch. The old deviation is
+resolved for both the time fields and Training Status.
 
 **FTMS choices where the spec is not explicit:** parameter lengths must be
-exact (`0x03` otherwise); Stop and Pause always reach the machine in every
-state; Start while RUNNING is `0x04`; a Resume from PAUSED is under rule (c).
-FTMS Table 4.15 lists Start/Resume and Stop/Pause as mandatory; a source
-without workout hooks answers `0x02` to Start, per this design's plan.
+exact (`0x03` otherwise, including a write longer than the Control Point buffer,
+which gets a Response Code rather than an ATT error); Stop and Pause always
+reach the machine in every state; Start while RUNNING is `0x04`; a Resume from
+PAUSED is under rule (c). FTMS Table 4.15 lists Start/Resume and Stop/Pause as
+mandatory, so a missing workout hook is `0x04` for Start/Resume and a
+`set_speed(0)` fallback for Stop/Pause, never `0x02`. FE-C pages 50 and 51 are
+gated by the arbiter only when page 54 declares Simulation mode; otherwise they
+answer NOT_SUPPORTED. The lap toggle flips only on the source's own FINISHED,
+not when PAUSED or SAFETY_STOP read FINISHED on page 16.
 
 ---
 
@@ -539,11 +577,13 @@ reason is recorded.
    Kconfig range is the machine's: the same values bound every command path and
    fill FTMS's Supported Range characteristics.
 6. **Remote motion authorisation.** Implement `remote_motion_allowed()` from the
-   real safety key and a console "remote control" setting. Leave
+   real safety key and a console "remote control" setting, and report
+   FINISHED/READY promptly after an accepted stop. Leave
    `CONFIG_TREADMILL_REMOTE_START` off unless the machine's own design makes a
    remotely started belt safe, and document it if you turn it on.
-7. **The safety key reaches the firmware.** Report `TREADMILL_EVT_SAFETY_KEY_OUT`
-   and `_IN` even if the key cuts the motor in hardware: that is what latches
+7. **The safety key reaches the firmware.** Report its state once at start, and
+   `TREADMILL_EVT_SAFETY_KEY_OUT` and `_IN` on every change, even if the key cuts
+   the motor in hardware: that is what latches
    SAFETY_STOP, revokes remote control and cancels queued commands.
 8. **Bonds and pairing UX.** The control point requires encryption, so a client
    must bond. `dual.conf` enables `CONFIG_RADIANT_BLE_PAIRING_WINDOW`: new phones

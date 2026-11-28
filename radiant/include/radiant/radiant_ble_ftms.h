@@ -47,12 +47,20 @@
  *
  * ─── Choices where FTMS 1.0 is not explicit ────────────────────────────────
  *
- *   - Parameter lengths must be exact; a short or long parameter is 0x03.
+ *   - Parameter lengths must be exact; a short or long parameter is 0x03 -
+ *     including a write longer than the glue's buffer, which is answered with
+ *     a Response Code rather than an ATT error.
  *   - Stop and Pause always reach the machine, in every state: a client whose
  *     Start is still spinning the belt up must be able to stop it even though
  *     the session has not reported RUNNING yet.
  *   - Start while RUNNING is 0x04 (Table 4.24's "not possible in the current
  *     state"); Start while PAUSED is a resume.
+ *   - Start/Resume and Stop/Pause are mandatory op codes (Table 4.15), so a
+ *     machine whose workout hook answers -ENOTSUP gets 0x04, never 0x02.
+ *   - Every procedure but Request Control, Stop and Pause included, needs
+ *     control (§4.16.2). A stop is always available at the machine itself.
+ *   - A successful Reset sets Training Status to Idle (§4.16.2); the machine's
+ *     reset_done hook returns its own session to idle with it.
  *   - The Fitness Machine Status goes to every subscriber, the initiating
  *     client included (§4.17's "other clients" read as "also"); 0xFF goes to
  *     the client that lost control only.
@@ -268,6 +276,9 @@ struct radiant_ble_ftms_cp_decision {
 	/* RESET: may the non-stop half (e.g. a treadmill's incline to 0) run?
 	 * The stop half always runs. */
 	bool reset_motion_ok;
+	/* The machine's epoch when the request was received, handed to every
+	 * hook so its own re-check compares against receipt, not "now". */
+	uint32_t epoch;
 };
 
 /*
@@ -302,9 +313,10 @@ enum radiant_ble_ftms_workout {
 };
 
 /*
- * The machine's actuators. Each answers 0 (accepted), -ENOTSUP (0x02),
- * -EINVAL/-ERANGE (0x03) or any other negative errno (0x04). A NULL hook is
- * -ENOTSUP.
+ * The machine's actuators. Each answers 0 (accepted), -ENOTSUP (0x02 for a
+ * target op; 0x04 for the mandatory workout ops), -EINVAL/-ERANGE (0x03) or any
+ * other negative errno (0x04). A NULL hook is -ENOTSUP. `epoch` is the
+ * machine's epoch at receipt of the request.
  *
  *   set_target  a target op the decision has range-checked and authorised.
  *   workout     Start/Resume (authorised) and Stop/Pause (never gated).
@@ -314,9 +326,9 @@ enum radiant_ble_ftms_workout {
  *               was accepted.
  */
 struct radiant_ble_ftms_ops {
-	int (*set_target)(const struct radiant_ble_ftms_target *t, void *ctx);
-	int (*workout)(enum radiant_ble_ftms_workout w, void *ctx);
-	int (*reset)(bool motion_ok, void *ctx);
+	int (*set_target)(const struct radiant_ble_ftms_target *t, uint32_t epoch, void *ctx);
+	int (*workout)(enum radiant_ble_ftms_workout w, uint32_t epoch, void *ctx);
+	int (*reset)(bool motion_ok, uint32_t epoch, void *ctx);
 	void *ctx;
 };
 
@@ -378,9 +390,11 @@ struct radiant_ble_ftms_machine {
 	/* The session epoch now. CALLED FROM THE BT RX THREAD at receipt of
 	 * every Control Point write: must be safe from any thread. */
 	uint32_t (*epoch)(void *ctx);
-	/* Zero what the FTMS data record reports as accumulated (elapsed
-	 * time, distance...) after a successful Reset. System workqueue. */
-	void (*reset_view)(void *ctx);
+	/* A Reset succeeded: zero what the FTMS data record reports as
+	 * accumulated (elapsed time, distance...) and return the machine's
+	 * session to idle. The core sets Training Status to Idle itself.
+	 * System workqueue. */
+	void (*reset_done)(void *ctx);
 	void *ctx;
 };
 
@@ -403,6 +417,11 @@ void radiant_ble_ftms_session_changed(enum radiant_ble_ftms_run prev,
 /* Take control from the FTMS controller, if any: 0xFF Control Permission Lost
  * to that client, and the arbiter token released. System workqueue. */
 void radiant_ble_ftms_revoke_control(void);
+
+/* Notify a Fitness Machine Status to every subscriber - for a change that did
+ * not come through the Control Point (e.g. 0x06 Target Incline Changed when an
+ * FE-C controller moved the target). System workqueue. */
+void radiant_ble_ftms_notify_status(const uint8_t *msg, size_t len);
 
 /* True while some client holds FTMS control. */
 bool radiant_ble_ftms_has_controller(void);
