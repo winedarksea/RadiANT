@@ -330,7 +330,8 @@ min_scenarios: 34
 # deadline). Cassandra twister mp2g.
 # 2026-11-27: 11644, Phase 3 (treadmill FTMS core), cassandra mp3e: radiant.ftms 23 new,
 # treadmill.pages 33 observed (floor was 26) -> 55.
-min_testcases: 11644
+# 2026-11-28: 11661 (cassandra mp3g): Phase 3 review fixes, +2 radiant.ftms, +15 treadmill.pages.
+min_testcases: 11661
 
 # Per-scenario floors (review 2026-10-31, E3-1). One floor per scenario,
 # because the global count above sums them - three run the whole
@@ -508,7 +509,9 @@ min_cases.hrm_ble.publish: 31
 # treadmill_session (14) and treadmill_cmd (23) suites were added: every motion
 # path's negative case, queued-request refusals, stop/pause, Reset,
 # capabilities and the Reset baseline.
-min_cases.treadmill.pages: 55
+# 2026-11-28: 70 (mp3g), the review fixes: moving-not-running, incline at rest,
+# tokens, the real FE-C claim path, non-owner stop, one case per door, Reset order.
+min_cases.treadmill.pages: 70
 min_cases.treadmill.hr_rx: 3
 # 2026-11-20: +3 (HAL drift item 5, as radiant.unit).
 # 2026-11-20: +1 (the ETIME retry re-read, as radiant.unit).
@@ -639,4 +642,5 @@ min_cases.radiant.ble: 51
 # radiant.ftms (2026-11-27): 8 arbiter cases (6 moved from treadmill.pages)
 # and 15 FTMS core cases (the decision-table sweep, explicit rows, execution,
 # Training Status, status and Service Data bytes).
-min_cases.radiant.ftms: 23
+# 2026-11-28: 25 (mp3g), the receipt epoch and over-long writes.
+min_cases.radiant.ftms: 25
