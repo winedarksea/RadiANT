@@ -714,6 +714,8 @@ static int fec_encode_page(struct radiant_profile_fec_tx *tx, uint8_t page,
 		return radiant_profile_fec_encode_track_resistance(&tx->track, body);
 	case RADIANT_PROFILE_FEC_PAGE_CAPABILITIES:
 		return radiant_profile_fec_encode_capabilities(&tx->cfg.caps, body);
+	case RADIANT_PROFILE_FEC_PAGE_USER_CONFIG:
+		return radiant_profile_fec_encode_user_config(&tx->user, body);
 	case RADIANT_PROFILE_FEC_PAGE_CMD_STATUS:
 		return radiant_profile_fec_encode_cmd_status(&tx->status, body);
 	case RADIANT_PROFILE_COMMON_PAGE_80:
@@ -956,6 +958,28 @@ void radiant_profile_fec_tx_set_track(struct radiant_profile_fec_tx *tx,
 	}
 }
 
+/*
+ * Page 55 is echoed on request, so it must always encode: a field that cannot
+ * be represented (a bike weight or wheel offset at or past its sentinel) is
+ * reported invalid here rather than left to make the encoder refuse - a
+ * refused slot 3 would wedge the five-message group (see the settings setter).
+ */
+void radiant_profile_fec_tx_set_user(struct radiant_profile_fec_tx *tx,
+				     const struct radiant_profile_fec_cmd_user_config *u)
+{
+	if (tx == NULL || u == NULL) {
+		return;
+	}
+
+	tx->user = *u;
+	if (tx->user.bike_weight_50g >= RADIANT_PROFILE_FEC_BIKE_WEIGHT_INVALID) {
+		tx->user.bike_weight_valid = false;
+	}
+	if (tx->user.wheel_offset_mm >= RADIANT_PROFILE_FEC_WHEEL_OFFSET_INVALID) {
+		tx->user.wheel_offset_valid = false;
+	}
+}
+
 void radiant_profile_fec_tx_command_answered(struct radiant_profile_fec_tx *tx,
 				     uint8_t command_page, uint8_t sequence,
 				     uint8_t status, const uint8_t *data4)
@@ -988,22 +1012,69 @@ int radiant_profile_fec_tx_request(struct radiant_profile_fec_tx *tx, uint8_t pa
 	case RADIANT_PROFILE_FEC_PAGE_WIND_RESISTANCE:
 	case RADIANT_PROFILE_FEC_PAGE_TRACK_RESISTANCE:
 	case RADIANT_PROFILE_FEC_PAGE_CAPABILITIES:
+	case RADIANT_PROFILE_FEC_PAGE_USER_CONFIG:
 	case RADIANT_PROFILE_FEC_PAGE_CMD_STATUS:
 	case RADIANT_PROFILE_COMMON_PAGE_80:
 	case RADIANT_PROFILE_COMMON_PAGE_81:
 		break;
 	default:
 		/* Everything else is in the rotation or is not a page this
-		 * master has, and asking for it is answered by waiting. Saying
-		 * so is better than pretending to schedule it: SS8.8 wants a
-		 * page 71 with NOT_SUPPORTED, and that is the caller's to send.
-		 * Page 17 is the exception above, by SS10.1.3.1. */
+		 * master has, and asking for it is answered by waiting - the
+		 * Common Pages document's "the master will not respond at all"
+		 * (Rev 3.1 SS6.2). Page 17 is the exception above, by
+		 * SS10.1.3.1. A page 70 is NOT a control page, so the caller
+		 * must not answer this with a page 71 either (SS8.12.3.1). */
 		return -ENOTSUP;
 	}
 
 	tx->on_request_page = page;
 	tx->on_request_left = (count == 0u) ? 1u : count;
 	return 0;
+}
+
+int radiant_profile_fec_tx_handle_request(struct radiant_profile_fec_tx *tx,
+					  const uint8_t *body)
+{
+	struct radiant_profile_fec_cmd_request req;
+	uint8_t                                count;
+
+	if (tx == NULL || body == NULL) {
+		return -EINVAL;
+	}
+	if (radiant_profile_fec_decode_request(body, &req) != 0) {
+		return -EINVAL;
+	}
+	/* Command type 1 only. 2 (ANT-FS session) and 3 (from slave) are not
+	 * this master's to serve, and 4 (a data page set) defines no set for
+	 * FE-C. */
+	if (req.command_type != RADIANT_PROFILE_FEC_REQUEST_CMD_DATA_PAGE) {
+		return -ENOTSUP;
+	}
+
+	/*
+	 * BYTE 5. Common Pages Rev 3.1 SS6.2.3: bits 0-6 are the count, bit 7
+	 * asks for acknowledged messages "if possible", 0x80 means "until a
+	 * successful acknowledge" and 0x00 is invalid.
+	 *
+	 * FE-C MAKES THE ACKNOWLEDGED REPLY IMPOSSIBLE, so bit 7 is honoured
+	 * as the profile defines it: Fitness Equipment Rev 5.0 SS10.3
+	 * [MD_0006], "ANT+ fitness equipment shall only send broadcast
+	 * messages ... and shall never send acknowledged or burst messages",
+	 * and SS8.12.3 [MD_FEC_001] again for page 71 specifically. SS6.2.3
+	 * anticipates exactly this ("prohibited in most ANT+ device
+	 * profiles"). So the reply is broadcast, the requested number of
+	 * times; and 0x80, whose "until acknowledged" a broadcast can never
+	 * satisfy, sends RADIANT_PROFILE_FEC_TX_REQUEST_UNTIL_ACK_COUNT copies.
+	 */
+	count = req.tx_count;
+	if (count == 0u) {
+		if (!req.acknowledged) {
+			return -EINVAL; /* 0x00, reserved as invalid */
+		}
+		count = RADIANT_PROFILE_FEC_TX_REQUEST_UNTIL_ACK_COUNT;
+	}
+
+	return radiant_profile_fec_tx_request(tx, req.page, count);
 }
 
 enum radiant_profile_slot_kind radiant_profile_fec_tx_next(struct radiant_profile_fec_tx *tx,
