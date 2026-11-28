@@ -23,10 +23,21 @@
 // Windows metadata. See that script for the exact reference set; getting a
 // .NET Framework build to see Windows.winmd is the fiddly part, not this file.
 //
-// Two modes:
+// Modes:
 //   scan <seconds>                 - active scan, one line per distinct device
 //   connect <name-substring> <sec> - connect, subscribe to Heart Rate
 //                                    Measurement, print every notification
+//   hold <name-substring> <sec>    - connect, subscribe to FTMS Treadmill Data
+//                                    if present, hold
+//   ftms-conformance <name> [opts] - on-the-wire FTMS server checks
+//                                    (ble_central_ftms.cs)
+//   reconnect-soak <name> [opts]   - N connect/subscribe/disconnect cycles,
+//                                    timed (ble_central_soak.cs)
+//   selftest                       - the radio-free helpers, no Bluetooth used
+//                                    (ble_central_util.cs)
+//
+// The newer modes live in sibling ble_central_*.cs files; the script compiles
+// every toolsle_central*.cs into one executable.
 //
 // The connect mode is the P9 instrument. It holds the connection open for the
 // requested duration so the ANT+ side can be watched (on the dongle, or on the
@@ -43,7 +54,7 @@ using Windows.Devices.Bluetooth.Advertisement;
 using Windows.Devices.Bluetooth.GenericAttributeProfile;
 using Windows.Storage.Streams;
 
-static class BleCentral
+static partial class BleCentral
 {
     static DateTime t0 = DateTime.UtcNow;
 
@@ -66,6 +77,13 @@ static class BleCentral
             Console.Error.WriteLine("usage: ble_central scan <seconds>");
             Console.Error.WriteLine("       ble_central connect <name-substring> <seconds>");
             Console.Error.WriteLine("       ble_central hold <name-substring> <seconds>");
+            Console.Error.WriteLine("       ble_central ftms-conformance <name-substring> [--machine treadmill|bike]");
+            Console.Error.WriteLine("           [--json PATH] [--skip-unencrypted] [--unpair-at-end] [--strict]");
+            Console.Error.WriteLine("           [--scan-seconds N] [--cp-timeout S] [--readv-timeout S]");
+            Console.Error.WriteLine("       ble_central reconnect-soak <name-substring> [--cycles N]");
+            Console.Error.WriteLine("           [--notify hrs|treadmill|bike|SSSS:CCCC] [--json PATH] [--uncached]");
+            Console.Error.WriteLine("           [--no-probe] [--strict] [--scan-seconds N] [--data-timeout S] [--readv-timeout S]");
+            Console.Error.WriteLine("       ble_central selftest");
             return 2;
         }
 
@@ -89,10 +107,31 @@ static class BleCentral
                         return 2;
                     }
                     return Hold(args[1], args.Length > 2 ? int.Parse(args[2]) : 60).Result;
+                case "ftms-conformance":
+                    if (args.Length < 2)
+                    {
+                        Console.Error.WriteLine("ftms-conformance needs a name substring");
+                        return 2;
+                    }
+                    return FtmsConformance(args[1], ParseOptions(args, 2)).Result;
+                case "reconnect-soak":
+                    if (args.Length < 2)
+                    {
+                        Console.Error.WriteLine("reconnect-soak needs a name substring");
+                        return 2;
+                    }
+                    return ReconnectSoak(args[1], ParseOptions(args, 2)).Result;
+                case "selftest":
+                    return SelfTest();
                 default:
                     Console.Error.WriteLine("unknown mode '{0}'", args[0]);
                     return 2;
             }
+        }
+        catch (ArgumentException ex)
+        {
+            Console.Error.WriteLine("bad arguments: {0}", ex.Message);
+            return 2;
         }
         catch (AggregateException ex)
         {
