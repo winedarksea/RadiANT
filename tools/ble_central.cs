@@ -37,7 +37,7 @@
 //                                    (ble_central_util.cs)
 //
 // The newer modes live in sibling ble_central_*.cs files; the script compiles
-// every toolsle_central*.cs into one executable.
+// every tools\ble_central*.cs into one executable.
 //
 // The connect mode is the P9 instrument. It holds the connection open for the
 // requested duration so the ANT+ side can be watched (on the dongle, or on the
@@ -83,7 +83,9 @@ static partial class BleCentral
             Console.Error.WriteLine("       ble_central reconnect-soak <name-substring> [--cycles N]");
             Console.Error.WriteLine("           [--notify hrs|treadmill|bike|SSSS:CCCC] [--json PATH] [--uncached]");
             Console.Error.WriteLine("           [--no-probe] [--strict] [--scan-seconds N] [--data-timeout S] [--readv-timeout S]");
+            Console.Error.WriteLine("           [--device-log CONSOLE.log] [--gap-seconds N] [--watch-while-connecting]");
             Console.Error.WriteLine("       ble_central selftest");
+            Console.Error.WriteLine("       ble_central device-log <console-capture>   (offline -DeviceLog analysis)");
             return 2;
         }
 
@@ -123,6 +125,13 @@ static partial class BleCentral
                     return ReconnectSoak(args[1], ParseOptions(args, 2)).Result;
                 case "selftest":
                     return SelfTest();
+                case "device-log":
+                    if (args.Length < 2)
+                    {
+                        Console.Error.WriteLine("device-log needs a console capture file");
+                        return 2;
+                    }
+                    return DeviceLogOnly(args[1]);
                 default:
                     Console.Error.WriteLine("unknown mode '{0}'", args[0]);
                     return 2;

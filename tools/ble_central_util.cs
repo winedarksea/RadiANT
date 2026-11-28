@@ -43,6 +43,9 @@ static partial class BleCentral
         public int DataTimeoutS = 15;
         public int ReadvTimeoutS = 30;
         public int CpTimeoutS = 10;
+        public string DeviceLog;          // Zephyr console capture to cross-check against
+        public int GapSeconds = 15;       // scanner-gap calibration window before cycle 1
+        public bool WatchWhileConnecting; // old behaviour: keep the active scan up during connect
     }
 
     // `--key value` and `--flag` after the positional name. Unknown keys are
@@ -91,11 +94,24 @@ static partial class BleCentral
                 case "--uncached": o.Uncached = true; break;
                 case "--strict": o.Strict = true; break;
                 case "--no-probe": o.NoProbe = true; break;
+                case "--device-log": o.DeviceLog = next(); break;
+                case "--gap-seconds": o.GapSeconds = ParseNonNegative(next(), a); break;
+                case "--watch-while-connecting": o.WatchWhileConnecting = true; break;
                 default:
                     throw new ArgumentException("unknown option '" + a + "'");
             }
         }
         return o;
+    }
+
+    static int ParseNonNegative(string s, string what)
+    {
+        int v;
+        if (!int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out v) || v < 0)
+        {
+            throw new ArgumentException(what + " needs a non-negative integer, got '" + s + "'");
+        }
+        return v;
     }
 
     static int ParsePositive(string s, string what)
@@ -192,16 +208,31 @@ static partial class BleCentral
     const double DATA_LIMIT_MS = 10000.0;
 
     // Re-advertise is bracketed, not measured, on Windows. The link went down
-    // somewhere between our dispose (`ub` is measured from there, so it is an
+    // somewhere between our release (`ub` is measured from there, so it is an
     // UPPER bound on the device's re-advertise latency) and the moment
-    // Windows admitted it (`lb`, a LOWER bound; null when the status probe
-    // never saw the drop). Only a bracket that sits wholly on one side of the
-    // limit is a verdict.
-    static Verdict ReadvVerdict(double? ub, double? lb, double limit)
+    // Windows admitted it (`lb`, a LOWER bound; null unless the status probe
+    // CONFIRMED the drop of a link this cycle actually had). Only a bracket
+    // that sits wholly on one side of the limit is a verdict.
+    //
+    // What the first bench run (2026-11-27, HRM, 50 cycles) taught, against
+    // the device's own console:
+    //   - `ub` is dominated by Windows, not the device: Windows keeps the link
+    //     ~8.9 s after the last handle is released (lazy close), and the
+    //     device re-advertised within 0.5 ms of every disconnect.
+    //   - "not seen advertising" is the HOST going blind: in one stretch the
+    //     device advertised for 60 s and Windows neither surfaced a packet
+    //     nor connected. So an unseen re-advertise is INCONCLUSIVE, not FAIL.
+    //   - a cycle that never connected has no link to release, and the
+    //     probe's instant "Disconnected" in such a cycle is not a drop.
+    static Verdict ReadvVerdict(bool linked, double? ub, double? lb, double limit)
     {
+        if (!linked)
+        {
+            return Verdict.Skip;
+        }
         if (!ub.HasValue)
         {
-            return Verdict.Fail; // never seen advertising again
+            return Verdict.Inconclusive;
         }
         if (ub.Value <= limit)
         {
@@ -214,13 +245,137 @@ static partial class BleCentral
         return Verdict.Inconclusive;
     }
 
-    static Verdict DataVerdict(double? dataMs, double limit)
+    // The soak's re-advertise verdict. A device log, when given, is the
+    // authority and the Windows brackets become information. Without one, a
+    // Windows-side FAIL needs a measured scanner gap; with the gap unmeasured
+    // the instrument's resolution is unknown and FAIL becomes INCONCLUSIVE.
+    static Verdict ReadvOverall(IEnumerable<Verdict> perCycle, double? gapMs, DeviceLogStats dev, double limit)
     {
+        if (dev != null)
+        {
+            return DeviceReadvVerdict(dev, limit);
+        }
+        var vs = perCycle.Where(v => v != Verdict.Skip).ToList();
+        if (vs.Count == 0)
+        {
+            return Verdict.Inconclusive;
+        }
+        var w = Worst(vs);
+        if (w == Verdict.Fail && !gapMs.HasValue)
+        {
+            return Verdict.Inconclusive;
+        }
+        return w;
+    }
+
+    // Data resumes after LINK RESTORE: a cycle that never connected restored
+    // nothing and is judged under "connect", not here.
+    static Verdict DataVerdict(bool linked, double? dataMs, double limit)
+    {
+        if (!linked)
+        {
+            return Verdict.Skip;
+        }
         if (!dataMs.HasValue)
         {
             return Verdict.Fail;
         }
         return dataMs.Value <= limit ? Verdict.Pass : Verdict.Fail;
+    }
+
+    // ── device console cross-check (-DeviceLog) ─────────────────────────────
+
+    // A Zephyr console capture: `[HH:MM:SS.mmm,uuu] <inf> hrm: BLE
+    // disconnected (0x13)` then `... BLE advertising (restart)`, optionally
+    // with ANSI colour codes and a leading host wall-clock `HH:MM:SS `. The
+    // device's own uptime stamp is the clock used; the host prefix is ignored.
+    class DeviceLogStats
+    {
+        public int Connects, Disconnects, Restarts;
+        public int Unpaired;      // a disconnect followed by a connect, or another disconnect, with no restart
+        public bool TrailingOpen; // the capture ends after a disconnect with no restart (truncated?)
+        public List<double> ReadvMs = new List<double>();
+        public List<double> DiscToConnectMs = new List<double>();
+    }
+
+    static readonly System.Text.RegularExpressions.Regex AnsiRx =
+        new System.Text.RegularExpressions.Regex("\x1b\\[[0-9;]*[A-Za-z]");
+    static readonly System.Text.RegularExpressions.Regex UptimeRx =
+        new System.Text.RegularExpressions.Regex("\\[(\\d+):(\\d{2}):(\\d{2})\\.(\\d{3}),(\\d{3})\\]");
+
+    static double? ConsoleUptimeMs(string line)
+    {
+        var m = UptimeRx.Match(line);
+        if (!m.Success)
+        {
+            return null;
+        }
+        Func<int, double> g = i => double.Parse(m.Groups[i].Value, CultureInfo.InvariantCulture);
+        return ((g(1) * 60 + g(2)) * 60 + g(3)) * 1000.0 + g(4) + g(5) / 1000.0;
+    }
+
+    static DeviceLogStats ParseDeviceLog(IEnumerable<string> lines)
+    {
+        var st = new DeviceLogStats();
+        double? pendingDisc = null; // waiting for its advertising restart
+        double? lastDisc = null;    // waiting for the next connect
+        foreach (var raw in lines)
+        {
+            string line = AnsiRx.Replace(raw, "");
+            var t = ConsoleUptimeMs(line);
+            if (!t.HasValue)
+            {
+                continue;
+            }
+            if (line.Contains("BLE disconnected"))
+            {
+                st.Disconnects++;
+                if (pendingDisc.HasValue)
+                {
+                    st.Unpaired++;
+                }
+                pendingDisc = t;
+                lastDisc = t;
+            }
+            else if (line.Contains("advertising (restart)"))
+            {
+                st.Restarts++;
+                if (pendingDisc.HasValue)
+                {
+                    st.ReadvMs.Add(t.Value - pendingDisc.Value);
+                    pendingDisc = null;
+                }
+            }
+            else if (line.Contains("BLE connected"))
+            {
+                st.Connects++;
+                if (pendingDisc.HasValue)
+                {
+                    st.Unpaired++;
+                    pendingDisc = null;
+                }
+                if (lastDisc.HasValue)
+                {
+                    st.DiscToConnectMs.Add(t.Value - lastDisc.Value);
+                    lastDisc = null;
+                }
+            }
+        }
+        st.TrailingOpen = pendingDisc.HasValue;
+        return st;
+    }
+
+    static Verdict DeviceReadvVerdict(DeviceLogStats d, double limit)
+    {
+        if (d.ReadvMs.Count == 0)
+        {
+            return Verdict.Inconclusive; // the capture holds no disconnect/restart pair
+        }
+        if (d.Unpaired > 0)
+        {
+            return Verdict.Fail; // a disconnect the device never re-advertised after
+        }
+        return d.ReadvMs.Max() <= limit ? Verdict.Pass : Verdict.Fail;
     }
 
     // The gap between consecutive sightings of the device while it is
@@ -538,13 +693,60 @@ static partial class BleCentral
         check(s.Median == 2.5 && s.Max == 4, "Summarise even count averages the middle pair");
         check(Summarise(new double[0]) == null, "Summarise of nothing is null, not zeros");
 
-        check(ReadvVerdict(1500, null, 2000) == Verdict.Pass, "readv: upper bound under limit passes");
-        check(ReadvVerdict(2500, 300, 2000) == Verdict.Inconclusive, "readv: bracket straddling limit is inconclusive");
-        check(ReadvVerdict(4000, 2500, 2000) == Verdict.Fail, "readv: lower bound over limit fails");
-        check(ReadvVerdict(4000, null, 2000) == Verdict.Inconclusive, "readv: no lower bound cannot fail on the upper alone");
-        check(ReadvVerdict(null, null, 2000) == Verdict.Fail, "readv: never re-advertised fails");
-        check(DataVerdict(9999, 10000) == Verdict.Pass && DataVerdict(10001, 10000) == Verdict.Fail
-              && DataVerdict(null, 10000) == Verdict.Fail, "data verdict at the 10 s limit");
+        check(ReadvVerdict(true, 1500, null, 2000) == Verdict.Pass, "readv: upper bound under limit passes");
+        check(ReadvVerdict(true, 2500, 300, 2000) == Verdict.Inconclusive, "readv: bracket straddling limit is inconclusive");
+        check(ReadvVerdict(true, 4000, 2500, 2000) == Verdict.Fail, "readv: confirmed lower bound over limit fails");
+        check(ReadvVerdict(true, 4000, null, 2000) == Verdict.Inconclusive, "readv: unconfirmed disconnect is inconclusive");
+        check(ReadvVerdict(true, null, null, 2000) == Verdict.Inconclusive, "readv: unseen re-advertise is the host, inconclusive");
+        check(ReadvVerdict(false, 9000, 8900, 2000) == Verdict.Skip, "readv: a cycle that never connected is skipped");
+        check(ReadvOverall(new[] { Verdict.Pass, Verdict.Fail }, null, null, 2000) == Verdict.Inconclusive,
+              "readv overall: FAIL without a measured scanner gap is inconclusive");
+        check(ReadvOverall(new[] { Verdict.Pass, Verdict.Fail }, 900, null, 2000) == Verdict.Fail,
+              "readv overall: FAIL with a measured gap stands");
+        check(ReadvOverall(new[] { Verdict.Skip }, 900, null, 2000) == Verdict.Inconclusive,
+              "readv overall: nothing judged is inconclusive");
+        check(DataVerdict(true, 9999, 10000) == Verdict.Pass && DataVerdict(true, 10001, 10000) == Verdict.Fail
+              && DataVerdict(true, null, 10000) == Verdict.Fail && DataVerdict(false, null, 10000) == Verdict.Skip,
+              "data verdict at the 10 s limit; no link, no verdict");
+
+        // Lines as captured in bench-logs/2026-11-27-hrm-m1/soak-console.log:
+        // host wall clock, device uptime, ANSI colour, CR.
+        string E = "\x1b";
+        var dlog = new[]
+        {
+            "23:34:46 [00:42:33.635,318] " + E + "[0m<inf> hrm: BLE connected" + E + "[0m\r",
+            "23:34:56 [00:42:43.459,373] " + E + "[0m<inf> radiant_ble_adv: HRS notifications off" + E + "[0m\r",
+            "23:34:56 [00:42:43.459,392] " + E + "[0m<inf> hrm: BLE disconnected (0x13)" + E + "[0m\r",
+            "23:34:56 [00:42:43.459,871] " + E + "[0m<inf> radiant_ble_adv: BLE advertising (restart)" + E + "[0m\r",
+            "23:35:10 [00:42:58.188,094] " + E + "[0m<inf> radiant_api: noise rf=57 n=242 floor=-105" + E + "[0m\r",
+            "23:35:28 [00:43:15.602,326] " + E + "[0m<inf> hrm: BLE connected" + E + "[0m\r",
+            "[00:43:19.610,146] <inf> hrm: BLE disconnected (0x13)",
+            "[00:43:19.610,630] <inf> radiant_ble_adv: BLE advertising (restart)",
+            "garbage line with no stamp: BLE disconnected",
+        };
+        var ds = ParseDeviceLog(dlog);
+        check(ds.Connects == 2 && ds.Disconnects == 2 && ds.Restarts == 2 && ds.Unpaired == 0 && !ds.TrailingOpen,
+              "device log: counts, ANSI and host prefix stripped, unstamped line ignored");
+        check(ds.ReadvMs.Count == 2 && Math.Abs(ds.ReadvMs[0] - 0.479) < 1e-6 && Math.Abs(ds.ReadvMs[1] - 0.484) < 1e-6,
+              "device log: disconnect -> restart 0.479 ms and 0.484 ms");
+        check(ds.DiscToConnectMs.Count == 1 && Math.Abs(ds.DiscToConnectMs[0] - 32142.934) < 1e-6,
+              "device log: disconnect -> next connect");
+        check(DeviceReadvVerdict(ds, 2000) == Verdict.Pass, "device log verdict passes");
+        check(ReadvOverall(new[] { Verdict.Fail }, 900, ds, 2000) == Verdict.Pass,
+              "device log overrides the Windows brackets");
+        var bad = ParseDeviceLog(new[]
+        {
+            "[00:00:01.000,000] <inf> hrm: BLE disconnected (0x08)",
+            "[00:00:05.000,000] <inf> hrm: BLE connected",
+            "[00:00:06.000,000] <inf> hrm: BLE disconnected (0x13)",
+            "[00:00:09.500,000] <inf> radiant_ble_adv: BLE advertising (restart)",
+            "[00:00:10.000,000] <inf> hrm: BLE disconnected (0x13)",
+        });
+        check(bad.Unpaired == 1 && bad.TrailingOpen && bad.ReadvMs.Count == 1 && bad.ReadvMs[0] == 3500.0,
+              "device log: missing restart counted, trailing disconnect flagged");
+        check(DeviceReadvVerdict(bad, 2000) == Verdict.Fail, "device log: a missing restart fails");
+        check(DeviceReadvVerdict(ParseDeviceLog(new string[0]), 2000) == Verdict.Inconclusive,
+              "device log with no pairs is inconclusive");
 
         check(Worst(new[] { Verdict.Pass, Verdict.Skip }) == Verdict.Pass, "Worst: skip does not fail");
         check(Worst(new[] { Verdict.Pass, Verdict.Inconclusive }) == Verdict.Inconclusive, "Worst: inconclusive");
@@ -601,6 +803,10 @@ static partial class BleCentral
                                      "--skip-unencrypted", "--strict" }, 2);
         check(o.Machine == "bike" && o.Cycles == 5 && o.Json == "o.json" && o.SkipUnencrypted && o.Strict,
               "option parsing");
+        o = ParseOptions(new[] { "--device-log", "c.log", "--gap-seconds", "0", "--watch-while-connecting" }, 0);
+        check(o.DeviceLog == "c.log" && o.GapSeconds == 0 && o.WatchWhileConnecting, "soak diagnostic options");
+        check(new Options().GapSeconds == 15 && !new Options().WatchWhileConnecting,
+              "defaults: 15 s gap calibration, watcher paused while connecting");
         bool threw = false;
         try { ParseOptions(new[] { "--cycle", "5" }, 0); }
         catch (ArgumentException) { threw = true; }

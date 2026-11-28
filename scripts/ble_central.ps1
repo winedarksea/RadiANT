@@ -57,6 +57,9 @@
               pass criteria (re-advertise <= 2 s, data <= 10 s). How Windows
               is made to really disconnect, and the limits of the re-advertise
               figure, are in tools\ble_central_soak.cs.
+    device-log
+            - offline: the -DeviceLog analysis of a console capture from an
+              earlier soak (device-side disconnect -> re-advertise). No radio.
     selftest
             - runs the radio-free helpers (statistics, verdicts, FTMS record
               parsers, option parsing). Uses no Bluetooth; safe while the
@@ -86,6 +89,22 @@
     reconnect-soak: what to subscribe to. hrs (0x180D/0x2A37, default),
     treadmill (0x1826/0x2ACD), bike (0x1826/0x2AD2), or SSSS:CCCC in hex.
 
+.PARAMETER DeviceLog
+    reconnect-soak: a capture of the device's Zephyr console taken during the
+    soak. Its "BLE disconnected" -> "BLE advertising (restart)" times are the
+    device-side re-advertise figure, and when given they decide the
+    re-advertise verdict. The Windows figure is dominated by Windows holding
+    the link ~9 s after release (measured 2026-11-27), not by the device.
+
+.PARAMETER GapSeconds
+    reconnect-soak: scanner calibration window before cycle 1 (default 15;
+    0 skips it, and the scanner gap is then unmeasured).
+
+.PARAMETER WatchWhileConnecting
+    reconnect-soak: keep the active scan running during each connect attempt
+    (the original behaviour). Default is to pause it, since a scan and a
+    connection initiation share the controller.
+
 .PARAMETER Json
     ftms-conformance / reconnect-soak: also write the results as JSON here.
 
@@ -114,7 +133,7 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('scan', 'connect', 'hold', 'ftms-conformance', 'reconnect-soak', 'selftest')]
+    [ValidateSet('scan', 'connect', 'hold', 'ftms-conformance', 'reconnect-soak', 'selftest', 'device-log')]
     [string]$Mode = 'scan',
     [string]$Name = 'RadiANT HR',
     [int]$Seconds = 10,
@@ -130,6 +149,10 @@ param(
     [switch]$UnpairAtEnd,
     [switch]$Uncached,
     [switch]$NoProbe,
+    [string]$DeviceLog,
+    [ValidateRange(0, 600)]
+    [int]$GapSeconds = 15,
+    [switch]$WatchWhileConnecting,
     [switch]$Strict,
     [string]$OutDir = (Join-Path $env:TEMP 'radiant_ble_central'),
     [switch]$DryRun,
@@ -230,6 +253,9 @@ if ($Mode -eq 'scan') {
     $a = @('hold', $Name, $Seconds)
 } elseif ($Mode -eq 'selftest') {
     $a = @('selftest')
+} elseif ($Mode -eq 'device-log') {
+    if (-not $DeviceLog) { throw '-Mode device-log needs -DeviceLog <console capture>.' }
+    $a = @('device-log', $DeviceLog)
 } elseif ($Mode -eq 'ftms-conformance') {
     if (-not $PSBoundParameters.ContainsKey('Name')) {
         # 'RadiANT HR' is the strap; an FTMS run against it can only fail.
@@ -245,6 +271,9 @@ if ($Mode -eq 'scan') {
     if ($Json) { $a += @('--json', $Json) }
     if ($Uncached) { $a += '--uncached' }
     if ($NoProbe) { $a += '--no-probe' }
+    if ($DeviceLog) { $a += @('--device-log', $DeviceLog) }
+    if ($PSBoundParameters.ContainsKey('GapSeconds')) { $a += @('--gap-seconds', $GapSeconds) }
+    if ($WatchWhileConnecting) { $a += '--watch-while-connecting' }
     if ($Strict) { $a += '--strict' }
 } else {
     $a = @('connect', $Name, $Seconds)

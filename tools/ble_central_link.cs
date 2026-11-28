@@ -262,6 +262,9 @@ static partial class BleCentral
         public readonly List<Chan> Chans = new List<Chan>();
         public DateTime? ConnectedAt;
         public DateTime? DisconnectedAt;
+        // Every ConnectionStatusChanged, so a soak transcript can show a link
+        // that flapped or came up late instead of only the first Connected.
+        public readonly List<KeyValuePair<DateTime, string>> Transitions = new List<KeyValuePair<DateTime, string>>();
         TypedEventHandler<BluetoothLEDevice, object> statusHandler;
 
         public void Hook()
@@ -269,6 +272,10 @@ static partial class BleCentral
             statusHandler = (d, o) =>
             {
                 var st = d.ConnectionStatus;
+                lock (Transitions)
+                {
+                    Transitions.Add(new KeyValuePair<DateTime, string>(DateTime.UtcNow, st.ToString()));
+                }
                 if (st == BluetoothConnectionStatus.Connected && !ConnectedAt.HasValue)
                 {
                     ConnectedAt = DateTime.UtcNow;
