@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# apps/smart_trainer kernel-free half under test on native_sim: the equipment
+# state, the seam <-> model glue, every command path (FE-C and FTMS, through
+# the real FTMS core and the real arbiter) and the page-70/71 round trips
+# through the real FE-C master. CI discovers it through ci.yml -T
+# app/apps/smart_trainer/tests.
+tests:
+  smart_trainer.glue:
+    tags:
+      - radiant
+      - smart_trainer
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim
