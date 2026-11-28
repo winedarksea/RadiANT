@@ -157,9 +157,10 @@ struct trainer_report {
 	/* ERG cannot be met at this cadence (FE-C page 25 flags). */
 	bool     erg_speed_low;
 	/* The rider is turning the cranks. A session that is IDLE starts
-	 * (RUNNING) on the first report with this set. PAUSED and STOPPED are
-	 * left only by an explicit FTMS Start/Resume, a TRAINER_EVT_STARTED
-	 * or a console action - pedalling on after a Pause does not resume. */
+	 * (RUNNING) on the first report with this set. STOPPED restarts on a
+	 * FRESH pedalling start only (a report with this clear seen since the
+	 * Stop, then set again). PAUSED is left only by an explicit FTMS
+	 * Start/Resume, a TRAINER_EVT_STARTED or a console action. */
 	bool     pedalling;
 };
 
@@ -191,7 +192,13 @@ int trainer_source_register(const struct trainer_source_ops *ops);
 /* The registered driver, or NULL. */
 const struct trainer_source_ops *trainer_source_get(void);
 
-/* Push a measurement / an event. Any thread. 0, or -EINVAL. */
+/* Push a measurement / an event. Any thread. 0, or -EINVAL.
+ *
+ * REPORT PERIODICALLY, not only on change (a few times a second; the
+ * simulator reports every 250 ms). Reports coalesce, and any event - a
+ * session event, or a pairing or forget-bonds press - drops a report still
+ * pending from before it (trainer_inbox.h); the next periodic report is what
+ * restores the reading. */
 int trainer_source_report(const struct trainer_report *r);
 int trainer_source_report_event(enum trainer_source_event evt);
 

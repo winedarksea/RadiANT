@@ -126,7 +126,7 @@ uint32_t trainer_node_epoch(void)
 
 #if defined(CONFIG_SMART_TRAINER_BLE)
 /* Set once trainer_ble_start() has brought the controller up. */
-static bool ble_up;
+static atomic_t ble_up;
 #endif
 
 /* trainer_logic's session callback: the epoch mirror for the BT RX thread,
@@ -140,7 +140,7 @@ static void node_session(enum trainer_run prev, enum trainer_run next, bool noti
 	}
 	LOG_INF("session %d -> %d (epoch %u)", (int)prev, (int)next, (unsigned)equip.epoch);
 #if defined(CONFIG_SMART_TRAINER_BLE)
-	if (notify && ble_up) {
+	if (notify && atomic_get(&ble_up) != 0) {
 		trainer_ble_session_changed(prev, next);
 	}
 #else
@@ -153,7 +153,7 @@ static void node_ftms_status(const uint8_t *msg, size_t len, void *ctx)
 	ARG_UNUSED(ctx);
 #if defined(CONFIG_SMART_TRAINER_BLE)
 	/* FTMS subscribers hear a target set over ANT+ too. */
-	if (ble_up) {
+	if (atomic_get(&ble_up) != 0) {
 		trainer_ble_notify_status(msg, len);
 	}
 #else
@@ -175,7 +175,7 @@ void trainer_node_event(enum trainer_source_event evt)
 		/* New phones only inside a window opened at the trainer
 		 * (radiant_ble_pairing.h): physical presence authorises. Not
 		 * before the controller is up. */
-		if (!ble_up) {
+		if (atomic_get(&ble_up) == 0) {
 			LOG_WRN("pairing window not opened: BLE is not up yet");
 			return;
 		}
@@ -186,7 +186,7 @@ void trainer_node_event(enum trainer_source_event evt)
 		return;
 	case TRAINER_EVT_FORGET_BONDS:
 #if defined(CONFIG_RADIANT_BLE_PAIRING_WINDOW)
-		if (!ble_up) {
+		if (atomic_get(&ble_up) == 0) {
 			LOG_WRN("bonds not forgotten: BLE is not up yet");
 			return;
 		}
@@ -194,10 +194,15 @@ void trainer_node_event(enum trainer_source_event evt)
 #endif
 		return;
 	default: {
+		static bool release_warned;
 		int rc = trainer_logic_event(evt);
 
-		if (rc != 0) {
-			LOG_ERR("console reset: the brake was not released (%d)", rc);
+		/* Once: a driver that cannot release would otherwise log at
+		 * every console reset. */
+		if (rc != 0 && !release_warned) {
+			release_warned = true;
+			LOG_WRN("console reset: the brake was not released (%d); "
+				"further failures are not logged", rc);
 		}
 		publish();
 		return;
@@ -470,15 +475,19 @@ int main(void)
 		return 0;
 	}
 
-	/* The equipment state exists: deliver what the driver (or a button)
-	 * pushed before now. */
-	trainer_source_ready();
-
+	/* Deliver what the driver (or a button) pushed before now only once
+	 * the equipment state exists AND the driver has started: a console
+	 * reset queued at boot drives set_* hooks, which a driver that has not
+	 * started cannot take. A driver that fails to start never gets them. */
+	err = 0;
 	if (src != NULL) {
 		LOG_INF("trainer source: %s", src->name);
 		if (src->start != NULL && (err = src->start()) != 0) {
 			LOG_ERR("trainer source did not start: %d", err);
 		}
+	}
+	if (err == 0) {
+		trainer_source_ready();
 	}
 	publish();
 
@@ -502,7 +511,7 @@ int main(void)
 
 		trainer_cmd_ftms_caps(&caps);
 		err = trainer_ble_start(unit.devnum, unit.serial, &caps);
-		ble_up = (err == 0);
+		atomic_set(&ble_up, (err == 0) ? 1 : 0);
 		if (err != 0) {
 			LOG_ERR("BLE did not start: %d. The ANT+ master is unaffected "
 				"and this node is now ANT+ only.", err);

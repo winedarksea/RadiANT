@@ -29,6 +29,7 @@
 #include <radiant/radiant_ble_ftms.h>
 
 #include "trainer_ble.h"
+#include "trainer_ble_svc.h"
 #include "trainer_cmd.h"
 #include "trainer_equip.h"
 #include "trainer_node.h"
@@ -155,14 +156,10 @@ BT_CONN_CB_DEFINE(trainer_ble_conn_cb) = {
 	.disconnected = on_disconnected,
 };
 
-/* Table 3.1's Service Data, as a CONSTANT: 0x1826, Flags = Fitness Machine
- * Available, Fitness Machine Type = Indoor Bike (bit 5). trainer_ble_start()
- * checks it against radiant_ble_ftms_service_data(). */
-static const uint8_t ftms_svc_data[RADIANT_BLE_FTMS_SVC_DATA_LEN] = {
-	0x26u, 0x18u, RADIANT_BLE_FTMS_SD_FLAG_AVAILABLE,
-	(uint8_t)(RADIANT_BLE_FTMS_TYPE_INDOOR_BIKE & 0xFFu),
-	(uint8_t)(RADIANT_BLE_FTMS_TYPE_INDOOR_BIKE >> 8),
-};
+/* Table 3.1's Service Data, initialised from trainer_ble_svc.h (which the
+ * glue suite checks). trainer_ble_start() compares it with the core's bytes
+ * before advertising and, should they ever differ, advertises the core's. */
+static uint8_t ftms_svc_data[RADIANT_BLE_FTMS_SVC_DATA_LEN] = TRAINER_FTMS_SVC_DATA_INIT;
 
 static struct bt_data ad[] = {
 	BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
@@ -210,9 +207,11 @@ int trainer_ble_start(uint16_t devnum, uint32_t serial,
 		uint8_t want[RADIANT_BLE_FTMS_SVC_DATA_LEN];
 
 		if (radiant_ble_ftms_service_data(want, sizeof(want), true,
-						  RADIANT_BLE_FTMS_TYPE_INDOOR_BIKE) != sizeof(want) ||
+						  RADIANT_BLE_FTMS_TYPE_INDOOR_BIKE) == sizeof(want) &&
 		    memcmp(want, ftms_svc_data, sizeof(want)) != 0) {
-			LOG_ERR("FTMS Service Data constant disagrees with the core");
+			LOG_ERR("FTMS Service Data constant disagrees with the core; "
+				"advertising the core's bytes");
+			memcpy(ftms_svc_data, want, sizeof(want));
 		}
 	}
 

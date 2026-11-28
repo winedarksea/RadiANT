@@ -16,6 +16,7 @@
 #include "trainer_cmd.h"
 #include "trainer_equip.h"
 #include "trainer_inbox.h"
+#include "trainer_ble_svc.h"
 #include "trainer_logic.h"
 
 static struct trainer_equip equip;
@@ -322,14 +323,18 @@ ZTEST(trainer_logic, test_an_event_drops_the_report_from_before_it)
 
 ZTEST(trainer_logic, test_indoor_bike_service_data_bytes)
 {
-	static const uint8_t want[RADIANT_BLE_FTMS_SVC_DATA_LEN] = { 0x26, 0x18, 0x01, 0x20, 0x00 };
-	uint8_t got[RADIANT_BLE_FTMS_SVC_DATA_LEN];
+	/* The very initialiser trainer_ble.c advertises. */
+	static const uint8_t advertised[RADIANT_BLE_FTMS_SVC_DATA_LEN] =
+		TRAINER_FTMS_SVC_DATA_INIT;
+	static const uint8_t on_air[RADIANT_BLE_FTMS_SVC_DATA_LEN] = { 0x26, 0x18, 0x01, 0x20, 0x00 };
+	uint8_t core[RADIANT_BLE_FTMS_SVC_DATA_LEN];
 
-	zassert_equal(radiant_ble_ftms_service_data(got, sizeof(got), true,
+	zassert_equal(radiant_ble_ftms_service_data(core, sizeof(core), true,
 						    RADIANT_BLE_FTMS_TYPE_INDOOR_BIKE),
-		      sizeof(got));
-	zassert_mem_equal(got, want, sizeof(want),
-			  "trainer_ble.c's constant must equal the core's bytes");
+		      sizeof(core));
+	zassert_mem_equal(advertised, core, sizeof(core),
+			  "trainer_ble_svc.h must equal the core's bytes");
+	zassert_mem_equal(advertised, on_air, sizeof(on_air), "0x1826, available, bit 5");
 }
 
 ZTEST_SUITE(trainer_logic, NULL, NULL, NULL, NULL, NULL);

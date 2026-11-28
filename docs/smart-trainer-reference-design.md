@@ -42,7 +42,9 @@ A driver fills in `struct trainer_source_ops` and registers it from a
 | `workout(w)` | FTMS 0x07/0x08 | Start/Stop answer 0x04 (they are mandatory op codes) |
 | `start()` | once at boot | optional |
 
-The driver pushes `trainer_source_report()` (power, cadence, speed, brake
+The driver pushes `trainer_source_report()` **periodically** (any event drops
+a report still pending from before it, so the next periodic one restores the
+reading) (power, cadence, speed, brake
 force, ERG-speed-low, pedalling) and `trainer_source_report_event()` (STARTED,
 PAUSED, STOPPED, CONSOLE_STOP, CONSOLE_RESET, PAIRING_WINDOW, FORGET_BONDS).
 Both may be called from any thread. Every hook runs on the system workqueue.
@@ -68,9 +70,17 @@ trainer accepts Start and nobody pedals, the session does not change.
 
 **The session.** States are IDLE, RUNNING, PAUSED and STOPPED (`trainer_equip.h`):
 
-- A report with `pedalling` set starts the session, **from IDLE only**.
-  PAUSED and STOPPED are left only by FTMS Start/Resume, a STARTED event or
-  a console action (the treadmill's rule).
+- A report with `pedalling` set starts the session from IDLE.
+- STOPPED is also left by pedalling, but only on a **fresh** start: a report
+  with `pedalling` clear must have been seen since the Stop. Legs still
+  turning through a Stop do not restart the session; a new ride does.
+- PAUSED is left only by FTMS Start/Resume, a STARTED event or a console
+  action.
+- **The session is one for both radios.** An FTMS Stop (or Pause) from a
+  phone also ends the ANT+ session: page 16 goes FINISHED and elapsed time and
+  distance stop. FE-C has no command to restart, which is why STOPPED yields
+  to a fresh pedalling start - an ANT+-only rider restarts by riding again. A
+  Pause holds until somebody resumes it, from FTMS or the trainer.
 - The STARTED, PAUSED and STOPPED events move it.
 - FTMS Reset and a console reset return it to IDLE.
 - FTMS Start while RUNNING answers 0x01 and does nothing: the core's

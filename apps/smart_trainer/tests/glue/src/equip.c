@@ -50,10 +50,29 @@ ZTEST(trainer_equip, test_pedalling_starts_a_session_from_idle_only)
 	(void)trainer_equip_event(&e, TRAINER_EVT_STARTED);
 	zassert_equal(e.run, TRAINER_RUN_RUNNING);
 
+	/* STOPPED: legs still turning through the Stop do not restart it... */
 	(void)trainer_equip_event(&e, TRAINER_EVT_STOPPED);
 	zassert_equal(e.run, TRAINER_RUN_STOPPED);
 	(void)trainer_equip_report(&e, &r);
-	zassert_equal(e.run, TRAINER_RUN_STOPPED, "pedalling does not undo a Stop");
+	(void)trainer_equip_report(&e, &r);
+	zassert_equal(e.run, TRAINER_RUN_STOPPED, "no fresh start yet");
+	/* ...but a fresh start does: seen still, then pedalling again. */
+	(void)trainer_equip_report(&e, &still);
+	zassert_equal(e.run, TRAINER_RUN_STOPPED);
+	zassert_equal(trainer_equip_report(&e, &r), TRAINER_RUN_STOPPED);
+	zassert_equal(e.run, TRAINER_RUN_RUNNING, "a new ride after a Stop");
+
+	/* The first report after the Stop being still counts as the edge. */
+	(void)trainer_equip_event(&e, TRAINER_EVT_CONSOLE_STOP);
+	(void)trainer_equip_report(&e, &still);
+	(void)trainer_equip_report(&e, &r);
+	zassert_equal(e.run, TRAINER_RUN_RUNNING);
+
+	/* A stillness seen before the Stop does not count. */
+	(void)trainer_equip_report(&e, &still);
+	(void)trainer_equip_event(&e, TRAINER_EVT_STOPPED);
+	(void)trainer_equip_report(&e, &r);
+	zassert_equal(e.run, TRAINER_RUN_STOPPED);
 	(void)trainer_equip_event(&e, TRAINER_EVT_STARTED);
 	zassert_equal(e.run, TRAINER_RUN_RUNNING);
 

@@ -80,14 +80,20 @@ static int sim_set_user(const struct trainer_user *u)
 
 static int sim_workout(enum trainer_workout w)
 {
+	/* Worked out on a copy, the event queued, and only then the brake
+	 * changed: a queue that refuses the event (FTMS 0x04) leaves the
+	 * brake as it was. The event is applied by the same workqueue after
+	 * this returns, so the order the session sees is unchanged. A real
+	 * brake reports once it really is in the new state. */
+	struct trainer_sim_model next = sim;
 	enum trainer_source_event evt;
-	int rc = trainer_sim_model_workout(&sim, w, &evt);
+	int rc = trainer_sim_model_workout(&next, w, &evt);
 
 	if (rc == 0) {
-		/* The simulated brake is instant; a real one reports once it
-		 * really is in the new state. If the event cannot be queued the
-		 * session would never follow, so the procedure fails (0x04). */
 		rc = trainer_source_report_event(evt);
+	}
+	if (rc == 0) {
+		sim = next;
 	}
 	return rc;
 }

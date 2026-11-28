@@ -52,8 +52,18 @@ enum trainer_run trainer_equip_report(struct trainer_equip *e,
 	e->rep = *r;
 	/* The rider is the trainer's start button: a passive machine is "in
 	 * use" when somebody pedals it. */
-	if (r->pedalling && e->run == TRAINER_RUN_IDLE) {
+	if (e->run == TRAINER_RUN_IDLE && r->pedalling) {
 		e->run = TRAINER_RUN_RUNNING;
+	} else if (e->run == TRAINER_RUN_STOPPED) {
+		/* A FRESH start only: the rider must have been seen still since
+		 * the Stop, so legs still turning through it do not restart the
+		 * session at once - and an ANT+-only rider, who has no command
+		 * to restart with, is not left FINISHED forever. */
+		if (!r->pedalling) {
+			e->still_since_stop = true;
+		} else if (e->still_since_stop) {
+			e->run = TRAINER_RUN_RUNNING;
+		}
 	}
 	return prev;
 }
@@ -75,12 +85,14 @@ enum trainer_run trainer_equip_event(struct trainer_equip *e,
 	case TRAINER_EVT_STOPPED:
 		if (e->run == TRAINER_RUN_RUNNING || e->run == TRAINER_RUN_PAUSED) {
 			e->run = TRAINER_RUN_STOPPED;
+			e->still_since_stop = false;
 		}
 		break;
 	case TRAINER_EVT_CONSOLE_STOP:
 		e->epoch++;
 		if (e->run == TRAINER_RUN_RUNNING || e->run == TRAINER_RUN_PAUSED) {
 			e->run = TRAINER_RUN_STOPPED;
+			e->still_since_stop = false;
 		}
 		break;
 	case TRAINER_EVT_CONSOLE_RESET:

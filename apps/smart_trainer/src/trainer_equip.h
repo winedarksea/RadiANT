@@ -59,6 +59,9 @@ struct trainer_equip {
 	/* The session, and its epoch: bumped by every LOCAL stop or reset. */
 	enum trainer_run run;
 	uint32_t epoch;
+	/* STOPPED only: a report with pedalling clear has been seen since the
+	 * Stop, so the next pedalling report is a fresh start. */
+	bool still_since_stop;
 
 	/* The driver's latest report. */
 	struct trainer_report rep;
@@ -86,10 +89,13 @@ void trainer_equip_init(struct trainer_equip *e, uint16_t max_resistance_n);
 void trainer_equip_reset_targets(struct trainer_equip *e);
 
 /* A report from the driver. A report with `pedalling` set starts a session
- * that is IDLE - and only IDLE: PAUSED and STOPPED are left by an explicit
- * Start/Resume (TRAINER_EVT_STARTED) or a console action, as on the
- * treadmill. Returns the run state before it, so the caller can notify a
- * transition. */
+ * that is IDLE. STOPPED is left the same way, but only on a FRESH start: a
+ * report with pedalling clear must have been seen since the Stop (legs still
+ * turning through a Stop do not restart it, a real new ride does - and an
+ * ANT+-only rider, who has no restart command, is not left FINISHED). PAUSED
+ * is left only explicitly (TRAINER_EVT_STARTED, FTMS Start/Resume) or by a
+ * console action. Returns the run state before it, so the caller can notify
+ * a transition. */
 enum trainer_run trainer_equip_report(struct trainer_equip *e,
 				      const struct trainer_report *r);
 
