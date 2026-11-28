@@ -14,9 +14,10 @@
  *   is more contention than anything this project has measured.
  *
  *   BIDIRECTIONAL AND SYMMETRIC. Acknowledged control pages from a head unit
- *   and FTMS control-point writes from a phone both land on
- *   treadmill_source_set_incline() - one function, one state, so a grade set
- *   over either transport is immediately visible on the other. FE-C §8.8
+ *   and FTMS control-point writes from a phone both land in treadmill_cmd.c -
+ *   one module, one state, one motion rule (treadmill_session.h) - so a grade
+ *   set over either transport is immediately visible on the other, and
+ *   neither can move the machine around the rule. FE-C §8.8
  *   makes the page 71 command status an obligation, not a courtesy, which is
  *   why every branch of apply_control_page() - including refusals - ends in
  *   radiant_profile_fec_tx_command_answered().
@@ -58,9 +59,10 @@
 #include <radiant/radiant_profile_fec.h>
 #include <radiant/radiant_profile_fec_tx.h>
 #include <radiant/radiant_profile_sdm.h>
+#include "treadmill_caps.h"
+#include "treadmill_cmd.h"
+#include "treadmill_session.h"
 #include "treadmill_source.h"
-/* TEMPORARY until treadmill_cmd.c owns every actuating call. */
-#include "treadmill_source_ctrl.h"
 #include "treadmill_state.h"
 
 #if defined(CONFIG_TREADMILL_CTRL_POLICY_EXCLUSIVE)
@@ -68,6 +70,9 @@
 #endif
 #if defined(CONFIG_TREADMILL_BLE)
 #include "treadmill_ble.h"
+#endif
+#if defined(CONFIG_RADIANT_BLE_PAIRING_WINDOW)
+#include <radiant/radiant_ble_pairing.h>
 #endif
 #if defined(CONFIG_TREADMILL_HR_RX)
 #include "treadmill_hr_rx.h"
@@ -110,6 +115,22 @@ BUILD_ASSERT(CONFIG_TREADMILL_MIN_INCLINE_DECI <= 0 &&
 	     "the machine incline range must include 0 %");
 
 static struct treadmill_state  state;
+
+/*
+ * THE SESSION and the motion rule's inputs (treadmill_session.h). Workqueue
+ * only, except the epoch, which the receive paths (the radiant_event thread
+ * for FE-C, the BT RX thread for FTMS) read at receipt through this atomic
+ * mirror - updated in session_apply(), the one writer of the session.
+ */
+static struct treadmill_session session;
+static atomic_t session_epoch;
+static const struct treadmill_motion_policy motion_policy = {
+	.remote_motion_allowed = treadmill_source_remote_motion_allowed,
+	.remote_start = IS_ENABLED(CONFIG_TREADMILL_REMOTE_START),
+};
+
+/* What this machine advertises, derived once at boot (treadmill_caps.c). */
+static struct treadmill_caps caps;
 static struct radiant_profile_fec_tx   fec;
 #if defined(CONFIG_TREADMILL_ANT_SDM)
 static struct radiant_profile_sdm      sdm;
@@ -242,52 +263,109 @@ static void publish(void)
  * the source is driven, including from an ISR. treadmill_source.h states the
  * rule in full.
  */
+/*
+ * The ONE writer of the session. Every input lands here, on the workqueue;
+ * page 16's state, FTMS Training Status and the FTMS machine status all follow
+ * from what it decides, and a safety-key pull revokes every remote controller.
+ */
+static void session_apply(enum treadmill_session_input in)
+{
+	struct treadmill_session_change c = treadmill_session_input(&session, in);
+
+	atomic_set(&session_epoch, (atomic_val_t)session.epoch);
+
+	if (c.revoke_control) {
+#if defined(CONFIG_TREADMILL_CTRL_POLICY_EXCLUSIVE)
+		/* The FE-C controller, if it held the token, learns through
+		 * REJECTED on its next command; the FTMS one gets 0xFF below. */
+		(void)radiant_ctrl_revoke();
+#endif
+	}
+	if (c.prev != c.next) {
+		LOG_INF("session: %u -> %u (epoch %u)", (unsigned)c.prev,
+			(unsigned)c.next, (unsigned)session.epoch);
+		treadmill_state_set_state(&state, treadmill_session_fe_state(c.next));
+	}
+#if defined(CONFIG_TREADMILL_BLE)
+	if (c.prev != c.next || c.revoke_control) {
+		treadmill_ble_session_changed(c.prev, c.next, c.revoke_control);
+	}
+#endif
+}
+
 void treadmill_node_deliver(uint32_t strides)
 {
+	/* Touched only here, on the workqueue: the last FE state fed to the
+	 * session. EDGES only - a belt still reporting IN_USE while it spins
+	 * down after a console Stop must not restart the session. */
+	static uint8_t fed_fe_state = TREADMILL_STATE_READY;
+	uint8_t fe = treadmill_source_last_state();
+
 	treadmill_state_set_speed(&state, treadmill_source_last_speed());
 	treadmill_state_set_incline(&state, treadmill_source_last_incline());
 	treadmill_state_set_cadence_16(&state,
 				       treadmill_source_last_cadence_16());
-	treadmill_state_set_state(&state, treadmill_source_last_state());
 	treadmill_state_add_strides(&state, strides);
+
+	if (fe != fed_fe_state) {
+		fed_fe_state = fe;
+		session_apply((fe == TREADMILL_STATE_IN_USE)     ? TREADMILL_SESSION_FE_IN_USE
+			      : (fe == TREADMILL_STATE_FINISHED) ? TREADMILL_SESSION_FE_FINISHED
+								 : TREADMILL_SESSION_FE_READY);
+	}
 
 	publish();
 }
 
-/* The source's events. Wired to the session in a following change. */
+/* The source's events, on the workqueue, in order. */
 void treadmill_node_event(enum treadmill_source_event evt)
 {
-	LOG_DBG("source event %u", (unsigned)evt);
+	switch (evt) {
+	case TREADMILL_EVT_CONSOLE_START:
+		session_apply(TREADMILL_SESSION_CONSOLE_START);
+		break;
+	case TREADMILL_EVT_CONSOLE_STOP:
+		session_apply(TREADMILL_SESSION_CONSOLE_STOP);
+		break;
+	case TREADMILL_EVT_CONSOLE_PAUSE:
+		session_apply(TREADMILL_SESSION_CONSOLE_PAUSE);
+		break;
+	case TREADMILL_EVT_PAUSED:
+		session_apply(TREADMILL_SESSION_PAUSED);
+		break;
+	case TREADMILL_EVT_RESUMED:
+		session_apply(TREADMILL_SESSION_RESUMED);
+		break;
+	case TREADMILL_EVT_SAFETY_KEY_OUT:
+		session_apply(TREADMILL_SESSION_KEY_OUT);
+		break;
+	case TREADMILL_EVT_SAFETY_KEY_IN:
+		session_apply(TREADMILL_SESSION_KEY_IN);
+		break;
+	case TREADMILL_EVT_PAIRING_WINDOW:
+#if defined(CONFIG_RADIANT_BLE_PAIRING_WINDOW)
+		/* Equipment bonding: new phones only inside a window the user
+		 * opened at the console (radiant_ble_pairing.h). */
+		(void)radiant_ble_pairing_window_open(CONFIG_TREADMILL_PAIRING_WINDOW_S);
+		LOG_INF("pairing window open for %u s",
+			(unsigned)CONFIG_TREADMILL_PAIRING_WINDOW_S);
+#endif
+		break;
+	case TREADMILL_EVT_FORGET_BONDS:
+#if defined(CONFIG_RADIANT_BLE_PAIRING_WINDOW)
+		LOG_WRN("forgetting every bond: %d", radiant_ble_bonds_forget_all());
+#endif
+		break;
+	default:
+		break;
+	}
+	publish();
 }
 
 /* ---------------------------------------------------------------------------
  * The control path: FE-C acknowledged pages in, page 71 out
  * ---------------------------------------------------------------------------
  */
-
-/*
- * Map the seam's three answers onto FE-C's, which is the whole reason
- * treadmill_source_set_incline() has three of them.
- *
- *    0        -> PASS           the actuator is on its way
- *   -ENOTSUP  -> NOT_SUPPORTED  this machine has a fixed deck
- *    other    -> FAIL           a fault, an interlock, a user override
- *
- * -ENODEV (no source registered) becomes FAIL rather than NOT_SUPPORTED: the
- * machine's capabilities have not changed, its driver is simply missing, and
- * telling a controller the feature does not exist would make an integrator's
- * unfinished build look like a fixed-incline product.
- */
-static uint8_t fec_status_for(int rc)
-{
-	if (rc == 0) {
-		return RADIANT_PROFILE_FEC_CMD_STATUS_PASS;
-	}
-	if (rc == -ENOTSUP) {
-		return RADIANT_PROFILE_FEC_CMD_STATUS_NOT_SUPPORTED;
-	}
-	return RADIANT_PROFILE_FEC_CMD_STATUS_FAIL;
-}
 
 /*
  * THERE IS NO SEQUENCE NUMBER IN AN FE-C CONTROL PAGE. Unlike ANT+ Controls
@@ -329,7 +407,7 @@ _Static_assert(RADIANT_CTRL_PAGE_WIND_RESISTANCE ==
  * It is reached from fec_cmd_work_fn() and never directly from the radio
  * callback; see queue_control_page() for why.
  */
-static void apply_control_page(const uint8_t *body)
+static void apply_control_page(const uint8_t *body, uint32_t rx_epoch)
 {
 	uint8_t status = RADIANT_PROFILE_FEC_CMD_STATUS_NOT_SUPPORTED;
 	uint8_t page = body[0];
@@ -358,8 +436,6 @@ static void apply_control_page(const uint8_t *body)
 	switch (page) {
 	case RADIANT_PROFILE_FEC_PAGE_TRACK_RESISTANCE: {
 		struct radiant_profile_fec_cmd_track_resistance cmd;
-		int32_t                                 adopted;
-		int                                     rc;
 
 		if (radiant_profile_fec_decode_track_resistance(body, &cmd) != 0) {
 			break;
@@ -374,15 +450,19 @@ static void apply_control_page(const uint8_t *body)
 		 * road may be steeper than the deck, and refusing would make a
 		 * controller drop simulation mode mid-ride. Any ANT+
 		 * transmitter can send this page; the clamp is what keeps it
-		 * inside what the machine can physically do. */
-		adopted = treadmill_state_request_incline(&state,
-							  cmd.grade_centi_pct);
-		rc = treadmill_source_set_incline(adopted);
-		status = fec_status_for(rc);
-		LOG_INF("FE-C page 51: grade %d.%02d %% -> %s",
-			adopted / 100, (adopted < 0 ? -adopted : adopted) % 100,
-			(status == RADIANT_PROFILE_FEC_CMD_STATUS_PASS) ? "pass"
-								: "refused");
+		 * inside what the machine can physically do.
+		 *
+		 * A MOTION PATH: treadmill_cmd_fec_track_resistance() puts it
+		 * behind the motion rule. The token was claimed above (or there
+		 * is no arbitration); a refusal by the rule, or a request
+		 * received before a local stop (rx_epoch), is REJECTED. */
+		status = treadmill_cmd_fec_track_resistance(cmd.grade_centi_pct,
+							    rx_epoch, true);
+		LOG_INF("FE-C page 51: grade %d.%02d %% -> status %u",
+			cmd.grade_centi_pct / 100,
+			(cmd.grade_centi_pct < 0 ? -cmd.grade_centi_pct
+						 : cmd.grade_centi_pct) % 100,
+			(unsigned)status);
 		break;
 	}
 
@@ -391,8 +471,9 @@ static void apply_control_page(const uint8_t *body)
 		 * has nothing to do with any of it. Accepted and acknowledged
 		 * rather than refused: refusing one parameter of a set the
 		 * machine advertises support for is how a controller decides
-		 * simulation mode is broken and stops sending page 51 too. */
-		status = RADIANT_PROFILE_FEC_CMD_STATUS_PASS;
+		 * simulation mode is broken and stops sending page 51 too - and
+		 * refused exactly when page 51 would be for the epoch. */
+		status = treadmill_cmd_fec_wind(rx_epoch, true);
 		break;
 
 	case RADIANT_PROFILE_FEC_PAGE_USER_CONFIG: {
@@ -487,6 +568,9 @@ static void apply_control_page(const uint8_t *body)
 
 static struct {
 	uint8_t body[8];
+	/* The session epoch at receipt: a page that waited out a local Stop
+	 * or a safety-key event is refused at dequeue (treadmill_session.h). */
+	uint32_t epoch;
 } fec_cmd_q[FEC_CMD_QUEUE_DEPTH];
 
 static uint8_t fec_cmd_head; /* producer: the radiant_event thread */
@@ -506,6 +590,7 @@ static void fec_cmd_work_fn(struct k_work *w)
 	for (;;) {
 		k_spinlock_key_t key;
 		uint8_t          body[8];
+		uint32_t         epoch = 0u;
 		uint8_t          drop_page = 0u;
 		bool             have = false;
 		bool             dropped = false;
@@ -513,6 +598,7 @@ static void fec_cmd_work_fn(struct k_work *w)
 		key = k_spin_lock(&fec_cmd_lock);
 		if (fec_cmd_tail != fec_cmd_head) {
 			memcpy(body, fec_cmd_q[fec_cmd_tail].body, sizeof(body));
+			epoch = fec_cmd_q[fec_cmd_tail].epoch;
 			fec_cmd_tail = (uint8_t)((fec_cmd_tail + 1u) %
 						 FEC_CMD_QUEUE_DEPTH);
 			have = true;
@@ -526,7 +612,7 @@ static void fec_cmd_work_fn(struct k_work *w)
 		k_spin_unlock(&fec_cmd_lock, key);
 
 		if (have) {
-			apply_control_page(body);
+			apply_control_page(body, epoch);
 			continue;
 		}
 		if (dropped) {
@@ -563,6 +649,7 @@ static void queue_control_page(const uint8_t *body)
 		fec_cmd_drop_page = body[0];
 	} else {
 		memcpy(fec_cmd_q[fec_cmd_head].body, body, 8u);
+		fec_cmd_q[fec_cmd_head].epoch = (uint32_t)atomic_get(&session_epoch);
 		fec_cmd_head = next;
 	}
 	k_spin_unlock(&fec_cmd_lock, key);
@@ -570,70 +657,31 @@ static void queue_control_page(const uint8_t *body)
 	(void)k_work_submit(&fec_cmd_work);
 }
 
-#if defined(CONFIG_TREADMILL_BLE)
-/*
- * The FTMS control point's incline command, called from treadmill_ble.c.
- *
- * The SAME two steps as the FE-C branch above - state, then command the
- * source - which is exactly the point: one state, one actuator call, so the
- * two radios cannot disagree about the grade. The unit conversion lives in
- * treadmill_state.h with its own unit test rather than being spelled out at
- * either call site.
- *
- * EXPLICIT, so out of the machine range it is refused with -ERANGE and the
- * target is left alone. treadmill_ble.c already answers Invalid Parameter
- * before calling; this is the backstop that does not depend on that check.
- */
-int treadmill_node_set_incline_deci(int16_t deci_pct, int32_t *adopted_centi)
+/* The session, for treadmill_ble.c's Training Status. Workqueue. */
+const struct treadmill_session *treadmill_node_session(void)
 {
-	int32_t centi = treadmill_fec_incline_from_ftms(deci_pct);
-	int32_t adopted = 0;
-	int     rc = treadmill_state_command_incline(&state, centi, &adopted);
-
-	if (rc != 0) {
-		return rc;
-	}
-	rc = treadmill_source_set_incline(adopted);
-	if (adopted_centi != NULL) {
-		*adopted_centi = adopted;
-	}
-	return rc;
+	return &session;
 }
 
-/* The grade seam's (simulation) path: clamps, like FE-C page 51. */
-int treadmill_node_sim_incline_deci(int16_t deci_pct, int32_t *adopted_centi)
+/* The epoch, from any thread. */
+uint32_t treadmill_node_epoch(void)
 {
-	int32_t centi = treadmill_fec_incline_from_ftms(deci_pct);
-	int32_t adopted = treadmill_state_request_incline(&state, centi);
-	int     rc = treadmill_source_set_incline(adopted);
-
-	if (adopted_centi != NULL) {
-		*adopted_centi = adopted;
-	}
-	return rc;
-}
-
-/* Explicit, like the incline command: refused out of range. */
-int treadmill_node_set_speed_mm_s(uint32_t mm_s, uint32_t *adopted_mm_s)
-{
-	uint32_t adopted = 0u;
-	int      rc = treadmill_state_command_speed(&state, mm_s, &adopted);
-
-	if (rc != 0) {
-		return rc;
-	}
-	rc = treadmill_source_set_speed(adopted);
-	if (adopted_mm_s != NULL) {
-		*adopted_mm_s = adopted;
-	}
-	return rc;
+	return (uint32_t)atomic_get(&session_epoch);
 }
 
 const struct treadmill_state *treadmill_node_state(void)
 {
 	return &state;
 }
-#endif /* CONFIG_TREADMILL_BLE */
+
+#if defined(CONFIG_TREADMILL_CTRL_POLICY_EXCLUSIVE)
+/* (d) for an FTMS path: the BLE side holds the cross-transport token. The FTMS
+ * core has already checked this client holds FTMS control. */
+static bool ftms_token(void)
+{
+	return radiant_ctrl_owner() == RADIANT_CTRL_BLE;
+}
+#endif
 
 #if defined(CONFIG_TREADMILL_HR_RX)
 /* Phase 5: an ANT+ strap's bpm, from treadmill_hr_rx.c on the workqueue. */
@@ -883,6 +931,8 @@ int main(void)
 	devnum = unit.devnum;
 
 	treadmill_state_init(&state);
+	treadmill_session_init(&session, &motion_policy);
+	atomic_set(&session_epoch, (atomic_val_t)session.epoch);
 	/* The machine range bounds every command path, FE-C page 51 included.
 	 * Kconfig's ranges already keep 0 inside it; asserted at file scope. */
 	(void)treadmill_state_set_limits(
@@ -895,6 +945,35 @@ int main(void)
 			  RADIANT_CTRL_GATE_SIMULATION);
 #endif
 
+	/*
+	 * WHAT THIS MACHINE ADVERTISES, from what its driver implements (the
+	 * source registered from a SYS_INIT, before main()) and the Kconfig
+	 * switches that can only take a capability away. FE-C page 54's
+	 * Simulation bit and FTMS's Target Setting bits are claims; they are
+	 * made exactly when the command they promise will be honoured.
+	 */
+	{
+		struct treadmill_source_caps src;
+		const struct treadmill_caps_cfg ccfg = {
+			.allow_speed = IS_ENABLED(CONFIG_TREADMILL_CAP_SPEED_TARGET),
+			.allow_incline = IS_ENABLED(CONFIG_TREADMILL_CAP_INCLINE_TARGET),
+			.heart_rate = IS_ENABLED(CONFIG_TREADMILL_HR_RX),
+		};
+		struct treadmill_cmd_cfg cmd_cfg = {
+			.state = &state,
+			.session = &session,
+#if defined(CONFIG_TREADMILL_CTRL_POLICY_EXCLUSIVE)
+			.ftms_token = ftms_token,
+#endif
+		};
+
+		treadmill_source_get_caps(&src);
+		treadmill_caps_derive(&src, &ccfg, &caps);
+		cmd_cfg.incline_cmd = caps.incline_cmd;
+		cmd_cfg.speed_cmd = caps.speed_cmd;
+		treadmill_cmd_bind(&cmd_cfg);
+	}
+
 	memset(&fec_cfg, 0, sizeof(fec_cfg));
 	(void)radiant_product_fill_common_id(product, unit.serial, &fec_cfg.id);
 	fec_cfg.equipment_type = RADIANT_PROFILE_FEC_TYPE_TREADMILL;
@@ -902,11 +981,11 @@ int main(void)
 	 * SIMULATION MODE IS WHAT UNLOCKS PAGE 51, and declaring it is a claim
 	 * this node has to be able to keep: a controller reads page 54, sees
 	 * bit 2, and only then sends a track-resistance command. The bit and
-	 * the honouring go together in both directions - which is why a
-	 * machine whose source returns -ENOTSUP from set_incline() should clear
-	 * it here as well as answering NOT_SUPPORTED.
+	 * the honouring go together in both directions, which is why the bit
+	 * is DERIVED (treadmill_caps.c): set exactly when a page 51 would
+	 * reach a set_incline() the source implements.
 	 */
-	fec_cfg.caps.capabilities = RADIANT_PROFILE_FEC_CAP_SIMULATION;
+	fec_cfg.caps.capabilities = caps.fec_simulation ? RADIANT_PROFILE_FEC_CAP_SIMULATION : 0u;
 	fec_cfg.caps.max_resistance_valid = false;
 #if defined(CONFIG_TREADMILL_FEC_METABOLIC)
 	fec_cfg.metabolic = true;
@@ -1034,7 +1113,7 @@ int main(void)
 	 * be assembled from an error further up and the absence of the
 	 * advertising line further down.
 	 */
-	err = treadmill_ble_start(devnum, unit.serial);
+	err = treadmill_ble_start(devnum, unit.serial, &caps);
 	if (err != 0) {
 		/* Only fatal steps get here (controller or RSC init): a
 		 * failed first advertising start is retried by radiant_ble_adv

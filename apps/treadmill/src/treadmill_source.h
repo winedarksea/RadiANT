@@ -306,6 +306,11 @@ struct treadmill_source_caps {
 
 void treadmill_source_get_caps(struct treadmill_source_caps *out);
 
+/* Condition (a) of the motion rule, asked of the source: false when nothing is
+ * registered or the source does not implement remote_motion_allowed. A query,
+ * not an actuator, so it lives here rather than in treadmill_source_ctrl.h. */
+bool treadmill_source_remote_motion_allowed(void);
+
 /*
  * The last value of each LEVEL the source reported, sampled by
  * treadmill_node_deliver() on the workqueue.

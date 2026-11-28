@@ -42,9 +42,14 @@ target_sources(app PRIVATE
   # state module, so every transition and every gate condition is a case.
   src/session.c
   ../../src/treadmill_session.c
-  # FTMS Stop/Reset's actuator decisions, pulled out of treadmill_ble.c for
-  # the same reason; src/ftms_actuate.c drives them with a failing fake.
-  src/ftms_actuate.c
-  ../../src/treadmill_ftms_actuate.c
+  # Every motion path (treadmill_cmd.c) against a fake source, the
+  # capability derivation, the Treadmill Data record's Reset baseline, and
+  # the FTMS core driven through the treadmill's hooks.
+  src/cmd.c
+  src/fake_source.c
+  ../../src/treadmill_cmd.c
+  ../../src/treadmill_caps.c
+  ../../src/treadmill_ftms_data.c
+  ../../../../radiant/src/ble/radiant_ble_ftms_core.c
 )
-target_include_directories(app PRIVATE ../../src)
+target_include_directories(app PRIVATE ../../src ../../../../radiant/include)

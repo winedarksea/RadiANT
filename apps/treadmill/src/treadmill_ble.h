@@ -4,9 +4,9 @@
  * treadmill_ble.h - the BLE half: FTMS (0x1826) and RSC (0x1814) beside two
  * ANT+ masters on one radio.
  *
- * The reasoning, the spec citations and the traps are in treadmill_ble.c's
- * header block, which is where a reader will be when they need them. This file
- * is the four functions main.c calls and the two it implements.
+ * The FTMS service is radiant's shared core (<radiant/radiant_ble_ftms.h>);
+ * treadmill_ble.c plugs the treadmill into it. This file is what main.c calls
+ * and what it implements in return.
  */
 
 #ifndef TREADMILL_BLE_H_
@@ -14,6 +14,9 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+
+#include "treadmill_caps.h"
+#include "treadmill_session.h"
 
 struct treadmill_state;
 
@@ -23,8 +26,9 @@ struct treadmill_state;
  * connections). With CONFIG_RADIANT_BLE_NAME_DEVNUM_SUFFIX the name is
  * "<name> <devnum>". Called last from main(), after both ANT+ channels are
  * open, so a failure to advertise cannot be mistaken for a failure to
- * transmit. */
-int treadmill_ble_start(uint16_t devnum, uint32_t serial);
+ * transmit. `caps` (treadmill_caps.c) is what FTMS's Feature characteristic
+ * declares and which target op codes are honoured. */
+int treadmill_ble_start(uint16_t devnum, uint32_t serial, const struct treadmill_caps *caps);
 
 /* From the node tick: the advertising watchdog. */
 void treadmill_ble_tick(void);
@@ -48,6 +52,14 @@ bool treadmill_ble_connected(void);
  * and the client cannot configure it.
  */
 void treadmill_ble_state_changed(const struct treadmill_state *s);
+
+/*
+ * The session moved (main.c, on the workqueue): Training Status and the
+ * machine status it owes go to every FTMS subscriber. `revoke` (a safety-key
+ * pull) also takes FTMS control away, with 0xFF to the client that had it.
+ */
+void treadmill_ble_session_changed(enum treadmill_run prev, enum treadmill_run next,
+				   bool revoke);
 
 /*
  * THE ZWIFT SEAM: specified, and deliberately not built.
@@ -76,37 +88,23 @@ int treadmill_ble_grade_provider_register(treadmill_ble_grade_provider_t fn,
 					  void *user);
 
 /* ---------------------------------------------------------------------------
- * Implemented by main.c, called from this module ON THE SYSTEM WORKQUEUE.
+ * Implemented by main.c.
  * ---------------------------------------------------------------------------
  *
- * ONLY the workqueue, now. This used to read "or from a GATT write callback",
- * which was an accurate description of a bug: these functions write `state`,
- * and treadmill_state.h's lock-free design rests on every writer being on the
- * one thread. A GATT write callback is the BT RX thread. treadmill_ble.c's
- * cp_work item is what closes that, and main.c's fec_cmd item does the same for
- * the FE-C path; between them there is exactly one writer thread again. Do not
- * call these from a callback without going through a work item.
- *
- * These are the reason the FTMS control point and FE-C page 51 cannot
- * disagree: both end up in treadmill_state_request_incline() and then in
- * treadmill_source_set_incline(), and neither radio knows the other exists.
- *
- * The return value is the SOURCE's, unchanged - 0, -ENOTSUP or another
- * negative errno - because FTMS's three result codes and FE-C's three command
- * statuses are the same three answers and mapping them belongs at each radio's
- * own edge, not here. The one exception is -ERANGE, from the state itself:
- *
- *   set_*()          EXPLICIT setpoints (FTMS Set Target Inclination/Speed,
- *                    Reset). Outside CONFIG_TREADMILL_MIN/MAX_* they return
- *                    -ERANGE without touching the target or the source.
- *   sim_incline_*()  A SIMULATION grade (the grade seam). Clamped to the
- *                    machine range, like FE-C page 51; never -ERANGE.
+ * The actuating calls that used to be here (treadmill_node_set_*()) are gone:
+ * every path that moves the machine is in treadmill_cmd.c, behind the motion
+ * rule, and the FTMS core reaches it through the hooks treadmill_ble.c
+ * registers.
  */
-int treadmill_node_set_incline_deci(int16_t deci_pct, int32_t *adopted_centi);
-int treadmill_node_sim_incline_deci(int16_t deci_pct, int32_t *adopted_centi);
-int treadmill_node_set_speed_mm_s(uint32_t mm_s, uint32_t *adopted_mm_s);
 
-/* The live state, for the encoders. Read-only and read on the workqueue. */
+/* The live state, for the encoders. Read-only, system workqueue. */
 const struct treadmill_state *treadmill_node_state(void);
+
+/* The session, for Training Status. Read-only, system workqueue. */
+const struct treadmill_session *treadmill_node_session(void);
+
+/* The session epoch, from ANY thread (an atomic mirror): FTMS records it when
+ * a Control Point write is received, on the BT RX thread. */
+uint32_t treadmill_node_epoch(void);
 
 #endif /* TREADMILL_BLE_H_ */

@@ -343,6 +343,10 @@ config TREADMILL_BLE
 	# The shared BLE layer: advertising restart/backoff/watchdog, the
 	# connection-parameter policy and DIS (radiant/src/ble).
 	select RADIANT_BLE
+	# The FTMS service is radiant's shared core (radiant_ble_ftms.h);
+	# this application is its treadmill machine type.
+	select RADIANT_BLE_FTMS
+	select RADIANT_BLE_FTMS_TREADMILL
 	#
 	# SELECT, NOT DEPENDS, AND THE SYMBOL WAS CHECKED FIRST - the same
 	# reasoning apps/hrm_ble/Kconfig records for HRM_BLE_HRS.

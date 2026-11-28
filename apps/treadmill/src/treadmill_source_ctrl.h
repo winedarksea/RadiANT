@@ -31,8 +31,4 @@ int treadmill_source_workout_pause(void);
 int treadmill_source_workout_resume(void);
 int treadmill_source_workout_stop(void);
 
-/* Condition (a) of the motion rule. False when nothing is registered or the
- * source does not implement remote_motion_allowed. */
-bool treadmill_source_remote_motion_allowed(void);
-
 #endif /* TREADMILL_SOURCE_CTRL_H_ */

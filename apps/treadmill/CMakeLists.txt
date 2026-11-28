@@ -81,6 +81,10 @@ target_sources(app PRIVATE
   src/treadmill_source.c
   src/treadmill_state.c
   src/treadmill_session.c
+  # Every path that can move the machine, behind the one motion rule, and
+  # the capability derivation. Kernel-free; tests/pages compiles both.
+  src/treadmill_cmd.c
+  src/treadmill_caps.c
 )
 
 # ── The treadmill source ────────────────────────────────────────────────────
@@ -97,7 +101,7 @@ endif()
 
 if(CONFIG_TREADMILL_BLE)
   target_sources(app PRIVATE src/treadmill_ble.c
-                             src/treadmill_ftms_actuate.c)
+                             src/treadmill_ftms_data.c)
 endif()
 
 if(CONFIG_TREADMILL_HR_RX)
