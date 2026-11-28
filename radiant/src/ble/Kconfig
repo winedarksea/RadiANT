@@ -282,6 +282,37 @@ config RADIANT_BLE_PAIRING_WINDOW_AT_BOOT_S
 	  slot lets the first pairing attempt succeed, and only then is the
 	  least recently used bond deleted to restore the spare.
 
+config RADIANT_BLE_FTMS
+	bool "Fitness Machine Service core (radiant_ble_ftms.h)"
+	depends on BT_SMP
+	help
+	  The FTMS 1.0 service shared by the fitness-machine reference designs:
+	  Feature read, Training Status, the Control Point (Request Control,
+	  ATT errors 0xFE Procedure Already In Progress and 0xFD CCC Improperly
+	  Configured, a pure decision function), Fitness Machine Status to
+	  every subscriber, Supported Range reads and the advertising Service
+	  Data. The machine supplies its data record, ranges, actuators and
+	  motion authorisation through struct radiant_ble_ftms_machine. The
+	  Control Point needs encryption (FTMS Table 4.1), hence BT_SMP.
+	  Select exactly one of RADIANT_BLE_FTMS_TREADMILL and
+	  RADIANT_BLE_FTMS_INDOOR_BIKE. See <radiant/radiant_ble_ftms.h>.
+
+config RADIANT_BLE_FTMS_TREADMILL
+	bool "FTMS machine type: treadmill (Treadmill Data, speed and incline ranges)"
+	depends on RADIANT_BLE_FTMS
+	help
+	  The GATT table carries Treadmill Data (0x2ACD), Supported Speed
+	  Range (0x2AD4) and Supported Inclination Range (0x2AD5). Selected
+	  by the application.
+
+config RADIANT_BLE_FTMS_INDOOR_BIKE
+	bool "FTMS machine type: indoor bike (Indoor Bike Data, resistance and power ranges)"
+	depends on RADIANT_BLE_FTMS
+	help
+	  The GATT table carries Indoor Bike Data (0x2AD2), Supported
+	  Resistance Level Range (0x2AD6) and Supported Power Range (0x2AD8).
+	  Selected by the application.
+
 config RADIANT_BLE_HRS
 	bool "SIG Heart Rate Service (radiant_ble_hrs.h)"
 	depends on !BT_HRS

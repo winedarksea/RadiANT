@@ -18,6 +18,8 @@ project(radiant_ftms_tests)
 
 target_sources(app PRIVATE
   src/test_ctrl_arbiter.c
+  src/test_ftms_core.c
   ../../src/ble/radiant_ctrl_arbiter.c
+  ../../src/ble/radiant_ble_ftms_core.c
 )
 target_include_directories(app PRIVATE ../../include)

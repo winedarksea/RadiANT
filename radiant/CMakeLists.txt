@@ -360,6 +360,13 @@ if(CONFIG_RADIANT_BLE)
   )
   zephyr_library_sources_ifdef(CONFIG_RADIANT_BLE_CONN_POLICY src/ble/radiant_ble_conn.c)
   zephyr_library_sources_ifdef(CONFIG_RADIANT_BLE_PAIRING_WINDOW src/ble/radiant_ble_pairing.c)
+  # The Fitness Machine Service core. radiant_ble_ftms_core.c is kernel-free
+  # and also compiled, unmodified, by radiant/tests/ftms and
+  # apps/treadmill/tests/pages on native_sim.
+  zephyr_library_sources_ifdef(CONFIG_RADIANT_BLE_FTMS
+    src/ble/radiant_ble_ftms_core.c
+    src/ble/radiant_ble_ftms.c
+  )
   # The Heart Rate Service. radiant_ble_hrs_encode.c is kernel-free and is
   # also compiled, unmodified, by apps/hrm_ble/tests/publish on native_sim.
   zephyr_library_sources_ifdef(CONFIG_RADIANT_BLE_HRS
