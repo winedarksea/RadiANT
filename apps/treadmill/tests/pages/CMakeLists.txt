@@ -38,6 +38,10 @@ project(treadmill_pages_test)
 target_sources(app PRIVATE
   src/main.c
   ../../src/treadmill_state.c
+  # The session state machine and the motion rule - kernel-free like the
+  # state module, so every transition and every gate condition is a case.
+  src/session.c
+  ../../src/treadmill_session.c
   # FTMS Stop/Reset's actuator decisions, pulled out of treadmill_ble.c for
   # the same reason; src/ftms_actuate.c drives them with a failing fake.
   src/ftms_actuate.c

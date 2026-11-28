@@ -80,6 +80,7 @@ target_sources(app PRIVATE
   src/main.c
   src/treadmill_source.c
   src/treadmill_state.c
+  src/treadmill_session.c
 )
 
 # ── The treadmill source ────────────────────────────────────────────────────
