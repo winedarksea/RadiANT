@@ -219,6 +219,22 @@ noticeably degrade primary functionality, such as receiving a heart rate strap.
   on request (`radiant_profile_fec_tx_request()` has no USER_CONFIG case). The page-70
   "reply acknowledged" bit is decoded but never acted on. A page 71 is sent in
   reply to a page 70; check that against the spec.
+  *Shared half done 2026-11-28 (wip/mixed-p4):* page 55 is served on request
+  (`radiant_profile_fec_tx_set_user()`); `radiant_profile_fec_tx_handle_request()`
+  honours byte 5 as FE-C defines it (SS10.3 [MD_0006]: an FE never sends
+  acknowledged messages, so the reply is broadcast, the requested count times;
+  0x80 sends 4; 0x00 is ignored; command type 1 only); and per SS8.12.3.1 a
+  page 70 is never answered with a page 71. apps/smart_trainer uses it.
+- [ ] **apps/trainer and apps/treadmill still answer page 70 with a page 71**,
+  which SS8.12.3.1 forbids ("shall NOT be set to the value of a request
+  message data page"), and it overwrites the status a controller asks page 71
+  for. Both also answer an unsupported control page with NOT_SUPPORTED (2),
+  which Table 8-48 says the FE "shall not use" (SS8.12.3.1: ignore it), and
+  count page 55 and page 70 in the page-71 sequence number (SS8.12.3.2 counts
+  supported commands). Fix: call `radiant_profile_fec_tx_handle_request()` and
+  skip the answer and the sequence for 70 (and 55). Left alone in Phase 4:
+  changing apps/trainer's behaviour was out of scope (owner call), and the
+  treadmill's main.c was outside Phase 4's files.
 - [ ] **Never run on air:** 0x31 ERG, 0x30 and 0x32; page 70 -> 54/55/71 round
   trips; acked replies from the master; Zwift against the sim; a commercial
   trainer's page 71.
