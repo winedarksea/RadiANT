@@ -12,7 +12,7 @@ First on-air run of the mixed ANT+/BLE HRM reference design: the shared radiant 
 | 2 | The saved Garmin activity contains the HR trace | **PASS** (owner observed) |
 | 3 | nRF Connect: DIS strings, appearance 833, HRS with Measurement + Body Sensor Location only (no Control Point), 1 Hz notifications with RR, contact bit toggling with Button 0 | **PASS** (owner observed; console shows `skin contact lost` / `detected`) |
 | 4 | Steps 1-2 again after a forced BLE link drop (phone Bluetooth off/on) and after a DK power cycle | **PASS** (owner observed; no console log, the J-Link OB VCOM died mid-run) |
-| 5 | Reconnect soak, 50 cycles | **OPEN**: needs `ble_central -Mode reconnect-soak` (Phase 5 tooling) |
+| 5 | Reconnect soak, 50 cycles | **Device side PASS, host-limited.** See "Step 5" below |
 | 6 | ANT+ loss vs a same-window control | **PASS**, below |
 
 ### Step 6: ANT+ loss, A/B/A, 300 s legs
@@ -29,6 +29,14 @@ First on-air run of the mixed ANT+/BLE HRM reference design: the shared radiant 
 - **Re-advertise:** `BLE disconnected (0x13)` → `BLE advertising (restart)` 0.5 ms later.
 - **Link:** Windows set 13 ms then 43 ms; the node's preferred parameters moved it to 1000 ms (timeout 4 s).
 - **ANT+ HR:** mean 72.2 bpm in every leg (ant_verify's beat-time figure ranges from 66.5 to 75.0 because of the same 100 ms sim grid). Jitter stays on the slot grid (max 500 ms = one missed message).
+
+### Step 5: reconnect soak
+
+`ble_central -Mode reconnect-soak -Name "RadiANT Test" -Cycles 50` (first version, `wip/mixed-p5` bf82c13) with the Windows host as central, plus the DUT console captured alongside.
+
+- **Device (console):** 43 connections. Every `BLE disconnected (0x13)` was followed by `BLE advertising (restart)` within **0.49 ms** (43/43). HRS data arrived 0.96-1.2 s after every connect that completed (n=40), inside the 10 s criterion.
+- **Host (tool verdict FAIL):** 32/50 cycles clean. Windows confirmed Disconnected on only 9 cycles, needed a median of 6 s (max 27 s) to connect, and failed to connect within 30 s 8 times. From the device's disconnect to its next connection took 3-78 s (median 17 s). The tool reports the scanner floor as n/a, and its re-advertise bound (median 10 s) measures the Windows scanner and connection teardown, not the device.
+- **Verdict:** the firmware meets re-advertise ≤ 2 s and data ≤ 10 s. Before the soak counts as a host-independent gate, the tool is being changed to report INCONCLUSIVE when its floor is unknown and to take the device log as the authoritative re-advertise figure. Re-run it then, or with a phone/nRF central.
 
 ## Rig
 
