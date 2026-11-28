@@ -39,8 +39,23 @@ A result with any of these fields missing is not counted.
 | Criterion | Limit | How it is measured |
 |---|---|---|
 | Discovery | ≤ 10 s from power-on | Stopwatch from applying power until the device appears in the app or watch's sensor list. Report the worst of 3 power-ons. |
-| Re-advertise | ≤ 2 s after disconnect | `reconnect-soak` (§5.2). It reports a range: the true value lies between the lower and upper bound. The check passes when the upper bound is ≤ 2 s. If the range straddles 2 s, the result is INCONCLUSIVE, not a pass. |
-| Data resumes | ≤ 10 s after the link is restored | `reconnect-soak` for the Windows central. For a device row, stopwatch from the link coming back (the app shows it connected) until a value updates. |
+| Re-advertise | ≤ 2 s after disconnect | **Authoritative: the device's own console** (`BLE disconnected` → `BLE advertising (restart)`), via `reconnect-soak -DeviceLog` or `-Mode device-log` (§5.2), or a phone / nRF central. The Windows-side range from `reconnect-soak` alone is not authoritative: Windows holds a released link for ~9 s, so that figure measures Windows (see the note below this table). |
+| Data resumes | ≤ 10 s after the link is restored | `reconnect-soak` for the Windows central (Connected → first notification; a cycle that never connected is not judged here). For a device row, stopwatch from the link coming back (the app shows it connected) until a value updates. |
+
+**The Windows central limits the re-advertise and connect timing.** The first
+soak, on 2026-11-27 (HRM, nRF54L15, 50 cycles), was compared against the
+device's console:
+
+- The device re-advertised 0.47–0.49 ms after every one of its 43 disconnects.
+- The Windows upper bound was about 9 s on every clean cycle. Windows keeps a
+  released link for about 8.9 s (its lazy close) before it disconnects.
+- Windows took 2–27 s to connect to a device that was advertising the whole
+  time, and 8 of 50 connects timed out at 30 s.
+- In one stretch, Windows neither saw nor connected to the device for 60 s.
+
+So the Windows numbers are host numbers. The re-advertise row is judged on the
+device-log figure, or on a phone or nRF central. Connect time from Windows is
+recorded but not judged.
 | ANT+ loss, relative | Δ vs a same-window control ≤ **0.5 pp** | `max_delta_pp` in [`tools/ab_gates.toml`](../tools/ab_gates.toml) `[gates.coexistence]`, read by `tools/ant_ab.py`'s coexistence gate. |
 | ANT+ loss, absolute | ≤ **1.5 %** with the other radio active | `absolute_ceiling_pct` in the same block. **Always record the absolute value**, even when the row is judged on Δ. |
 
@@ -217,18 +232,44 @@ FTMS test suite but are not FTMS.TS test IDs.
 - data ≤ 10 s
 - every cycle clean
 
-Also record the *scanner sighting gap* the tool prints. Re-advertise cannot be
-resolved more finely than that gap. If the gap is near 2 s, a re-advertise figure
-near 2 s is measuring the host scanner, not the device.
+Capture the device console for the whole soak and pass it to the tool:
+
+```powershell
+.\scripts\ble_central.ps1 -Mode reconnect-soak -Name "RadiANT HR" -Cycles 50 -DeviceLog soak-console.log -Json soak-hrm.json
+.\scripts\ble_central.ps1 -Mode device-log -DeviceLog soak-console.log   # offline, after the fact
+```
+
+With `-DeviceLog`, the re-advertise verdict comes from the device log. Without
+it, the Windows bracket can only PASS (upper bound ≤ 2 s) or be INCONCLUSIVE.
+It never FAILs unless the drop was confirmed and the scanner gap was measured.
+In this room the Windows bracket is about 9 s, so expect INCONCLUSIVE.
+
+The *every cycle clean* line is INCONCLUSIVE, not FAIL, when the only problems
+are host-side: connect timeouts, or no sighting of the device advertising
+again. An error after the link is up (subscribe failed, no notification) is a
+FAIL.
+
+Also record the *scanner sighting gap*. The tool measures it in a 15 s window
+before cycle 1 (`-GapSeconds`). Re-advertise cannot be resolved more finely
+than that gap.
+
+By default the scan is paused while each connection is set up. The slow
+connects in the first run fit the scan and the connection competing for the
+radio controller, but that is not proven. `-WatchWhileConnecting` restores the
+old behaviour so the two can be compared. The JSON records, for each cycle:
+
+- wall-clock times, to line up with the console's host-time prefix
+- every connection-status change the link and the probe saw
+- connects that came up after the tool had given up
 
 `tools/ble_central_soak.cs` documents how the tool forces a real disconnect on
 Windows and how it brackets the re-advertise time.
 
-| App | Image hash | Re-advertise (ub median / max) | Data (median / max) | Clean cycles | Scanner gap | Result |
-|---|---|---|---|---|---|---|
-| HRM | | | | | | |
-| Treadmill | | | | | | |
-| Smart trainer | | | | | | |
+| App | Image hash | Re-advertise, device log (median / max) | Re-advertise, Windows ub (median / max) | Data (median / max) | Clean cycles | Scanner gap | Result |
+|---|---|---|---|---|---|---|---|
+| HRM | | | | | | | |
+| Treadmill | | | | | | | |
+| Smart trainer | | | | | | | |
 
 ---
 
